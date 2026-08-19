@@ -1,0 +1,698 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shot Sheet — spot script formatter</title>
+<style>
+  :root{
+    /* revision-color palette, from the film world's own paper sequence */
+    --paper:#ffffff;
+    --white-rev:#F2F3F4;
+    --blue-rev:#B9CEDD;
+    --pink-rev:#E9C3CB;
+    --yellow-rev:#E7D79B;
+    --green-rev:#B6CFB4;
+    --goldenrod:#C9A227;
+    --salmon:#E1A08B;
+    --ink:#16181A;
+    --ink-2:#3E444A;
+    --ink-3:#6C757D;
+    --rule:#C9CDD1;
+    --rule-soft:#E2E5E8;
+    --chrome:#DCDFE2;
+    --chrome-2:#CDD2D6;
+    --pencil:#B23A2E;      /* script supervisor's red */
+    --focus:#1F5FA8;
+    --mono:"Courier New",Courier,monospace;
+    --ui:ui-sans-serif,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0;background:var(--chrome);color:var(--ink);font-family:var(--ui);
+    font-size:14px;line-height:1.45;
+  }
+  button,input,textarea,select{font:inherit;color:inherit}
+  :focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+
+  /* ---------- masthead ---------- */
+  header{
+    display:flex;align-items:stretch;gap:0;background:var(--ink);color:#EDEFF1;
+    border-bottom:3px solid var(--goldenrod);
+  }
+  .brand{padding:10px 16px;display:flex;align-items:center;gap:12px;flex:0 0 auto}
+  .brand h1{
+    margin:0;font-family:var(--mono);font-size:15px;font-weight:700;
+    letter-spacing:.34em;text-transform:uppercase;
+  }
+  .brand .sub{
+    font-family:var(--mono);font-size:10.5px;letter-spacing:.16em;
+    text-transform:uppercase;color:#8B949E;border-left:1px solid #333A42;padding-left:12px;
+  }
+  .revstrip{display:flex;flex:0 0 auto;align-self:stretch;width:96px}
+  .revstrip i{flex:1}
+  header .spacer{flex:1}
+  .tools{display:flex;align-items:center;gap:6px;padding:8px 12px;flex-wrap:wrap}
+  .btn{
+    background:#22262B;border:1px solid #3A4149;color:#E6E9EC;border-radius:2px;
+    padding:7px 11px;cursor:pointer;font-family:var(--mono);font-size:11px;
+    letter-spacing:.1em;text-transform:uppercase;white-space:nowrap;
+  }
+  .btn:hover{background:#2E343A;border-color:#525C66}
+  .btn.primary{background:var(--goldenrod);border-color:var(--goldenrod);color:#1A1508;font-weight:700}
+  .btn.primary:hover{background:#DDB633}
+  .btn.ghost{background:transparent}
+
+  /* ---------- runtime spine (signature) ---------- */
+  .spine{
+    background:#1E2226;color:#D7DBDF;border-bottom:1px solid #000;
+    display:flex;align-items:center;gap:14px;padding:8px 14px;overflow-x:auto;
+  }
+  .clock{font-family:var(--mono);display:flex;align-items:baseline;gap:8px;flex:0 0 auto}
+  .clock .big{font-size:22px;font-weight:700;letter-spacing:.04em}
+  .clock .tgt{font-size:11px;color:#8B949E;letter-spacing:.12em;text-transform:uppercase}
+  .clock .delta{font-size:11px;font-family:var(--mono);padding:2px 6px;border-radius:2px;letter-spacing:.06em}
+  .delta.under{background:#25333A;color:#8FD3C4}
+  .delta.over{background:#3A2422;color:#E9A297}
+  .delta.exact{background:#2E2A18;color:var(--goldenrod)}
+  .bars{display:flex;align-items:flex-end;gap:3px;flex:1;min-width:220px;height:34px}
+  .bar{
+    position:relative;background:var(--blue-rev);min-width:6px;border-radius:1px 1px 0 0;
+    display:flex;align-items:flex-start;justify-content:center;cursor:default;
+  }
+  .bar span{
+    position:absolute;top:-14px;font-family:var(--mono);font-size:9px;color:#8B949E;
+  }
+  .bar.untimed{background:#3A4149}
+  .spine .hint{font-family:var(--mono);font-size:10px;color:#6C757D;letter-spacing:.1em;text-transform:uppercase;flex:0 0 auto}
+
+  /* ---------- layout ---------- */
+  main{display:grid;grid-template-columns:minmax(320px,42fr) minmax(320px,58fr);height:calc(100% - 0px)}
+  .pane{display:flex;flex-direction:column;min-width:0;min-height:0}
+  .pane + .pane{border-left:1px solid var(--chrome-2)}
+  .panehead{
+    display:flex;align-items:center;justify-content:space-between;gap:10px;
+    padding:7px 12px;background:var(--chrome-2);border-bottom:1px solid var(--rule);
+  }
+  .panehead h2{
+    margin:0;font-family:var(--mono);font-size:10.5px;letter-spacing:.2em;
+    text-transform:uppercase;color:var(--ink-2);font-weight:700;
+  }
+  .linkbtn{
+    background:none;border:0;padding:2px 4px;cursor:pointer;font-family:var(--mono);
+    font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3);
+    border-bottom:1px solid var(--rule);
+  }
+  .linkbtn:hover{color:var(--pencil);border-color:var(--pencil)}
+
+  /* cover sheet fields */
+  .cover{background:#E7E9EB;border-bottom:1px solid var(--rule);padding:10px 12px;
+    display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px 12px}
+  .cover.hidden{display:none}
+  .field{display:flex;flex-direction:column;gap:3px}
+  .field label{font-family:var(--mono);font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-3)}
+  .field input{
+    background:var(--paper);border:1px solid var(--rule);border-radius:2px;padding:5px 7px;
+    font-family:var(--mono);font-size:12px;min-width:0;
+  }
+  .field input:focus{border-color:var(--focus)}
+
+  #editor{
+    flex:1;min-height:0;width:100%;resize:none;border:0;padding:16px 18px;
+    font-family:var(--mono);font-size:13.5px;line-height:1.62;background:#F6F7F8;
+    tab-size:4;
+  }
+  #editor:focus{outline:none;background:#fff}
+
+  /* cheat sheet */
+  .cheat{border-top:1px solid var(--rule);background:#E7E9EB;max-height:42%;overflow:auto}
+  .cheat.hidden{display:none}
+  .cheat table{border-collapse:collapse;width:100%;font-size:12px}
+  .cheat td{padding:5px 12px;border-bottom:1px solid var(--rule-soft);vertical-align:top}
+  .cheat td:first-child{font-family:var(--mono);white-space:nowrap;color:var(--pencil);width:1%}
+  .cheat tr:last-child td{border-bottom:0}
+
+  /* ---------- the page ---------- */
+  .preview{flex:1;min-height:0;overflow:auto;background:#9EA5AB;padding:22px 0 60px}
+  .page{
+    width:8.5in;margin:0 auto;background:var(--paper);
+    padding:.9in 1.05in .9in 1in;
+    box-shadow:0 1px 0 rgba(0,0,0,.35),0 10px 26px rgba(0,0,0,.22);
+    font-family:var(--mono);font-size:12pt;line-height:1.16;color:#000;
+  }
+  @media (max-width:1400px){ .page{transform-origin:top center} }
+  .p{margin:0}
+  .ctr{text-align:center}
+  .sec{font-weight:700;text-decoration:underline;margin:13pt 0 12pt}
+  .act{margin-left:.5in;margin-bottom:8pt}
+  .scene{font-weight:700;margin:17pt 0 8pt;display:flex;justify-content:space-between;gap:1em}
+  .scene .secs{font-variant-numeric:tabular-nums}
+  .cue{margin-left:2.5in;margin-top:8pt}
+  .paren{margin-left:2in}
+  .dial{margin-left:1.5in;margin-right:1.75in;margin-bottom:8pt}
+  .shot{margin-left:.9in}
+  .shot.cont{padding-left:4ch}
+  .note{margin-left:.62in;text-indent:-.12in;margin:3pt 0 7pt .62in}
+  .card{margin-left:1.6in}
+  .trans{text-align:right;font-weight:700;margin:8pt 0 12pt}
+  .flush{font-weight:700;margin-bottom:12pt}
+  .pagebreak{border-top:1px dashed var(--rule);margin:18pt 0;height:0;position:relative}
+  .pagebreak::after{
+    content:"PAGE BREAK";position:absolute;right:0;top:-6pt;background:var(--paper);
+    padding-left:8px;font-size:7.5pt;letter-spacing:.18em;color:#A6ABB0;font-family:var(--mono);
+  }
+  .empty{color:#9AA0A6;margin-left:.5in}
+
+  .toast{
+    position:fixed;left:50%;bottom:22px;transform:translateX(-50%) translateY(8px);
+    background:var(--ink);color:#fff;padding:9px 16px;border-radius:2px;
+    font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;
+    opacity:0;pointer-events:none;transition:opacity .18s,transform .18s;z-index:50;
+    border-left:3px solid var(--goldenrod);
+  }
+  .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+
+  @media (max-width:900px){
+    main{grid-template-columns:1fr;height:auto}
+    .pane+.pane{border-left:0;border-top:1px solid var(--chrome-2)}
+    #editor{min-height:44vh}
+    .page{width:100%;padding:.5in;font-size:10.5pt}
+    .brand .sub{display:none}
+  }
+  @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+  @media print{
+    header,.spine,.cover,.cheat,#editorPane,.panehead,.toast{display:none!important}
+    main{display:block}
+    .preview{overflow:visible;background:#fff;padding:0}
+    .page{box-shadow:none;width:auto;margin:0;padding:0}
+    .pagebreak{page-break-after:always;border:0}
+    .pagebreak::after{display:none}
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <h1>Shot Sheet</h1>
+    <div class="sub">spot script formatter</div>
+  </div>
+  <div class="revstrip" aria-hidden="true">
+    <i style="background:var(--white-rev)"></i>
+    <i style="background:var(--blue-rev)"></i>
+    <i style="background:var(--pink-rev)"></i>
+    <i style="background:var(--yellow-rev)"></i>
+    <i style="background:var(--green-rev)"></i>
+    <i style="background:var(--salmon)"></i>
+  </div>
+  <div class="spacer"></div>
+  <div class="tools">
+    <button class="btn ghost" id="toggleCover">Cover sheet</button>
+    <button class="btn ghost" id="toggleCheat">Syntax</button>
+    <button class="btn" id="copyBtn">Copy text</button>
+    <button class="btn" id="printBtn">Print / PDF</button>
+    <button class="btn primary" id="wordBtn">Download Word</button>
+  </div>
+</header>
+
+<div class="spine">
+  <div class="clock">
+    <div class="big" id="totalTime">0:00</div>
+    <div class="tgt">of <span id="targetLabel">60</span>s</div>
+    <div class="delta exact" id="delta">—</div>
+  </div>
+  <div class="bars" id="bars"></div>
+  <div class="hint" id="sceneCount">0 scenes</div>
+</div>
+
+<main>
+  <section class="pane" id="editorPane">
+    <div class="panehead">
+      <h2>Script</h2>
+      <div>
+        <button class="linkbtn" id="sampleBtn">Switch sample</button>
+        <button class="linkbtn" id="clearBtn">Clear</button>
+      </div>
+    </div>
+
+    <div class="cover" id="cover">
+      <div class="field"><label for="fTitle">Title</label><input id="fTitle"></div>
+      <div class="field"><label for="fTag">Tagline</label><input id="fTag"></div>
+      <div class="field"><label for="fType">Document</label><input id="fType"></div>
+      <div class="field"><label for="fDraft">Draft</label><input id="fDraft"></div>
+      <div class="field"><label for="fFormat">Format</label><input id="fFormat"></div>
+      <div class="field"><label for="fAuthor">Writer</label><input id="fAuthor"></div>
+      <div class="field"><label for="fDate">Date</label><input id="fDate"></div>
+      <div class="field"><label for="fTarget">Target seconds</label><input id="fTarget" type="number" min="1"></div>
+    </div>
+
+    <textarea id="editor" spellcheck="true" aria-label="Script source"></textarea>
+
+    <div class="cheat hidden" id="cheat">
+      <table>
+        <tr><td>## SYNOPSIS</td><td>Underlined section heading. Plain lines under it become indented body text.</td></tr>
+        <tr><td>@ EXT. CANYON RIM - DAY :06</td><td>Scene heading. Numbered automatically; the <code>:06</code> is the shot length and feeds the runtime bar.</td></tr>
+        <tr><td>Plain line</td><td>Action.</td></tr>
+        <tr><td>DALE: We ask "how high."</td><td>Character cue plus dialogue.</td></tr>
+        <tr><td>DALE: (dry) Might as well be us.</td><td>Leading brackets become a parenthetical on its own line.</td></tr>
+        <tr><td>&nbsp;&nbsp;&nbsp;&nbsp;more words</td><td>Indent a line to continue the block above it — dialogue or shot list.</td></tr>
+        <tr><td>A) GROUND LEVEL, shooting up</td><td>Lettered shot list.</td></tr>
+        <tr><td>&gt; FADE IN:</td><td>Flush-left transition.</td></tr>
+        <tr><td>&gt;&gt; MATCH CUT TO:</td><td>Right-aligned transition.</td></tr>
+        <tr><td>^ Fly closer.</td><td>Card or on-screen text.</td></tr>
+        <tr><td>[ SAFETY -- stunt team on all passes ]</td><td>Production note.</td></tr>
+        <tr><td>---</td><td>Page break.</td></tr>
+      </table>
+    </div>
+  </section>
+
+  <section class="pane">
+    <div class="panehead">
+      <h2>Page</h2>
+      <div class="linkbtn" style="border:0;cursor:default" id="saveState">Saved</div>
+    </div>
+    <div class="preview"><div class="page" id="page"></div></div>
+  </section>
+</main>
+
+<div class="toast" id="toast"></div>
+
+<script>
+(function(){
+  "use strict";
+  var $ = function(id){ return document.getElementById(id); };
+  var editor=$("editor"), page=$("page");
+  var fields={title:$("fTitle"),tag:$("fTag"),type:$("fType"),draft:$("fDraft"),
+              format:$("fFormat"),author:$("fAuthor"),date:$("fDate"),target:$("fTarget")};
+  var STORE_KEY="shotsheet:draft";
+
+  var SAMPLES=[
+  {
+    name:"Six Floors",
+    meta:{title:"SIX FLOORS",tag:'"He has six floors to get it right"',
+      type:"Shooting Script",draft:"Draft 1",format:"Horizontal 16:9   \u00b7   60 seconds",
+      author:"Your name",date:"8.18.2026",target:60},
+    body:[
+'## SYNOPSIS',
+'A man rehearses an apology in an elevator. He has six floors to get it right. He does not get it right.',
+'',
+'## CAST',
+'VICTOR. Thirties. Good suit, bad night. Talks to his own reflection.',
+'JUNE. Waiting on the sixth floor. Two lines. Both of them land.',
+'',
+'---',
+'',
+'> FADE IN:',
+'',
+'@ INT. OFFICE LOBBY - NIGHT :06',
+'Marble. Empty. A security guard asleep behind a desk.',
+'VICTOR crosses fast, hits the call button four times, as if that helps.',
+'His reflection walks toward him in the brass doors.',
+'',
+'@ INT. ELEVATOR - CONTINUOUS :05',
+'Doors close. He is alone with himself.',
+'CLOSE ON the floor display: 1.',
+'VICTOR: (to the brass) June. I\'m sorry. I was wrong.',
+'',
+'@ INT. ELEVATOR - CONTINUOUS :06',
+'Display: 2.',
+'He tries it with his hands out. It looks like surrender.',
+'VICTOR: I was wrong, and I knew I was wrong at the time, which is worse.',
+'He shakes his head. Wipes the sentence out of the air.',
+'',
+'@ INT. ELEVATOR - CONTINUOUS :05',
+'Display: 3.',
+'VICTOR: (lighter, false) So! Funny story about Tuesday --',
+'His own face in the brass tells him no.',
+'',
+'@ INT. ELEVATOR - CONTINUOUS :07',
+'Display: 4.',
+'He straightens his tie. Unstraightens it. Straightens it.',
+'VICTOR: (quiet, finally true) I got scared and I let you carry it.',
+'Beat. That one is the real one. He nods at himself, once.',
+'',
+'@ INT. ELEVATOR - CONTINUOUS :06',
+'Display: 5.',
+'He breathes. Rolls his shoulders. Ready.',
+'He mouths it silently, word for word, to fix it in place.',
+'',
+'@ INT. ELEVATOR - CONTINUOUS :05',
+'Display: 6. The BELL.',
+'His face goes completely blank.',
+'Every sentence leaves his head at once.',
+'',
+'@ INT. SIXTH FLOOR CORRIDOR - CONTINUOUS :08',
+'Doors open on JUNE, coat on, bag over her shoulder, going home.',
+'She stops. Waits. Gives him the whole silence.',
+'VICTOR: (destroyed) ...you look nice.',
+'Her eyebrows go up about a millimetre.',
+'',
+'@ INT. SIXTH FLOOR CORRIDOR - CONTINUOUS :07',
+'JUNE: Six floors.',
+'JUNE: (stepping past him into the elevator) That\'s what you got.',
+'The doors begin to close on her face. She is almost, not quite, smiling.',
+'He puts his hand out and stops them.',
+'',
+'@ END CARD :05',
+'Black.',
+'^ S I X   F L O O R S',
+'^ a short'
+].join("\n")
+  },
+  {
+    name:"Icarus Mutual",
+    meta:{title:"ICARUS MUTUAL",tag:'"Somebody\'s Gonna Pay For This"',
+      type:"Shooting Script",draft:"Draft 3",format:"Horizontal 16:9   \u00b7   60 seconds",
+      author:"Your name",date:"8.18.2026",target:60},
+    body:[
+'## SYNOPSIS',
+'DALE MUNCY, a regional sales rep, delivers a straight-to-camera pitch from the edge of a canyon. He does not move. Things happen behind him.',
+'Those things are BRENDA and KEITH, a married couple on a motorcycle with a sidecar.',
+'',
+'## CAST',
+'DALE MUNCY. Fifties. Sport coat over a Hawaiian shirt. The calmest person on any given ridge.',
+'BRENDA. Forties. Does the driving. Has never once been the one in the cast.',
+'KEITH. Forties. Almost entirely encased. Communicates via toes.',
+'',
+'---',
+'',
+'> FADE IN:',
+'',
+'@ EXT. CANYON RIM - DAY :05',
+'A canyon. Two hundred feet of nothing, and then rocks.',
+'DALE MUNCY stands eight inches from the edge, holding a clipboard. The wind moves everything on him except his face.',
+'DALE: At Icarus Mutual, we don\'t ask "what if."',
+'',
+'@ EXT. CANYON RIM - CONTINUOUS :04',
+'A MOTORCYCLE tears past behind him. BRENDA driving. KEITH in the sidecar, holding a three-tier WEDDING CAKE perfectly level.',
+'DALE: We ask "how high."',
+'',
+'@ EXT. CANYON RIM - CONTINUOUS :04',
+'SIX FAST CUTS of covered incidents.',
+'A) A man in a wingsuit clearing a barn by four',
+'    inches. Insufficiently.',
+'B) A jet ski entering a hotel lobby.',
+'C) A luge. In a parking garage. At speed.',
+'',
+'@ EXT. CANYON RIM - DAY :06',
+'DALE: Icarus Mutual. Somebody\'s gonna pay for this.',
+'Beat.',
+'DALE: (patient) Might as well be us.',
+'From far below: a distant, complicated CRASH.',
+'',
+'@ END CARD :04',
+'Warm white.',
+'^ I C A R U S   M U T U A L',
+'^ Fly closer.',
+'[ SAFETY -- all motorcycle passes by licensed stunt performers. Dale\'s edge proximity is a lens cheat. ]',
+'',
+'>> FADE OUT.'
+].join("\n")
+  }
+  ];
+  var sampleIndex=0;
+  var SAMPLE_META=SAMPLES[0].meta;
+
+  /* ---------- parse ---------- */
+  function esc(s){
+    return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+  }
+  function parse(text){
+    var lines=String(text||"").split(/\r?\n/);
+    var blocks=[], sceneNo=0, last=null;
+
+    for(var i=0;i<lines.length;i++){
+      var raw=lines[i], t=raw.trim();
+      if(t===""){ last=null; continue; }
+
+      var indented=/^[ \t]{2,}/.test(raw);
+      if(indented && (last==="dial"||last==="shot")){
+        blocks.push({k:last==="dial"?"dial":"shotcont",text:t});
+        continue;
+      }
+
+      if(t==="---"||t==="___"){ blocks.push({k:"break"}); last=null; continue; }
+
+      if(/^##\s*/.test(t)){ blocks.push({k:"sec",text:t.replace(/^##\s*/,"")}); last=null; continue; }
+
+      if(/^@\s*/.test(t)){
+        var body=t.replace(/^@\s*/,"");
+        var secs=null;
+        var m=body.match(/[\s:]:?\s*(\d{1,3})\s*s?$/i) || body.match(/:\s*(\d{1,3})\s*$/);
+        if(m){ secs=parseInt(m[1],10); body=body.slice(0,m.index).trim(); }
+        body=body.replace(/[:\s]+$/,"");
+        sceneNo++;
+        blocks.push({k:"scene",n:sceneNo,text:body,secs:secs});
+        last=null; continue;
+      }
+
+      if(/^>>\s*/.test(t)){ blocks.push({k:"trans",text:t.replace(/^>>\s*/,"")}); last=null; continue; }
+      if(/^>\s*/.test(t)){ blocks.push({k:"flush",text:t.replace(/^>\s*/,"")}); last=null; continue; }
+      if(/^\^\s*/.test(t)){ blocks.push({k:"card",text:t.replace(/^\^\s*/,"")}); last=null; continue; }
+      if(/^\[/.test(t)){ blocks.push({k:"note",text:t}); last=null; continue; }
+      if(/^[A-Za-z]\)\s?/.test(t)){ blocks.push({k:"shot",text:t}); last="shot"; continue; }
+
+      var d=t.match(/^([A-Z][A-Z0-9 .+'’()\/-]{0,28}):\s*(.*)$/);
+      if(d && d[2]!==""){
+        blocks.push({k:"cue",text:d[1].trim()});
+        var rest=d[2].trim();
+        var p=rest.match(/^\((.+?)\)\s*(.*)$/);
+        if(p){
+          blocks.push({k:"paren",text:"("+p[1]+")"});
+          if(p[2]) blocks.push({k:"dial",text:p[2]});
+        } else {
+          blocks.push({k:"dial",text:rest});
+        }
+        last="dial"; continue;
+      }
+
+      blocks.push({k:"act",text:t});
+      last=null;
+    }
+    return blocks;
+  }
+
+  function meta(){
+    return {title:fields.title.value,tag:fields.tag.value,type:fields.type.value,
+      draft:fields.draft.value,format:fields.format.value,author:fields.author.value,
+      date:fields.date.value,target:parseInt(fields.target.value,10)||60};
+  }
+
+  /* ---------- preview ---------- */
+  function render(){
+    var m=meta(), blocks=parse(editor.value), out=[];
+
+    if(m.title) out.push('<p class="p ctr" style="font-weight:700;letter-spacing:.28em;margin-bottom:9pt">'+esc(m.title)+'</p>');
+    if(m.tag) out.push('<p class="p ctr" style="margin-bottom:28pt">'+esc(m.tag)+'</p>');
+    if(m.type) out.push('<p class="p ctr" style="margin-bottom:9pt">'+esc(m.type)+'</p>');
+    if(m.draft) out.push('<p class="p ctr" style="margin-bottom:28pt">'+esc(m.draft)+'</p>');
+    if(m.format) out.push('<p class="p ctr" style="margin-bottom:35pt">'+esc(m.format)+'</p>');
+    if(m.author) out.push('<p class="p ctr" style="margin-bottom:9pt">'+esc(m.author)+'</p>');
+    if(m.date) out.push('<p class="p ctr" style="margin-bottom:20pt">'+esc(m.date)+'</p>');
+
+    if(!blocks.length){
+      out.push('<p class="p empty">Start typing on the left. Try a line like <b>@ EXT. CANYON RIM - DAY :06</b>, then <b>DALE: We ask "how high."</b></p>');
+    }
+
+    for(var i=0;i<blocks.length;i++){
+      var b=blocks[i];
+      switch(b.k){
+        case "sec":   out.push('<p class="p sec">'+esc(b.text.toUpperCase())+'</p>'); break;
+        case "scene":
+          out.push('<div class="p scene"><span>'+esc(b.n+"   "+b.text.toUpperCase())+'</span><span class="secs">'+
+                   (b.secs!=null?(":"+String(b.secs).padStart(2,"0")):"")+'</span></div>');
+          break;
+        case "act":   out.push('<p class="p act">'+esc(b.text)+'</p>'); break;
+        case "cue":   out.push('<p class="p cue">'+esc(b.text.toUpperCase())+'</p>'); break;
+        case "paren": out.push('<p class="p paren">'+esc(b.text)+'</p>'); break;
+        case "dial":  out.push('<p class="p dial">'+esc(b.text)+'</p>'); break;
+        case "shot":  out.push('<p class="p shot">'+esc(b.text)+'</p>'); break;
+        case "shotcont": out.push('<p class="p shot cont">'+esc(b.text)+'</p>'); break;
+        case "note":  out.push('<p class="p note">'+esc(b.text)+'</p>'); break;
+        case "card":  out.push('<p class="p card">'+esc(b.text)+'</p>'); break;
+        case "trans": out.push('<p class="p trans">'+esc(b.text.toUpperCase())+'</p>'); break;
+        case "flush": out.push('<p class="p flush">'+esc(b.text.toUpperCase())+'</p>'); break;
+        case "break": out.push('<div class="pagebreak"></div>'); break;
+      }
+    }
+    page.innerHTML=out.join("");
+    renderSpine(blocks,m.target);
+    $("targetLabel").textContent=m.target;
+  }
+
+  function renderSpine(blocks,target){
+    var scenes=blocks.filter(function(b){return b.k==="scene";});
+    var total=scenes.reduce(function(a,b){return a+(b.secs||0);},0);
+    var max=Math.max.apply(null,[1].concat(scenes.map(function(s){return s.secs||0;})));
+    var mins=Math.floor(total/60), rem=total%60;
+    $("totalTime").textContent=mins+":"+String(rem).padStart(2,"0");
+    $("sceneCount").textContent=scenes.length+(scenes.length===1?" scene":" scenes");
+
+    var d=$("delta"), diff=total-target;
+    d.className="delta "+(diff===0?"exact":(diff>0?"over":"under"));
+    d.textContent = diff===0 ? "on the nose" : (diff>0 ? "+"+diff+"s over" : Math.abs(diff)+"s to fill");
+
+    var bars=$("bars"); bars.innerHTML="";
+    scenes.forEach(function(s){
+      var el=document.createElement("div");
+      el.className="bar"+(s.secs?"":" untimed");
+      el.style.height=Math.max(6,Math.round(((s.secs||1)/max)*30))+"px";
+      el.style.flexGrow=String(s.secs||1);
+      el.title=s.n+". "+s.text+(s.secs?"  —  "+s.secs+"s":"  —  untimed");
+      if(s.secs){ var lab=document.createElement("span"); lab.textContent=s.secs; el.appendChild(lab); }
+      bars.appendChild(el);
+    });
+  }
+
+  /* ---------- Word export ---------- */
+  function wordHTML(){
+    var m=meta(), blocks=parse(editor.value), b=[];
+    function P(style,txt){ b.push('<p style="'+style+'">'+esc(txt)+'</p>'); }
+    var BASE="font-family:'Courier New';font-size:12.0pt;margin:0;";
+    var ctr=function(after){ return BASE+"text-align:center;margin-bottom:"+after+"pt;"; };
+
+    if(m.title) b.push('<p style="'+ctr(8)+'"><b>'+esc(m.title)+'</b></p>');
+    if(m.tag) P(ctr(28),m.tag);
+    if(m.type) P(ctr(8),m.type);
+    if(m.draft) P(ctr(28),m.draft);
+    if(m.format) P(ctr(35),m.format);
+    if(m.author) P(ctr(8),m.author);
+    if(m.date) P(ctr(8),m.date);
+
+    blocks.forEach(function(k){
+      switch(k.k){
+        case "sec":
+          b.push('<p style="'+BASE+'margin-top:13pt;margin-bottom:12pt;"><b><u>'+esc(k.text.toUpperCase())+'</u></b></p>'); break;
+        case "scene":
+          var tail=k.secs!=null?(":"+String(k.secs).padStart(2,"0")):"";
+          var head=k.n+"   "+k.text.toUpperCase();
+          var pad=Math.max(1,67-tail.length-head.length);
+          b.push('<p style="'+BASE+'margin-top:17pt;margin-bottom:8pt;"><b>'+esc(head)+
+                 new Array(pad+1).join("&nbsp;")+esc(tail)+'</b></p>');
+          break;
+        case "act": P(BASE+"margin-left:.5in;margin-bottom:8pt;",k.text); break;
+        case "cue": P(BASE+"margin-left:2.5in;margin-top:8pt;",k.text.toUpperCase()); break;
+        case "paren": P(BASE+"margin-left:2.0in;",k.text); break;
+        case "dial": P(BASE+"margin-left:1.5in;margin-right:1.75in;margin-bottom:8pt;",k.text); break;
+        case "shot": P(BASE+"margin-left:.9in;",k.text); break;
+        case "shotcont": b.push('<p style="'+BASE+'margin-left:.9in;">&nbsp;&nbsp;&nbsp;&nbsp;'+esc(k.text)+'</p>'); break;
+        case "note": P(BASE+"margin-left:.62in;text-indent:-.12in;margin-top:3pt;margin-bottom:7pt;",k.text); break;
+        case "card": P(BASE+"margin-left:1.6in;",k.text); break;
+        case "trans": b.push('<p style="'+BASE+'text-align:right;margin-top:8pt;margin-bottom:12pt;"><b>'+esc(k.text.toUpperCase())+'</b></p>'); break;
+        case "flush": b.push('<p style="'+BASE+'margin-bottom:12pt;"><b>'+esc(k.text.toUpperCase())+'</b></p>'); break;
+        case "break": b.push('<br clear="all" style="mso-special-character:line-break;page-break-before:always">'); break;
+      }
+    });
+
+    return '<html xmlns:o="urn:schemas-microsoft-com:office:office" '+
+      'xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40">'+
+      '<head><meta charset="utf-8"><title>'+esc(m.title||"Script")+'</title>'+
+      '<style>@page{size:8.5in 11.0in;margin:.9in .75in .9in 1.0in;} '+
+      'body{font-family:"Courier New";font-size:12.0pt;}</style></head><body>'+
+      b.join("")+'</body></html>';
+  }
+
+  function slug(){
+    var t=(fields.title.value||"script").toUpperCase().replace(/[^A-Z0-9]+/g,"_").replace(/^_|_$/g,"");
+    return (t||"SCRIPT")+"_"+(fields.draft.value||"draft").replace(/[^A-Za-z0-9]+/g,"")+".doc";
+  }
+  function download(name,content,type){
+    var blob=new Blob(["\ufeff",content],{type:type});
+    var a=document.createElement("a");
+    a.href=URL.createObjectURL(blob); a.download=name;
+    document.body.appendChild(a); a.click();
+    setTimeout(function(){ URL.revokeObjectURL(a.href); a.remove(); },400);
+  }
+
+  /* ---------- toast ---------- */
+  var toastTimer;
+  function toast(msg){
+    var el=$("toast"); el.textContent=msg; el.classList.add("show");
+    clearTimeout(toastTimer); toastTimer=setTimeout(function(){ el.classList.remove("show"); },1900);
+  }
+
+  /* ---------- persistence ---------- */
+  var saveTimer;
+  function queueSave(){
+    $("saveState").textContent="Saving…";
+    clearTimeout(saveTimer);
+    saveTimer=setTimeout(save,700);
+  }
+  async function save(){
+    try{
+      await window.storage.set(STORE_KEY, JSON.stringify({meta:meta(),body:editor.value}));
+      $("saveState").textContent="Saved";
+    }catch(e){
+      $("saveState").textContent="Not saved — copy your text";
+    }
+  }
+  async function load(){
+    try{
+      var r=await window.storage.get(STORE_KEY);
+      if(r && r.value){
+        var d=JSON.parse(r.value);
+        setMeta(d.meta||SAMPLE_META); editor.value=d.body||"";
+        render(); $("saveState").textContent="Saved"; return;
+      }
+    }catch(e){ /* nothing stored yet */ }
+    loadSample(); $("saveState").textContent="Saved";
+  }
+  function setMeta(m){
+    fields.title.value=m.title||""; fields.tag.value=m.tag||"";
+    fields.type.value=m.type||""; fields.draft.value=m.draft||"";
+    fields.format.value=m.format||""; fields.author.value=m.author||"";
+    fields.date.value=m.date||""; fields.target.value=m.target||60;
+  }
+  function loadSample(i){
+    sampleIndex = (typeof i === "number") ? i : sampleIndex;
+    var s0 = SAMPLES[sampleIndex];
+    setMeta(s0.meta); editor.value = s0.body; render();
+    return s0.name;
+  }
+
+  /* ---------- wiring ---------- */
+  editor.addEventListener("input",function(){ render(); queueSave(); });
+  Object.keys(fields).forEach(function(k){
+    fields[k].addEventListener("input",function(){ render(); queueSave(); });
+  });
+
+  editor.addEventListener("keydown",function(e){
+    if(e.key==="Tab"){
+      e.preventDefault();
+      var s=editor.selectionStart,en=editor.selectionEnd;
+      editor.value=editor.value.slice(0,s)+"    "+editor.value.slice(en);
+      editor.selectionStart=editor.selectionEnd=s+4;
+      render(); queueSave();
+    }
+  });
+
+  $("toggleCover").addEventListener("click",function(){ $("cover").classList.toggle("hidden"); });
+  $("toggleCheat").addEventListener("click",function(){ $("cheat").classList.toggle("hidden"); });
+  $("sampleBtn").addEventListener("click",function(){
+    var next=(sampleIndex+1)%SAMPLES.length;
+    if(!editor.value.trim()) next=sampleIndex;
+    var name=loadSample(next); queueSave(); toast("Loaded: "+name);
+  });
+  $("clearBtn").addEventListener("click",function(){
+    editor.value=""; render(); queueSave(); editor.focus(); toast("Cleared");
+  });
+  $("printBtn").addEventListener("click",function(){ window.print(); });
+  $("wordBtn").addEventListener("click",function(){
+    download(slug(),wordHTML(),"application/msword");
+    toast("Word file downloaded");
+  });
+  $("copyBtn").addEventListener("click",async function(){
+    try{
+      await navigator.clipboard.writeText(page.innerText);
+      toast("Formatted text copied");
+    }catch(e){
+      toast("Copy blocked — select the page instead");
+    }
+  });
+
+  load();
+})();
+</script>
+</body>
+</html>

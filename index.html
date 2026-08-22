@@ -62,8 +62,10 @@
 
   img { max-width: 100%; height: auto; }
   .me { float: right; width: 200px; margin: 2px 0 12px 24px; padding: 5px; background: var(--surface); border: 1px solid var(--mat); }
-  .guitar { overflow: hidden; margin: 16px 0; }
-  .guitar img { float: left; width: 50%; margin: 3px 22px 14px 0; padding: 5px; background: var(--surface); border: 1px solid var(--mat); }
+  .guitars { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin: 14px 0 4px; }
+  .guitar { margin: 0; min-width: 0; }
+  .guitar img { display: block; width: 100%; padding: 5px; background: var(--surface); border: 1px solid var(--mat); box-sizing: border-box; }
+  .guitar p { margin: 8px 0 0; }
 
   /* social icons */
   .icons { display: inline-flex; gap: 14px; align-items: center; }
@@ -91,7 +93,7 @@
 
   @media (max-width: 560px) {
     .me { float: none; display: block; width: 66%; margin: 0 0 14px; }
-    .guitar img { float: none; display: block; width: 100%; max-width: 100%; margin: 0 0 12px; }
+    .guitars { grid-template-columns: 1fr; }
     h1 { font-size: 1.75em; }
   }
 </style>
@@ -121,6 +123,22 @@
 
 <hr>
 
+<section>
+  <h2>Handmade Guitars</h2>
+  <div class="guitars">
+    <div class="guitar">
+      <img src="imgs/guitars/xephos.jpg" alt="Xephos guitar">
+      <p><b>Xephos</b>: salvaged Jackson neck, single EMG H4, tru oil finish. BC Rich Stealth style.</p>
+    </div>
+    <div class="guitar">
+      <img src="imgs/guitars/zealot.jpg" alt="Zealot guitar">
+      <p><b>Zealot</b>: salvaged Jackson neck and hardware, Fishman Fluence Modern, tru oil finish. Strat's edgy cousin.</p>
+    </div>
+  </div>
+</section>
+
+<hr>
+
 <section id="sheesh-daw">
   <h2>SHEESH DAW</h2>
   <p>Open-source in-browser DAW. Direct youtube to audio import. Automation, drum kit, wavetable, essential FX, and all the other knobs and whistles.</p>
@@ -136,20 +154,6 @@
       <figcaption>Wavetable synth</figcaption></figure>
     <figure><a href="imgs/sheesh-daw-piano.png" target="_blank" rel="noopener"><img src="imgs/sheesh-daw-piano.png" alt="SHEESH DAW piano-roll editor with the full 88 keys, a scale highlighted and drum ghost notes"></a>
       <figcaption>Piano roll</figcaption></figure>
-  </div>
-</section>
-
-<hr>
-
-<section>
-  <h2>Handmade Guitars</h2>
-  <div class="guitar">
-    <img src="imgs/guitars/xephos.jpg" alt="Xephos guitar">
-    <p><b>Xephos</b>: salvaged Jackson neck, single EMG H4, tru oil finish. BC Rich Stealth style.</p>
-  </div>
-  <div class="guitar">
-    <img src="imgs/guitars/zealot.jpg" alt="Zealot guitar">
-    <p><b>Zealot</b>: salvaged Jackson neck and hardware, Fishman Fluence Modern, tru oil finish. Strat's edgy cousin.</p>
   </div>
 </section>
 

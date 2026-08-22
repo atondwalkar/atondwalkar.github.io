@@ -628,6 +628,7 @@
   </div>
   <div class="tools file-tools">
     <span id="file-msg" hidden></span>
+    <button id="new-proj" title="Save the current project, then start an empty one">New</button>
     <button id="save-proj">Save</button>
     <button id="open-proj">Open</button>
     <button id="export-wav">Export WAV</button>
@@ -6194,16 +6195,16 @@ async function saveProject(){
         await w.write(blob);
         await w.close();
         fileSay(''); fileFlash('Saved '+h.name);
-        return;
+        return true;
       }catch(e){
         fileSay('');
-        if(e && e.name==='AbortError') return;     // user cancelled the picker
+        if(e && e.name==='AbortError') return false;     // user cancelled the picker
         fileFlash('Save failed: '+(e&&e.message||e));
-        return;
+        return false;
       }
     }
     let name=prompt('File name:','project.sheesh');   // fallback: named download
-    if(name===null){ fileSay(''); return; }
+    if(name===null){ fileSay(''); return false; }
     name=name.trim()||'project.sheesh';
     if(!/\.sheesh$/i.test(name)) name+='.sheesh';
     const url=URL.createObjectURL(blob);
@@ -6212,7 +6213,22 @@ async function saveProject(){
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(()=>URL.revokeObjectURL(url),4000);
     fileSay('');
-  }catch(e){ fileSay(''); fileFlash('Save failed: '+(e&&e.message||e)); }
+    return true;
+  }catch(e){ fileSay(''); fileFlash('Save failed: '+(e&&e.message||e)); return false; }
+}
+/* New: save what's there, then start from a blank project */
+async function newProject(){
+  const hasContent=tracksAll.length>0 || MASTER_TRACK.fx.length>0;
+  if(hasContent){
+    const saved=await saveProject();
+    if(!saved && !confirm('The project was not saved. Start a new project anyway? Unsaved work will be lost.')) return;
+  }
+  stopAll();
+  applyProject(JSON.parse(JSON.stringify(DEFAULT_PROJECT)),[]);
+  undoStack.length=0; redoStack.length=0; pendingSnap=null;
+  selectObj(null); clearTrackSel();
+  seek(0);
+  fileFlash('New project.');
 }
 async function loadProject(f){
   stopAll();
@@ -6381,6 +6397,7 @@ function applyProject(proj,buffers){
   }finally{ histLock=false; }
 }
 document.getElementById('save-proj').onclick=()=>{ saveProject(); };
+document.getElementById('new-proj').onclick=()=>{ newProject(); };
 const projIn=document.getElementById('proj-in');
 document.getElementById('open-proj').onclick=()=>projIn.click();
 projIn.onchange=()=>{ const f=projIn.files[0]; projIn.value=''; if(f) loadProject(f); };

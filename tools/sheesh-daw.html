@@ -6238,23 +6238,30 @@ async function loadProject(f){
     const ab=await f.arrayBuffer();
     const head=new Uint8Array(ab,0,2);
     let proj; const buffers=[];
+    let raws=[];
     if(head[0]===0x50 && head[1]===0x4b){                       // .sheesh zip container
       const files=await readZip(ab);
       if(!files['manifest.json']) throw new Error('no manifest in archive');
       proj=JSON.parse(new TextDecoder().decode(files['manifest.json']));
-      for(let i=0;;i++){
-        const d=files['audio/'+i+'.wav']; if(!d) break;
-        buffers.push(await ctx.decodeAudioData(d));
-      }
+      for(let i=0;;i++){ const d=files['audio/'+i+'.wav']; if(!d) break; raws.push(d); }
     }else{                                                    // legacy JSON + base64
       proj=JSON.parse(new TextDecoder().decode(ab));
-      for(const b64 of (proj.buffers||[])) buffers.push(await ctx.decodeAudioData(b64ToArrayBuffer(b64)));
+      raws=(proj.buffers||[]).map(b64ToArrayBuffer);
     }
     if(proj.app!=='signal16') throw new Error('not a SHEESH DAW project file');
+    // decode all audio in parallel with a progress readout (big projects take a while, esp. in Firefox)
+    let done=0; const total=raws.length;
+    const prog=()=>fileSay('Loading project\u2026 decoding audio '+done+'/'+total+(total>4?' (this can take a minute)':''));
+    if(total) prog();
+    const decoded=await Promise.all(raws.map((d,i)=>ctx.decodeAudioData(d.slice(0)).then(b=>{ done++; prog(); return b; },
+      err=>{ throw new Error('audio file '+i+' could not be decoded ('+(err&&err.message||err)+')'); })));
+    buffers.push(...decoded);
+    fileSay('Loading project\u2026 building tracks');
+    await new Promise(r=>setTimeout(r,0));
     applyProject(proj,buffers);
     seek(0);
-    fileSay(''); fileFlash('Project loaded.');
-  }catch(e){ fileSay(''); fileFlash('Load failed: '+(e&&e.message||e)); }
+    fileSay(''); fileFlash('Project loaded'+(total?' ('+total+' audio file'+(total>1?'s':'')+')':'')+'.');
+  }catch(e){ console.error('SHEESH DAW: project load failed',e); fileSay(''); fileFlash('Load failed: '+(e&&e.message||e)); }
 }
 function applyProject(proj,buffers){
   histLock=true;

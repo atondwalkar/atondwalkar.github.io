@@ -64,6 +64,8 @@
   .tune-lab{font:11px ui-monospace,monospace;color:var(--ink-dim);padding:2px 8px;min-width:120px;white-space:nowrap}
   .stut-hold{min-width:56px;font-weight:700;letter-spacing:.08em}
   .stut-hold.on{background:#ffe066;color:#111;border-color:#ffe066}
+  .dn-row{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+  .dn-learn.on{background:#9fd8ff;color:#111;border-color:#9fd8ff}
   /* ---- hotkeys panel ---- */
   .hotkeys{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:5px 20px;padding:8px 18px 12px;font-size:11px;color:var(--ink-dim)}
   .hotkeys div{display:flex;align-items:center;gap:6px;min-width:0}
@@ -750,6 +752,7 @@
         <option value="tune">Auto-Tune</option>
         <option value="crush">Bitcrusher</option>
         <option value="stutter">Stutter</option>
+        <option value="denoise">Noise Reduction</option>
       </select>
       <button id="fx-add">Add FX</button>
       <button id="fx-paste" title="Paste the copied FX onto this track">Paste FX</button>
@@ -1037,6 +1040,14 @@ const FX_DEFS={
     gate:{min:0,max:1,step:0.01,val:1,fmt:v=>Math.round(v*100)+'%'},
     pitch:{min:-24,max:24,step:1,val:0,fmt:v=>(v>0?'+':'')+v+' st/s',label:'pitch ramp'},
     decay:{min:0,max:1,step:0.01,val:0,fmt:v=>Math.round(v*100)+'%'},
+    mix:{min:0,max:1,step:0.01,val:1,fmt:v=>Math.round(v*100)+'%'},
+  }},
+  denoise:{name:'Noise Reduction', color:'#9fd8ff', params:{
+    reduct:{min:0,max:40,step:0.5,val:12,fmt:v=>(+v).toFixed(1).replace(/\.0$/,'')+' dB',label:'reduction'},
+    sens:{min:-12,max:12,step:0.5,val:6,fmt:v=>(v>0?'+':'')+(+v).toFixed(1).replace(/\.0$/,'')+' dB',label:'sensitivity'},
+    fsmooth:{min:0,max:8,step:1,val:3,fmt:v=>'\u00b1'+Math.round(v),label:'freq smooth'},
+    attack:{min:1,max:100,step:1,val:5,fmt:v=>Math.round(v)+' ms'},
+    release:{min:10,max:1000,step:5,val:80,fmt:v=>Math.round(v)+' ms'},
     mix:{min:0,max:1,step:0.01,val:1,fmt:v=>Math.round(v*100)+'%'},
   }},
   width:{name:'Stereo Width', color:'#8adf9a', params:{
@@ -1685,7 +1696,122 @@ process(inputs,outputs,params){
   this.w=(this.w+1)%R;
  }
  return true}}
-registerProcessor('s16-stutter',S16Stutter);`;
+registerProcessor('s16-stutter',S16Stutter);
+class S16Denoise extends AudioWorkletProcessor{
+static get parameterDescriptors(){return[
+ {name:'learn',defaultValue:0,minValue:0,maxValue:1},
+ {name:'reduct',defaultValue:12,minValue:0,maxValue:40},
+ {name:'sens',defaultValue:6,minValue:-12,maxValue:12},
+ {name:'fsmooth',defaultValue:3,minValue:0,maxValue:8},
+ {name:'attack',defaultValue:5,minValue:1,maxValue:100},
+ {name:'release',defaultValue:80,minValue:10,maxValue:1000},
+ {name:'mix',defaultValue:1,minValue:0,maxValue:1}]}
+constructor(opts){super();
+ const N=this.N=2048; this.R=512; this.HB=N/2+1; this.M=8191;
+ this.inL=new Float32Array(8192); this.inR=new Float32Array(8192);
+ this.outL=new Float32Array(8192); this.outR=new Float32Array(8192);
+ this.t=1536; this.nf=0;                                // pre-filled with N-R zeros: full window coverage from the first real sample
+ this.win=new Float32Array(N); for(let n=0;n<N;n++) this.win[n]=0.5-0.5*Math.cos(2*Math.PI*n/N);
+ this.re=new Float32Array(N); this.im=new Float32Array(N);
+ this.P=new Float32Array(this.HB); this.hasProf=false;
+ this.acc=new Float64Array(this.HB); this.frames=0; this.wasLearn=false; this.postCnt=0;
+ this.gL=new Float32Array(this.HB).fill(1); this.gR=new Float32Array(this.HB).fill(1);
+ this.tL=new Float32Array(this.HB); this.tR=new Float32Array(this.HB); this.sm=new Float32Array(this.HB);
+ this.sL=new Float32Array(this.HB); this.sR=new Float32Array(this.HB);
+ this.dL=new Float32Array(this.HB); this.dR=new Float32Array(this.HB);
+ const po=opts&&opts.processorOptions;
+ if(po&&po.profile) this.setProfile(po.profile,po.fftSize||2048,po.sampleRate||sampleRate);
+ this.port.onmessage=e=>{ const d=e.data||{};
+  if(d.type==='setProfile'&&d.data){ this.setProfile(d.data,d.fftSize||2048,d.sampleRate||sampleRate); }
+  else if(d.type==='clearProfile'){ this.hasProf=false; }
+ };
+}
+setProfile(data,Nn,sr0){
+ const HB=this.HB, half=Nn/2, scale=(sampleRate/this.N)/(sr0/Nn);
+ for(let k=0;k<HB;k++){
+  let p=(k*sampleRate/this.N)*Nn/sr0;                     // source bin position at the same frequency
+  if(p>=half) p=half; if(p<0) p=0;
+  const i0=Math.floor(p), fr=p-i0, a=data[Math.min(i0,half)]||0, b=data[Math.min(i0+1,half)]||0;
+  this.P[k]=(a+(b-a)*fr)*scale;
+ }
+ this.hasProf=true;
+}
+frame(fs,learn,reduct,sens,B,aa,ar){
+ const N=this.N,M=this.M,HB=this.HB,re=this.re,im=this.im,win=this.win;
+ for(let n=0;n<N;n++){ const p=(fs+n)&M; re[n]=this.inL[p]*win[n]; im[n]=this.inR[p]*win[n]; }
+ fftRadix2(re,im,false);
+ // unpack the two real spectra, gains, repack
+ const T=Math.pow(10,sens/10), gFloor=Math.pow(10,-reduct/20), ex=reduct/12, hi=Math.pow(10,0.6);
+ const tL=this.tL,tR=this.tR;
+ if(learn){ this.frames++; }
+ for(let k=0;k<HB;k++){
+  const nk=(N-k)&(N-1);
+  const lre=(re[k]+re[nk])*0.5, lim=(im[k]-im[nk])*0.5;
+  const rre=(im[k]+im[nk])*0.5, rim=(re[nk]-re[k])*0.5;
+  const SL=lre*lre+lim*lim+1e-20, SR=rre*rre+rim*rim+1e-20;
+  if(learn) this.acc[k]+=SL+SR;
+  this.sL[k]=0.6*this.sL[k]+0.4*SL; this.sR[k]=0.6*this.sR[k]+0.4*SR;              // time-smoothed decision statistic
+ }
+ if(this.hasProf&&!learn&&reduct>0){
+  const dL=this.dL,dR=this.dR;                            // ±2-bin average of the decision statistic (variance ↓, no time lag)
+  for(let k=0;k<HB;k++){ let al=0,ar2=0,n2=0; for(let j=Math.max(0,k-2);j<=Math.min(HB-1,k+2);j++){ al+=this.sL[j]; ar2+=this.sR[j]; n2++; } dL[k]=al/n2; dR[k]=ar2/n2; }
+  for(let k=0;k<HB;k++){
+   const den=T*this.P[k]+1e-20;                           // floor at/below threshold, unity at threshold+6 dB
+   let r=dL[k]/den; tL[k]=r>=hi?1:(r<=1?gFloor:gFloor*Math.pow(r,ex));
+   r=dR[k]/den;    tR[k]=r>=hi?1:(r<=1?gFloor:gFloor*Math.pow(r,ex));
+  }
+ }else{ tL.fill(1); tR.fill(1); }
+ if(this.hasProf&&!learn&&reduct>0){
+  if(B>0){ this.fsm(tL,B); this.fsm(tR,B); }
+  const gL=this.gL,gR=this.gR;
+  for(let k=0;k<HB;k++){
+   let a=tL[k]>gL[k]?aa:ar; gL[k]=a*gL[k]+(1-a)*tL[k];
+   a=tR[k]>gR[k]?aa:ar;    gR[k]=a*gR[k]+(1-a)*tR[k];
+  }
+ }else{ this.gL.fill(1); this.gR.fill(1); }
+ const gL=this.gL,gR=this.gR;
+ for(let k=0;k<HB;k++){
+  const nk=(N-k)&(N-1);
+  const lre=(re[k]+re[nk])*0.5*gL[k], lim=(im[k]-im[nk])*0.5*gL[k];
+  const rre=(im[k]+im[nk])*0.5*gR[k], rim=(re[nk]-re[k])*0.5*gR[k];
+  re[k]=lre-rim; im[k]=lim+rre;                            // X' = L' + i R'
+  if(nk!==k){ re[nk]=lre+rim; im[nk]=rre-lim; }            // conj(L') + i conj(R')
+ }
+ fftRadix2(re,im,true);
+ const C=2/3;
+ for(let n=0;n<N;n++){ const p=(fs+n)&M, w=win[n]*C; this.outL[p]+=re[n]*w; this.outR[p]+=im[n]*w; }
+}
+fsm(g,B){ const HB=this.HB,sm=this.sm; let run=0;
+ for(let k=0;k<HB;k++){ run+=g[k]; if(k-2*B-1>=0) run-=g[k-2*B-1];
+  const c=k-B; if(c>=0) sm[c]=run/Math.min(k+1,2*B+1,HB-c+B); }
+ for(let k=HB-B;k<HB;k++){ let s=0,n=0; for(let j=k-B;j<HB;j++){ s+=g[j]; n++; } sm[k]=s/n; }
+ g.set(sm);
+}
+process(inputs,outputs,params){
+ const inp=inputs[0],out=outputs[0]; if(!out||!out.length) return true;
+ const N=this.N,R=this.R,M=this.M;
+ const learn=params.learn[0]>=0.5, reduct=params.reduct[0], sens=params.sens[0], B=Math.round(params.fsmooth[0]), mix=params.mix[0];
+ const aa=Math.exp(-R/(sampleRate*params.attack[0]/1000)), ar=Math.exp(-R/(sampleRate*params.release[0]/1000));
+ if(learn&&!this.wasLearn){ this.acc.fill(0); this.frames=0; }
+ if(!learn&&this.wasLearn&&this.frames>0){ this.finish(); this.postProf(true); }
+ this.wasLearn=learn;
+ const n0=inp&&inp[0], n1=(inp&&inp[1])||n0, L=out[0].length;
+ for(let n=0;n<L;n++){ const p=this.t&M; this.inL[p]=n0?n0[n]:0; this.inR[p]=n1?n1[n]:0; this.t++; }
+ while(this.t>=this.nf*R+N){ this.frame((this.nf*R)&~0,learn,reduct,sens,B,aa,ar); this.nf++; }
+ for(let n=0;n<L;n++){
+  const q=this.t-L+n-N;                                   // constant N-sample latency
+  const p=q&M, dl=q>=0?this.inL[p]:0, dr=q>=0?this.inR[p]:0;
+  const wl=q>=0?this.outL[p]:0, wr=q>=0?this.outR[p]:0;
+  if(q>=0){ this.outL[p]=0; this.outR[p]=0; }
+  out[0][n]=wl*mix+dl*(1-mix);
+  if(out[1]) out[1][n]=wr*mix+dr*(1-mix);
+ }
+ if(learn&&++this.postCnt>=8){ this.postCnt=0; this.finish(); this.postProf(false); }
+ return true}
+finish(){ const f=Math.max(1,this.frames); for(let k=0;k<this.HB;k++) this.P[k]=this.acc[k]/(2*f); this.hasProf=this.frames>0||this.hasProf; }
+postProf(fin){ this.port.postMessage({type:'profile', fftSize:this.N, sampleRate:sampleRate, frames:this.frames, final:!!fin, data:this.P.slice(0)}); }
+}
+registerProcessor('s16-denoise',S16Denoise);`;
 
 let WORKLET_SRC_CACHE=null;
 function workletSrc(){
@@ -2029,15 +2155,24 @@ function buildFxCore(fx,c,useWorklet){
     wet.gain.value=0;                    // no worklet: dry passthrough
     return {in:inN, out, dry, wet};
   }
-  if(t==='tune'||t==='crush'||t==='stutter'){
+  if(t==='tune'||t==='crush'||t==='stutter'||t==='denoise'){
     const inN=c.createGain(), out=c.createGain();
     const dry=c.createGain(), wet=c.createGain();
     inN.connect(dry); dry.connect(out);
     if(useWorklet){
-      const node=new AudioWorkletNode(c,'s16-'+t,{outputChannelCount:[2]});
+      const wkOpts={outputChannelCount:[2]};
+      if(t==='denoise' && fx.noiseProfile) wkOpts.processorOptions={profile:fx.noiseProfile, fftSize:fx.profN||2048, sampleRate:fx.profSr||c.sampleRate};
+      const node=new AudioWorkletNode(c,'s16-'+t,wkOpts);
       inN.connect(node); node.connect(wet); wet.connect(out);
       if(t==='tune' && c===ctx){
         node.port.onmessage=e=>{ fx._tune=e.data; if(fx.tuneLab && fx.tuneLab.isConnected) fx.tuneLab.textContent=tuneReadout(e.data); };
+      }
+      if(t==='denoise'){
+        if(fx.noiseProfile) node._dnProf=fx.noiseProfile;
+        if(c===ctx) node.port.onmessage=e=>{ const d=e.data; if(!d||d.type!=='profile') return;
+          fx.noiseProfile=d.data; fx.profSr=d.sampleRate; fx.profN=d.fftSize; fx.noiseSec=d.frames*512/d.sampleRate;
+          node._dnProf=fx.noiseProfile;
+          if(fx.dnLab && fx.dnLab.isConnected) fx.dnLab.textContent=dnReadout(fx); };
       }
       return {in:inN, out, dry, wet, fxNode:node};
     }
@@ -2082,6 +2217,11 @@ function tuneReadout(d){
   const name=m=>{ const r=Math.round(m); return nn[((r%12)+12)%12]+(Math.floor(r/12)-1); };
   const c=Math.round((d.m-Math.round(d.m))*100);
   return name(d.m)+' ('+(c>=0?'+':'')+c+'\u00a2) \u2192 '+name(d.tgt);
+}
+function dnReadout(fx){
+  if(fx._learn) return 'learning\u2026 '+((fx.noiseSec||0).toFixed(1))+' s \u2014 play the noise-only part';
+  if(fx.noiseProfile) return 'profile: '+((fx.noiseSec||0).toFixed(1))+' s of noise';
+  return 'no profile \u2014 play the noisy gap and press Learn';
 }
 function applyFxTo(fx,n){
   const p=fx.params;
@@ -2252,7 +2392,7 @@ function applyFxTo(fx,n){
     }else{
       n.dry.gain.value=1;
     }
-  }else if(fx.type==='tune'||fx.type==='crush'||fx.type==='stutter'){
+  }else if(fx.type==='tune'||fx.type==='crush'||fx.type==='stutter'||fx.type==='denoise'){
     const mix=p.mix??1;
     if(n.fxNode){
       const sp=(name,v)=>{ const ap=n.fxNode.parameters.get(name); if(ap) ap.value=v; };
@@ -2261,8 +2401,14 @@ function applyFxTo(fx,n){
         sp('root',km.root); sp('mask',km.mask); sp('retune',p.retune??40); sp('amount',p.amount??1); sp('humanize',p.humanize||0);
       }else if(fx.type==='crush'){
         sp('bits',p.bits??8); sp('rate',p.rate??12000); sp('interp',p.interp||0); sp('dither',p.dither||0); sp('tone',p.tone??8000); sp('noise',p.noise||0);
-      }else{
+      }else if(fx.type==='stutter'){
         sp('div',p.div??2); sp('on',p.on||0); sp('gate',p.gate??1); sp('pitch',p.pitch||0); sp('decay',p.decay||0); sp('bpm',state.bpm);
+      }else{
+        sp('learn',fx._learn?1:0); sp('reduct',p.reduct??12); sp('sens',p.sens??6); sp('fsmooth',p.fsmooth??3); sp('attack',p.attack??5); sp('release',p.release??80); sp('mix',p.mix??1);
+        if(fx.noiseProfile && n.fxNode._dnProf!==fx.noiseProfile){ n.fxNode._dnProf=fx.noiseProfile; n.fxNode.port.postMessage({type:'setProfile', fftSize:fx.profN||2048, sampleRate:fx.profSr||ctx.sampleRate, data:fx.noiseProfile}); }
+        else if(!fx.noiseProfile && n.fxNode._dnProf){ n.fxNode._dnProf=null; n.fxNode.port.postMessage({type:'clearProfile'}); }
+        n.wet.gain.value=1; n.dry.gain.value=0;            // mix happens inside (latency-aligned dry)
+        return;
       }
       n.wet.gain.value=mix;
       n.dry.gain.value=1-mix;
@@ -4672,7 +4818,7 @@ function serTrackData(t){
   const ts=state.tracks[t.id];
   return {name:t.name, compact:t.laneEl.classList.contains('compact'), vol:ts.vol, mute:!!ts.mute, solo:!!ts.solo, pan:ts.pan||0, fxBypass:!!ts.fxBypass,
     autoMode:t.autoMode||'read', busId:t.busId||null,
-    fx:t.fx.map(f=>({type:f.type, params:{...f.params}, bypass:!!f.bypass, irBuffer:f.irBuffer||null, irName:f.irName||null, keyTrackId:f.keyTrackId||null, sampleBuffer:f.sampleBuffer||null, sampleName:f.sampleName||null})),
+    fx:t.fx.map(f=>({type:f.type, params:{...f.params}, bypass:!!f.bypass, irBuffer:f.irBuffer||null, irName:f.irName||null, keyTrackId:f.keyTrackId||null, sampleBuffer:f.sampleBuffer||null, sampleName:f.sampleName||null, noiseProfile:f.noiseProfile||null, profSr:f.profSr||null, profN:f.profN||null, noiseSec:f.noiseSec||0})),
     items:t.items.map(it=>({kind:it.kind, startStep:it.startStep, lenSteps:it.lenSteps, name:it.name, scale:it.scale||'', grp:it.grp??null, pat:serPat(it), pt:serPitch(it)})),
     clips:t.clips.map(c=>({buffer:c.buffer, start:c.start, offset:c.offset, dur:c.dur, name:c.name, nativeBpm:c.nativeBpm, stretch:c.stretch||1, grp:c.grp??null, gain:c.gain||0, fadeIn:c.fadeIn||0, fadeOut:c.fadeOut||0, semis:c.semis||0, rev:!!c.rev})),
     autos:(t.autos||[]).map(a=>({kind:a.kind, fxIdx:a.fxId?t.fx.findIndex(f=>f.id===a.fxId):-1, key:a.key, hidden:!!a.hidden, pts:a.pts.map(p=>({s:p.s,v:p.v}))}))};
@@ -4693,6 +4839,7 @@ function pasteTrackData(d,after){
     Object.assign(fx.params,sf.params); fx.bypass=sf.bypass;
     if(sf.irBuffer){ fx.irBuffer=sf.irBuffer; fx.irName=sf.irName; }
     if(sf.sampleBuffer){ fx.sampleBuffer=sf.sampleBuffer; fx.sampleName=sf.sampleName; }
+    if(sf.noiseProfile){ fx.noiseProfile=sf.noiseProfile; fx.profSr=sf.profSr; fx.profN=sf.profN; fx.noiseSec=sf.noiseSec; }
     if(sf.keyTrackId && tracksAll.some(t=>t.id===sf.keyTrackId)) fx.keyTrackId=sf.keyTrackId;
     fx._autoPrev=Object.assign({},fx.params);
     applyFx(fx);
@@ -5420,6 +5567,7 @@ document.getElementById('fx-paste').onclick=()=>{
   fx.bypass=fxClipboard.bypass;
   if(fxClipboard.keyTrackId) fx.keyTrackId=fxClipboard.keyTrackId;
   if(fxClipboard.irBuffer){ fx.irBuffer=fxClipboard.irBuffer; fx.sampleBuffer=fxClipboard.sampleBuffer||fx.sampleBuffer; fx.sampleName=fxClipboard.sampleName||fx.sampleName; fx.irName=fxClipboard.irName; }
+  if(fxClipboard.noiseProfile){ fx.noiseProfile=fxClipboard.noiseProfile; fx.profSr=fxClipboard.profSr; fx.profN=fxClipboard.profN; fx.noiseSec=fxClipboard.noiseSec; applyFx(fx); }
   rebuildChain(selectedTrack);
   renderFxPanel();
 };
@@ -5631,6 +5779,24 @@ function renderFxPanel(){
         };
         sw2.appendChild(hb);
       }
+      if(fx.type==='denoise'){
+        const row=document.createElement('div'); row.className='dn-row';
+        const lb=document.createElement('button'); lb.className='ir-btn dn-learn'+(fx._learn?' on':''); lb.textContent=fx._learn?'\u23f9 Learning':'Learn';
+        lb.title='Play the part of the clip where ONLY the background noise is audible, press Learn, let a second or two play, press again to stop \u2014 then the whole track gets filtered against that profile';
+        lb.onclick=()=>{
+          if(!fx._learn) pushHistory();
+          fx._learn=!fx._learn; applyFx(fx);
+          lb.classList.toggle('on',fx._learn); lb.textContent=fx._learn?'\u23f9 Learning':'Learn';
+          if(fx.dnLab) fx.dnLab.textContent=dnReadout(fx);
+        };
+        const cb=document.createElement('button'); cb.className='ir-btn'; cb.textContent='Clear';
+        cb.title='Forget the learned noise profile (the unit passes audio through untouched)';
+        cb.onclick=()=>{ pushHistory(); fx.noiseProfile=null; fx.noiseSec=0; fx._learn=false; applyFx(fx);
+          lb.classList.remove('on'); lb.textContent='Learn'; if(fx.dnLab) fx.dnLab.textContent=dnReadout(fx); };
+        const tl=document.createElement('div'); tl.className='tune-lab'; tl.textContent=dnReadout(fx); fx.dnLab=tl;
+        row.append(lb,cb,tl);
+        sw2.appendChild(row);
+      }
       if(fx.type==='duck'){
         const ks=document.createElement('select'); ks.className='duck-key';
         ks.setAttribute('aria-label','Ducker key track');
@@ -5691,7 +5857,8 @@ function renderFxPanel(){
       cpy.setAttribute('aria-label','Copy '+def.name+' settings');
       cpy.onclick=()=>{
         fxClipboard={type:fx.type, params:{...fx.params}, bypass:!!fx.bypass,
-                     keyTrackId:fx.keyTrackId||null, irBuffer:fx.irBuffer||null, irName:fx.irName||null, sampleBuffer:fx.sampleBuffer||null, sampleName:fx.sampleName||null};
+                     keyTrackId:fx.keyTrackId||null, irBuffer:fx.irBuffer||null, irName:fx.irName||null, sampleBuffer:fx.sampleBuffer||null, sampleName:fx.sampleName||null,
+                     noiseProfile:fx.noiseProfile||null, profSr:fx.profSr||null, profN:fx.profN||null, noiseSec:fx.noiseSec||0};
         flash('Copied '+def.name+' — Paste FX on any track.');
       };
       slot.appendChild(cpy);
@@ -7247,6 +7414,7 @@ function serFx(f,ref){
   }
   if(f.type==='cab' && f.irBuffer){ o.ir=ref(f.irBuffer); o.irName=f.irName||'IR'; }
   if(f.type==='sampler' && f.sampleBuffer){ o.smp=ref(f.sampleBuffer); o.smpName=f.sampleName||'sample'; }
+  if(f.type==='denoise' && f.noiseProfile){ o.np=Array.from(f.noiseProfile,v=>+v.toExponential(3)); o.npSr=f.profSr||ctx.sampleRate; o.npN=f.profN||2048; o.npSec=+(f.noiseSec||0).toFixed(2); }
   return o;
 }
 /* ---- project name: shown in the header, click to rename, used as the Save filename ---- */
@@ -7561,6 +7729,7 @@ function applyProject(proj,buffers){
       fx.bypass=!!sf.bypass;
       if(sf.ir!==undefined && buffers[sf.ir]){ fx.irBuffer=buffers[sf.ir]; fx.irName=sf.irName; }
       if(sf.smp!==undefined && buffers[sf.smp]){ fx.sampleBuffer=buffers[sf.smp]; fx.sampleName=sf.smpName; }
+      if(sf.np){ fx.noiseProfile=Float32Array.from(sf.np); fx.profSr=sf.npSr; fx.profN=sf.npN||2048; fx.noiseSec=sf.npSec||0; }
       MASTER_TRACK.fx.push(fx);
       fx._autoPrev=Object.assign({},fx.params);
       if(sf.type==='duck' && sf.key!==undefined) pendingDuck.push({fx, key:sf.key, tr:MASTER_TRACK});
@@ -7606,7 +7775,7 @@ function applyProject(proj,buffers){
         fx.bypass=!!sf.bypass;
         if(sf.ir!==undefined && buffers[sf.ir]){ fx.irBuffer=buffers[sf.ir]; fx.irName=sf.irName; }
         if(sf.smp!==undefined && buffers[sf.smp]){ fx.sampleBuffer=buffers[sf.smp]; fx.sampleName=sf.smpName; }
-      if(sf.smp!==undefined && buffers[sf.smp]){ fx.sampleBuffer=buffers[sf.smp]; fx.sampleName=sf.smpName; }
+        if(sf.np){ fx.noiseProfile=Float32Array.from(sf.np); fx.profSr=sf.npSr; fx.profN=sf.npN||2048; fx.noiseSec=sf.npSec||0; }
         if(sf.type==='duck' && sf.key!==undefined) pendingDuck.push({fx, key:sf.key, tr});
         applyFx(fx);
       });

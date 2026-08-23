@@ -230,6 +230,10 @@
     background:rgba(255,179,71,.07);
     border-left:1px solid rgba(255,179,71,.5);border-right:1px solid rgba(255,179,71,.5);
   }
+  .marker{position:absolute;top:0;bottom:0;width:0;border-left:2px solid #ffd166;z-index:3;cursor:pointer;pointer-events:auto}
+  .marker i{position:absolute;top:0;left:0;font:700 9px "IBM Plex Mono",monospace;font-style:normal;color:#111;background:#ffd166;
+    padding:0 3px 1px;border-radius:0 4px 4px 0;white-space:nowrap}
+  .marker:hover{border-left-color:#ffe3a1}
   .ruler span{
     position:absolute;top:3px;font-family:'IBM Plex Mono',monospace;
     font-size:9px;color:var(--ink-dim);padding-left:4px;border-left:1px solid #414a58;
@@ -3646,6 +3650,7 @@ function layoutTimeline(){
   tracksAll.forEach(t=>(t.autos||[]).forEach(a=>drawAuto(t,a)));
   ruler.style.width=w+'px';
   updateLoopRegionEl();
+  renderMarkers();
   queueGhosts();
 }
 
@@ -5058,6 +5063,39 @@ loopRegionEl.id='loop-region';
 const loopLanesEl=document.createElement('div');
 loopLanesEl.id='loop-region-lanes';
 tlInner.appendChild(loopLanesEl);
+let markers=[];                         // {t, name} — timeline markers on the ruler (K at the playhead)
+function renderMarkers(){
+  ruler.querySelectorAll('.marker').forEach(el=>el.remove());
+  markers.forEach((m,i)=>{
+    const el=document.createElement('div'); el.className='marker';
+    el.style.left=Math.round(m.t*PPS)+'px';
+    el.title=m.name+' \u2014 drag to move, double-click to remove';
+    const lab=document.createElement('i'); lab.textContent=m.name; el.appendChild(lab);
+    el.onpointerdown=e=>{
+      e.stopPropagation(); e.preventDefault();
+      try{ el.setPointerCapture(e.pointerId); }catch(_){}
+      const x0=e.clientX, t0=m.t; let moved=false;
+      el.onpointermove=ev=>{ const dt=(ev.clientX-x0)/PPS; if(Math.abs(ev.clientX-x0)>3) moved=true;
+        m.t=Math.max(0,snapSec(t0+dt)); el.style.left=Math.round(m.t*PPS)+'px'; };
+      el.onpointerup=el.onpointercancel=()=>{ el.onpointermove=null; if(!moved) seek(m.t); else pushHistory(); };
+    };
+    el.ondblclick=e=>{ e.stopPropagation(); pushHistory(); markers.splice(i,1); renderMarkers(); };
+    ruler.appendChild(el);
+  });
+}
+function toggleMarker(){
+  const pos=curPos();
+  const near=markers.findIndex(m=>Math.abs(m.t-pos)<0.1);
+  pushHistory();
+  if(near>=0){ const nm=markers[near].name; markers.splice(near,1); flash('Marker '+nm+' removed.'); }
+  else{
+    let n=1; while(markers.some(m=>m.name==='M'+n)) n++;
+    markers.push({t:pos, name:'M'+n});
+    markers.sort((a,b)=>a.t-b.t);
+    flash('Marker M'+n+' at '+pos.toFixed(2)+' s \u2014 click it to jump back, double-click removes.');
+  }
+  renderMarkers();
+}
 function updateLoopRegionEl(){
   if(!loopRegionEl.parentNode) ruler.appendChild(loopRegionEl);   // layoutTimeline wipes the ruler
   if(!loopRegion){
@@ -7530,6 +7568,7 @@ function snapState(){
   const proj={
     v:2, name:projectName,
     bpm:state.bpm, swing:state.swing, loopOn, pps:PPS,
+    markers:markers.map(m=>({t:+m.t.toFixed(4), name:m.name})),
     master:{mvol:+mvol.value, fxBypass:!!state.tracks.master.fxBypass, fx:MASTER_TRACK.fx.map(f=>serFx(f,ref)), auto:serAutos(MASTER_TRACK), amode:MASTER_TRACK.autoMode||'read'},
     routes:{},
     tracks:tracksAll.map(t=>({
@@ -7707,6 +7746,7 @@ async function saveProject(){
     const proj={
       app:'signal16', v:2, name:projectName,
       bpm:state.bpm, swing:state.swing, loopOn, pps:PPS,
+    markers:markers.map(m=>({t:+m.t.toFixed(4), name:m.name})),
       master:{mvol:+mvol.value, fxBypass:!!state.tracks.master.fxBypass, fx:MASTER_TRACK.fx.map(f=>serFx(f,bufRef)), auto:serAutos(MASTER_TRACK), amode:MASTER_TRACK.autoMode||'read'},
       routes:{},
       tracks:tracksAll.map(t=>({
@@ -7827,6 +7867,8 @@ function applyProject(proj,buffers){
     setBpm(proj.bpm||180);
     setSwing(proj.swing||0);
     loopOn=!!proj.loopOn;
+    markers=(proj.markers||[]).map(m=>({t:+m.t||0, name:String(m.name||'M')}));
+    renderMarkers();
     loopBtn.classList.toggle('on',loopOn);
     loopBtn.setAttribute('aria-pressed',loopOn);
     if(proj.master){
@@ -7976,6 +8018,8 @@ const HK_ROWS=`    <div><span class="hk"><kbd>Space</kbd></span>play / stop</div
     <div><span class="hk"><kbd>Ctrl</kbd>+<kbd>C</kbd> <kbd>X</kbd> <kbd>V</kbd></span>copy / cut / paste selection at playhead</div>
     <div><span class="hk"><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>C</kbd> / <kbd>V</kbd></span>copy / paste whole tracks</div>
     <div><span class="hk"><kbd>G</kbd></span>group / ungroup selection (selecting one selects all)</div>
+    <div><span class="hk"><kbd>K</kbd></span>marker at the playhead (press on a marker's spot to remove \u00b7 click jumps \u00b7 drag moves \u00b7 dbl-click deletes)</div>
+    <div><span class="hk"><kbd>M</kbd></span>mute / unmute the selected track</div>
     <div><span class="hk"><kbd>Y</kbd></span>merge selected clips or MIDI items</div>
     <div><span class="hk"><kbd>Click</kbd></span>select clip / item / note · <kbd>Ctrl</kbd>+click toggles · <kbd>Shift</kbd>+click selects the range</div>
     <div><span class="hk"><kbd>Drag</kbd></span>move selection (across tracks) · edges trim · <kbd>Ctrl</kbd>+drag right edge stretches</div>
@@ -8192,6 +8236,16 @@ document.addEventListener('click',e=>{
   const el=e.target.closest('button,select,input[type=range]');
   if(el && document.activeElement===el) el.blur();
 });
+function toggleMuteTrack(t){
+  if(!t || t.isMaster){ flash('Select a track first \u2014 M mutes the selected track.'); return; }
+  pushHistory();
+  const ts=state.tracks[t.id];
+  ts.mute=!ts.mute;
+  if(t.chipM) t.chipM.classList.toggle('on-m',ts.mute);
+  renderMixer();
+  refreshMix();
+  flash((ts.mute?'Muted ':'Unmuted ')+t.name+'.');
+}
 document.addEventListener('keydown',e=>{
   const tg=e.target, tag=tg.tagName;
   const typing=tag==='TEXTAREA' || tg.isContentEditable ||
@@ -8227,6 +8281,8 @@ document.addEventListener('keydown',e=>{
   }
   if(ctrl && e.code==='KeyY'){ e.preventDefault(); redo(); return; }
   if(!ctrl && !e.altKey && e.code==='KeyG'){ e.preventDefault(); groupSelection(); return; }
+  if(!ctrl && !e.altKey && e.code==='KeyK'){ e.preventDefault(); toggleMarker(); return; }
+  if(!ctrl && !e.altKey && e.code==='KeyM'){ e.preventDefault(); toggleMuteTrack(selectedTrack); return; }
   if(!ctrl && !e.altKey && e.code==='KeyY'){ e.preventDefault(); mergeSelection(); return; }
   if(e.code==='Escape'){ if(hkPop){ closeHkPop(); return; } if(prSel.size){ prSel.clear(); drawPianoRoll(); return; } selectObj(null); clearTrackSel(); closeAutoMenu(); return; }
   if(e.key==='?' && !ctrl && !e.altKey){ e.preventDefault(); toggleHkPop(); return; }

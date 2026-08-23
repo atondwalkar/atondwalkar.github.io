@@ -747,9 +747,15 @@
   <div class="panel-head">
     <h2 id="editor-title">Editor <span class="itemlab" id="editor-lab"></span></h2>
     <div class="tools" id="drum-tools" hidden>
+      <button id="item-start-d" title="Move the playhead to the start of this item">&#9198; Item</button>
       <button id="preset-death">Death</button>
       <button id="preset-black">Black</button>
       <button id="preset-thrash">Thrash</button>
+      <button id="preset-rock">Rock</button>
+      <button id="preset-pop">Pop</button>
+      <button id="preset-house">House</button>
+      <button id="preset-jazz">Jazz</button>
+      <button id="preset-dariacore">Dariacore</button>
       <button id="rand-drums">Random</button>
       <button id="clear-drums">Clear</button>
       <button id="split-drums" title="Route each drum to its own track with EQ &amp; FX">Split Out</button>
@@ -3765,7 +3771,7 @@ function bindClipPointer(clip){
     if(e.button!==undefined && e.button!==0) return;
     e.preventDefault();
     pendingSnap=snapState();
-    const px0=e.clientX, add=e.ctrlKey||e.metaKey||e.shiftKey, wasSel=selHas(clip);
+    const px0=e.clientX, add=e.ctrlKey||e.metaKey, range=e.shiftKey, wasSel=selHas(clip);
     const o={start:clip.start,offset:clip.offset,dur:clip.dur,stretch:clip.stretch||1};
     const r=clip.el.getBoundingClientRect(), x=e.clientX-r.left;
     let mode, moved=false, G=null;
@@ -3773,7 +3779,7 @@ function bindClipPointer(clip){
     else if(r.width>44 && x>r.width-14) mode=(e.ctrlKey||e.metaKey)?'rs':'r';
     else mode='m';
     if(mode==='m'){
-      if(!wasSel && !add) selectObj({kind:'audio',clip});      // grab an unselected clip: it (and its group) becomes the selection
+      if(!wasSel && !add && !range) selectObj({kind:'audio',clip});      // grab an unselected clip: it (and its group) becomes the selection
       G=dragGroupBegin(clip);
     }
     const move=ev=>{
@@ -3809,6 +3815,7 @@ function bindClipPointer(clip){
         pendingSnap=null;
         const sl={kind:'audio',clip};
         if(add) selectObj(sl,true);
+        else if(range) selectRange(sl);
         else if(wasSel && selSet.length===1) selectObj(null);
         else selectObj(sl);
       }else{ commitPending(); layoutTimeline(); queueGhosts(); rescheduleIfPlaying(); }
@@ -3943,20 +3950,20 @@ function bindItemPointer(it){
     if(e.button!==undefined && e.button!==0) return;
     e.preventDefault();
     pendingSnap=snapState();
-    const px0=e.clientX, add=e.ctrlKey||e.metaKey||e.shiftKey, wasSel=selHas(it);
+    const px0=e.clientX, add=e.ctrlKey||e.metaKey, range=e.shiftKey, wasSel=selHas(it);
     const o={start:it.startStep,len:it.lenSteps};
     const r=it.el.getBoundingClientRect(), x=e.clientX-r.left;
     const mode=(r.width>40 && x>r.width-14) ? 'r' : 'm';
     let moved=false, resized=false, G=null;
     if(mode==='m'){
-      if(!wasSel && !add) selectObj({kind:'midi',item:it});
+      if(!wasSel && !add && !range) selectObj({kind:'midi',item:it});
       G=dragGroupBegin(it);
     }
     const move=ev=>{
       const dSteps=(ev.clientX-px0)/stepPx();
       if(Math.abs(ev.clientX-px0)>4) moved=true;
       if(mode==='m'){ if(dragGroupMove(G,it,dSteps*stepDur(),laneTrackAt(ev.clientY))) moved=true; return; }
-      const bars=Math.max(1,Math.min(MAX_ITEM_BARS,Math.round((o.len+dSteps)/STEPS)));
+      const bars=Math.max(1,Math.round((o.len+dSteps)/STEPS));
       const len=bars*STEPS;
       if(len!==it.lenSteps){
         it.pat=resizePat(it.kind,it.pat,len);
@@ -3973,6 +3980,7 @@ function bindItemPointer(it){
         pendingSnap=null;
         const sl={kind:'midi',item:it};
         if(add) selectObj(sl,true);
+        else if(range) selectRange(sl);
         else if(wasSel && selSet.length===1) selectObj(null);
         else selectObj(sl);
       }else{
@@ -4034,6 +4042,26 @@ function selectObj(sel,add){
   applySelUI();
 }
 function setSelection(list){ selSet=list.slice(); selected=list[list.length-1]||null; applySelUI(); }
+/* shift-click: select everything between the first-selected (anchor) object and the clicked one — tracks in
+   between and the time span covered by both */
+function objSpan(o){ return o.buffer?[o.start,o.start+clipTlDur(o)]:[o.startStep*stepDur(),(o.startStep+o.lenSteps)*stepDur()]; }
+function selectRange(sel){
+  const obj=selObjOf(sel);
+  if(!selSet.length){ selectObj(sel); return; }
+  const anchor=selObjOf(selSet[0]);
+  const ia=tracksAll.findIndex(t=>t.id===anchor.trackId), ib=tracksAll.findIndex(t=>t.id===obj.trackId);
+  const [a0,a1]=objSpan(anchor), [b0,b1]=objSpan(obj);
+  const tMin=Math.min(a0,b0), tMax=Math.max(a1,b1), lo=Math.min(ia,ib), hi=Math.max(ia,ib);
+  const list=[];
+  allObjs().forEach(x=>{
+    const ti=tracksAll.indexOf(x.track); if(ti<lo||ti>hi) return;
+    const [s0,s1]=objSpan(x.obj); if(s0<tMax-1e-6 && s1>tMin+1e-6) list.push(x);
+  });
+  const out=[selSet[0]];
+  list.forEach(x=>{ if(x.obj!==anchor && x.obj!==obj) out.push(x.sel); });
+  if(obj!==anchor) out.push(sel);
+  setSelection(out);
+}
 function dropFromSel(obj){
   if(!selHas(obj)) return;
   selSet=selSet.filter(sl=>selObjOf(sl)!==obj);
@@ -5500,6 +5528,37 @@ const SCALES={maj:[0,2,4,5,7,9,11], min:[0,2,3,5,7,8,10]};
 scaleSel.onchange=()=>{ const it=selPianoItem(); if(it){ it.scale=scaleSel.value; drawPianoRoll(); } };
 function selMidiItem(){ return selected && selected.kind==='midi' ? selected.item : null; }
 let prGeom=null, prDragHandle=null, prMode2=null, prGrab2=0, prVel0=1, prVelY0=0;
+/* note selection in the roll: piano notes are identified by their note object, drum hits by piece:step */
+let prSel=new Set(), prSelItem=null, prDragOrig=null;
+const prKey=(cfg,h)=>cfg.kind==='drums'?(h.piece+':'+h.s):h.ref;
+function prSelHas(cfg,h){ return prSel.has(prKey(cfg,h)); }
+function prSelList(cfg){ return cfg.notes().filter(h=>prSel.has(prKey(cfg,h))); }
+function prSelSet(cfg,list){ prSel=new Set(list.map(h=>prKey(cfg,h))); prSelItem=cfg.it; }
+function prSelRange(cfg,anchor,hit){
+  const s0=Math.min(anchor.s,hit.s), s1=Math.max(anchor.s+anchor.l,hit.s+hit.l), r0=Math.min(anchor.row,hit.row), r1=Math.max(anchor.row,hit.row);
+  prSelSet(cfg, cfg.notes().filter(h=>h.row>=r0 && h.row<=r1 && h.s<s1 && h.s+h.l>s0));
+}
+function prMoveGroup(cfg,orig,dRow,dStep){
+  // orig: [{h, row, s}] snapshot; clamp so every note stays inside the item / valid rows
+  orig.forEach(o=>{ dStep=Math.max(dStep,-o.s); dStep=Math.min(dStep,cfg.it.lenSteps-o.h.l-o.s); dRow=Math.max(dRow,-o.row); dRow=Math.min(dRow,cfg.rows-1-o.row); });
+  if(cfg.kind==='drums'){
+    if(orig.some(o=>!KEY_TO_DRUM[PR_KEYS-1-(o.row+dRow)])) dRow=0;
+    const it=cfg.it;
+    orig.forEach(o=>{ it.pat[o.h.piece][o.h.s]=0; });
+    orig.forEach(o=>{ const id=KEY_TO_DRUM[PR_KEYS-1-(o.row+dRow)]; o.h.piece=id; o.h.row=o.row+dRow; o.h.s=o.s+dStep; it.pat[id][o.h.s]=1; });
+  }else{
+    orig.forEach(o=>cfg.move(o.h,o.row+dRow,o.s+dStep));
+  }
+  prSelSet(cfg,orig.map(o=>o.h));
+}
+function prDeleteSelected(){
+  const cfg=rollCfg(); if(!cfg || !prSel.size) return false;
+  pushHistory();
+  prSelList(cfg).forEach(h=>cfg.del(h));
+  prSel.clear(); prDragHandle=null;
+  renderItem(cfg.it); drawPianoRoll();
+  return true;
+}
 const DRUM_KEYS={
   kick:15, kickl:16,          // C1  C#1
   snare:17, rim:18,           // D1  D#1
@@ -5530,7 +5589,7 @@ function rollCfg(){
       const out=[];
       DRUMS.forEach(d=>{
         const row=PR_KEYS-1-DRUM_KEYS[d.id];
-        for(let s2=0;s2<it.lenSteps;s2++) if(it.pat[d.id][s2]) out.push({row,s:s2,l:1});
+        for(let s2=0;s2<it.lenSteps;s2++) if(it.pat[d.id][s2]) out.push({row,s:s2,l:1,piece:d.id});
       });
       return out;
     },
@@ -5683,6 +5742,7 @@ function drawPianoRoll(){
     else g.rect(x+1,y+2,nn.l*cell-2,cfg.rowH-4);
     g.fill();
     g.globalAlpha=1;
+    if(prSelItem===it && prSel.has(prKey(cfg,nn))){ g.strokeStyle='#ffffff'; g.lineWidth=1.5; g.stroke(); }
     if(!cfg.fixedLen){
       g.fillStyle='rgba(0,0,0,.35)';
       g.fillRect(x+nn.l*cell-4,y+3,2,cfg.rowH-6);
@@ -5720,38 +5780,65 @@ prCv.onpointerdown=e=>{
   if(step<0||step>=cfg.it.lenSteps) return;
   const hit=cfg.hitAt(row,step);
   if(!hit && cfg.canAdd && !cfg.canAdd(row)) return;
+  if(prSelItem!==cfg.it){ prSel.clear(); prSelItem=cfg.it; }
+  const ctrl=e.ctrlKey||e.metaKey, shift=e.shiftKey, alt=e.altKey;
+  let moved=false, velSel=null, shiftClick=false;
+  if(hit && ctrl){                                             // ctrl-click: toggle in the selection, no drag
+    const k=prKey(cfg,hit); if(prSel.has(k)) prSel.delete(k); else prSel.add(k);
+    drawPianoRoll(); return;
+  }
   pushHistory();
   if(hit){
     prDragHandle=hit;
-    if(cfg.vel && (e.shiftKey||e.altKey)){ prMode2='vel'; prVel0=cfg.vel(hit); prVelY0=e.clientY; prCv.style.cursor='ns-resize'; }
+    if(!prSelHas(cfg,hit) && !shift){ prSelSet(cfg,[hit]); }      // grab an unselected note: it becomes the selection
+    if(cfg.vel && (shift||alt)){ prMode2='vel'; prVel0=cfg.vel(hit); prVelY0=e.clientY; prCv.style.cursor='ns-resize'; shiftClick=shift;
+      velSel=prSelList(cfg).map(h=>({h, v0:cfg.vel(h)})); }
     else if(!cfg.fixedLen){
       const endX=prGeom.gut+(hit.s+hit.l)*prGeom.cell;
       prMode2=(x>endX-7)?'resize':'move';
     }else prMode2='move';
     prGrab2=step-hit.s;
+    prDragOrig=prMode2==='move'?prSelList(cfg).map(h=>({h,row:h.row,s:h.s})):null;
   }else{
     prDragHandle=cfg.add(row,step);
+    prSelSet(cfg,[prDragHandle]);
     prMode2=cfg.fixedLen?'move':'resize';
-    prGrab2=0;
+    prGrab2=0; prDragOrig=null;
   }
+  const row0=row, step0=step;
   drawPianoRoll();
   prCv.onpointermove=ev=>{
-    if(prMode2==='vel'){ cfg.setVel(prDragHandle, prVel0+(prVelY0-ev.clientY)/100); drawPianoRoll(); return; }
     const r2=prCv.getBoundingClientRect();
     const y2=ev.clientY-r2.top, x2=ev.clientX-r2.left;
     const row2=Math.max(0,Math.min(cfg.rows-1,Math.floor(y2/prGeom.rowH)));
     let st2=Math.floor((x2-prGeom.gut)/prGeom.cell);
+    if(Math.abs(ev.clientX-e.clientX)>3 || Math.abs(ev.clientY-e.clientY)>3) moved=true;
+    if(prMode2==='vel'){
+      if(!moved) return;
+      const d=(prVelY0-ev.clientY)/100;
+      (velSel||[]).forEach(o=>cfg.setVel(o.h,o.v0+d));
+      if(!(velSel||[]).some(o=>o.h.ref===prDragHandle.ref && o.h.s===prDragHandle.s)) cfg.setVel(prDragHandle,prVel0+d);
+      drawPianoRoll(); return;
+    }
     if(prMode2==='resize'){
       cfg.resize(prDragHandle, Math.max(1,Math.min(cfg.it.lenSteps-prDragHandle.s, st2-prDragHandle.s+1)));
+    }else if(prDragOrig && prDragOrig.length>1){
+      prMoveGroup(cfg,prDragOrig,row2-row0,st2-step0);
+      const me=prDragOrig.find(o=>o.h.ref?o.h.ref===prDragHandle.ref:(o.h.piece===prDragHandle.piece)); if(me) prDragHandle=me.h;
     }else{
       st2=Math.max(0,Math.min(cfg.it.lenSteps-prDragHandle.l, st2-prGrab2));
       cfg.move(prDragHandle,row2,st2);
+      prSelSet(cfg,[prDragHandle]);
     }
     drawPianoRoll();
   };
   prCv.onpointerup=prCv.onpointercancel=()=>{
     prCv.onpointermove=null; prCv.style.cursor='';
-    prDragHandle=null; prMode2=null;
+    if(shiftClick && !moved && hit){                             // shift-click without a drag: range-select from the anchor
+      const anchor=prSelList(cfg).find(h=>prKey(cfg,h)!==prKey(cfg,hit))||hit;
+      prSelRange(cfg,anchor,hit);
+    }
+    prDragHandle=null; prMode2=null; prDragOrig=null;
     renderItem(cfg.it);
     drawPianoRoll();
   };
@@ -5765,6 +5852,7 @@ prCv.ondblclick=e=>{
   const hit=cfg.hitAt(row,step);
   if(!hit) return;
   pushHistory();
+  prSel.delete(prKey(cfg,hit));
   cfg.del(hit);
   renderItem(cfg.it);
   drawPianoRoll();
@@ -5963,6 +6051,47 @@ const P = {
     tom3  :[0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0],
     tom4  :[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
   },
+  rock:{                                        // straight 8ths, kick on 1 / 2-and / 3, open hat lift into the repeat
+    kick  :[1,0,0,0,0,0,1,0,1,0,0,0,0,0,0,0],
+    snare :[0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0],
+    hihat :[1,0,1,0,1,0,1,0,1,0,1,0,1,0,0,0],
+    openhat:[0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0],
+    crash1:[1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+  },
+  pop:{                                         // pop: pushed kick on the 'and' of 2, snare 2 & 4, rim ghost, 8th hats
+    kick  :[1,0,0,0,0,0,0,1,1,0,0,0,0,0,1,0],
+    snare :[0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0],
+    rim   :[0,0,0,1,0,0,0,0,0,0,0,1,0,0,0,0],
+    hihat :[1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0],
+    openhat:[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+  },
+  house:{                                       // four-on-the-floor, off-beat open hats, clap (snare+rim) on 2 & 4
+    kick  :[1,0,0,0,1,0,0,0,1,0,0,0,1,0,0,0],
+    snare :[0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0],
+    rim   :[0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0],
+    hihat :[1,1,0,1,1,1,0,1,1,1,0,1,1,1,0,1],
+    openhat:[0,0,1,0,0,0,1,0,0,0,1,0,0,0,1,0],
+    ride  :[0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0],
+  },
+  jazz:{                                        // swing ride (ding, ding-da-ding), hat foot on 2 & 4, feathered kick, comping rim
+    ride  :[1,0,0,0,1,0,0,1,1,0,0,0,1,0,0,1],
+    hihat :[0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0],
+    kick  :[1,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0],
+    rim   :[0,0,0,0,0,0,0,1,0,0,1,0,0,0,0,0],
+    snare :[0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0],
+    bell  :[0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0],
+  },
+  dariacore:{                                   // chopped breakcore: kick stutters, snare rolls, 16th hats, crash + china accents
+    kick  :[1,0,0,1,0,0,1,0,0,1,0,0,1,0,1,0],
+    kickl :[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+    snare :[0,0,0,0,1,0,0,0,0,0,0,1,1,0,1,1],
+    rim   :[0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,1],
+    hihat :[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+    openhat:[0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0],
+    crash1:[1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    china8:[0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0],
+    tom3  :[0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0],
+  },
 };
 const SPLIT_FX={
   kickl  :[['eq',eqBands(4,-2,2)],  ['comp',{threshold:-20,ratio:5,makeup:4}]],
@@ -6023,6 +6152,8 @@ document.getElementById('split-drums').onclick=()=>{
 document.getElementById('preset-death').onclick =()=>writeDrums(P.death);
 document.getElementById('preset-black').onclick =()=>writeDrums(P.black);
 document.getElementById('preset-thrash').onclick=()=>writeDrums(P.thrash);
+['rock','pop','house','jazz','dariacore'].forEach(k=>{ document.getElementById('preset-'+k).onclick=()=>writeDrums(P[k]); });
+document.getElementById('item-start-d').onclick=()=>{ const it=selMidiItem(); if(it) seek(it.startStep*stepDur()); };
 document.getElementById('clear-drums').onclick=()=>writeDrums({});
 document.getElementById('rand-drums').onclick=()=>{
   const it=selDrumsItem(); if(!it) return;
@@ -6827,7 +6958,7 @@ const HK_ROWS=`    <div><span class="hk"><kbd>Space</kbd></span>play / stop</div
     <div><span class="hk"><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>C</kbd> / <kbd>V</kbd></span>copy / paste whole tracks</div>
     <div><span class="hk"><kbd>G</kbd></span>group / ungroup selection (selecting one selects all)</div>
     <div><span class="hk"><kbd>Y</kbd></span>merge selected clips or MIDI items</div>
-    <div><span class="hk"><kbd>Click</kbd></span>select clip / item · <kbd>Ctrl</kbd>/<kbd>Shift</kbd>+click adds to selection</div>
+    <div><span class="hk"><kbd>Click</kbd></span>select clip / item / note · <kbd>Ctrl</kbd>+click toggles · <kbd>Shift</kbd>+click selects the range</div>
     <div><span class="hk"><kbd>Drag</kbd></span>move selection (across tracks) · edges trim · <kbd>Ctrl</kbd>+drag right edge stretches</div>
     <div><span class="hk"><kbd>Ctrl</kbd>/<kbd>Shift</kbd>+click chip</span>multi-select tracks · drag chips to reorder together</div>
     <div><span class="hk"><kbd>Dbl-click</kbd></span>lane: new MIDI item · item / roll note: delete</div>
@@ -7074,7 +7205,7 @@ document.addEventListener('keydown',e=>{
   if(ctrl && e.code==='KeyY'){ e.preventDefault(); redo(); return; }
   if(!ctrl && !e.altKey && e.code==='KeyG'){ e.preventDefault(); groupSelection(); return; }
   if(!ctrl && !e.altKey && e.code==='KeyY'){ e.preventDefault(); mergeSelection(); return; }
-  if(e.code==='Escape'){ if(hkPop){ closeHkPop(); return; } selectObj(null); clearTrackSel(); closeAutoMenu(); return; }
+  if(e.code==='Escape'){ if(hkPop){ closeHkPop(); return; } if(prSel.size){ prSel.clear(); drawPianoRoll(); return; } selectObj(null); clearTrackSel(); closeAutoMenu(); return; }
   if(e.key==='?' && !ctrl && !e.altKey){ e.preventDefault(); toggleHkPop(); return; }
   if(e.code==='KeyS' && !e.ctrlKey && !e.metaKey && !e.altKey){
     e.preventDefault();
@@ -7090,6 +7221,7 @@ document.addEventListener('keydown',e=>{
   }
   if(e.code==='KeyR'){ e.preventDefault(); toggleRecord(); }
   if(e.code==='Delete'||e.code==='Backspace'){
+    if(prSel.size && selMidiItem() && !edRoll.hidden){ e.preventDefault(); prDeleteSelected(); return; }
     if(selSet.length){ e.preventDefault(); deleteSelection(); }
   }
 });

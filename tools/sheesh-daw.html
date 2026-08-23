@@ -64,7 +64,10 @@
   .tune-lab{font:11px ui-monospace,monospace;color:var(--ink-dim);padding:2px 8px;min-width:120px;white-space:nowrap}
   .stut-hold{min-width:56px;font-weight:700;letter-spacing:.08em}
   .stut-hold.on{background:#ffe066;color:#111;border-color:#ffe066}
-  .dn-row{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+  .eq-wrap.dn-wrap{flex-wrap:wrap}
+  .dn-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;flex-basis:100%}
+  .dn-row .tune-lab{width:190px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:none}
+  .dn-cv{width:180px;height:54px;background:#0a0c10;border:1px solid var(--line);border-radius:4px;flex:none}
   .dn-learn.on{background:#9fd8ff;color:#111;border-color:#9fd8ff}
   /* ---- hotkeys panel ---- */
   .hotkeys{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:5px 20px;padding:8px 18px 12px;font-size:11px;color:var(--ink-dim)}
@@ -2172,7 +2175,8 @@ function buildFxCore(fx,c,useWorklet){
         if(c===ctx) node.port.onmessage=e=>{ const d=e.data; if(!d||d.type!=='profile') return;
           fx.noiseProfile=d.data; fx.profSr=d.sampleRate; fx.profN=d.fftSize; fx.noiseSec=d.frames*512/d.sampleRate;
           node._dnProf=fx.noiseProfile;
-          if(fx.dnLab && fx.dnLab.isConnected) fx.dnLab.textContent=dnReadout(fx); };
+          if(fx.dnLab && fx.dnLab.isConnected) fx.dnLab.textContent=dnReadout(fx);
+          drawDnProfile(fx); };
       }
       return {in:inN, out, dry, wet, fxNode:node};
     }
@@ -2217,6 +2221,31 @@ function tuneReadout(d){
   const name=m=>{ const r=Math.round(m); return nn[((r%12)+12)%12]+(Math.floor(r/12)-1); };
   const c=Math.round((d.m-Math.round(d.m))*100);
   return name(d.m)+' ('+(c>=0?'+':'')+c+'\u00a2) \u2192 '+name(d.tgt);
+}
+function drawDnProfile(fx){
+  const cv=fx.dnCv; if(!cv) return;
+  const dpr=devicePixelRatio||1, W=cv.width=180*dpr, H=cv.height=54*dpr;
+  const g=cv.getContext('2d'); if(!g) return;
+  g.clearRect(0,0,W,H);
+  g.strokeStyle='rgba(139,147,163,.25)'; g.lineWidth=1;
+  [100,1000,10000].forEach(f=>{ const x=Math.log(f/20)/Math.log(1000)*W; g.beginPath(); g.moveTo(x,0); g.lineTo(x,H); g.stroke(); });
+  const p=fx.noiseProfile;
+  if(!p || !p.length){ g.fillStyle='rgba(139,147,163,.6)'; g.font=(10*dpr)+'px "IBM Plex Mono",monospace'; g.textAlign='center'; g.fillText('no profile',W/2,H/2+3); return; }
+  const sr=fx.profSr||44100, N=(fx.profN||2048);
+  const db=k=>10*Math.log10((p[k]||0)+1e-30);
+  let lo=Infinity,hi2=-Infinity;
+  for(let k=1;k<p.length;k++){ const d=db(k); if(d<lo)lo=d; if(d>hi2)hi2=d; }
+  lo=Math.max(lo,hi2-70); const span=Math.max(10,hi2-lo);
+  g.beginPath();
+  for(let x=0;x<W;x++){
+    const f=20*Math.pow(1000,x/W);                       // 20 Hz .. 20 kHz log axis
+    const k=Math.min(p.length-1,Math.max(0,Math.round(f*N/sr)));
+    const y=H-((db(k)-lo)/span)*(H-6*dpr)-3*dpr;
+    if(x===0) g.moveTo(x,y); else g.lineTo(x,y);
+  }
+  g.strokeStyle='#9fd8ff'; g.lineWidth=1.5*dpr; g.stroke();
+  g.lineTo(W,H); g.lineTo(0,H); g.closePath();
+  g.fillStyle='rgba(159,216,255,.15)'; g.fill();
 }
 function dnReadout(fx){
   if(fx._learn) return 'learning\u2026 '+((fx.noiseSec||0).toFixed(1))+' s \u2014 play the noise-only part';
@@ -4331,7 +4360,8 @@ function bindClipPointer(clip){
     else if(yy<12 && Math.abs(x-(r.width-foPx))<9) mode='fo';
     else if(r.width>44 && x<14) mode='l';
     else if(r.width>44 && x>r.width-14) mode=(e.ctrlKey||e.metaKey)?'rs':'r';
-    else mode='m';
+    else mode=e.altKey?'slip':'m';                        // Alt+drag: slide the audio inside the clip (slip edit)
+    if(mode==='slip') clip.el.style.cursor='ew-resize';
     if(mode==='m'){
       if(!wasSel && !add && !range) selectObj({kind:'audio',clip});      // grab an unselected clip: it (and its group) becomes the selection
       G=dragGroupBegin(clip);
@@ -4340,6 +4370,11 @@ function bindClipPointer(clip){
       const dx=(ev.clientX-px0)/PPS;
       if(Math.abs(ev.clientX-px0)>4) moved=true;
       if(mode==='m'){ if(dragGroupMove(G,clip,dx,laneTrackAt(ev.clientY))) moved=true; return; }
+      if(mode==='slip'){
+        const rate=clipRate(clip);
+        clip.offset=Math.max(0,Math.min(clip.buffer.duration-o.dur, o.offset-dx*rate));
+        renderClip(clip); return;
+      }
       if(mode==='fi'||mode==='fo'){
         const tl=clipTlDur(clip), rx=ev.clientX-r.left;
         if(mode==='fi') clip.fadeIn=Math.max(0,Math.min(tl,rx/PPS)); else clip.fadeOut=Math.max(0,Math.min(tl,(r.width-rx)/PPS));
@@ -4367,6 +4402,7 @@ function bindClipPointer(clip){
       renderClip(clip);
     };
     const up=()=>{
+      if(mode==='slip') clip.el.style.cursor='';
       document.removeEventListener('pointermove',move);
       document.removeEventListener('pointerup',up);
       document.removeEventListener('pointercancel',up);
@@ -5780,6 +5816,7 @@ function renderFxPanel(){
         sw2.appendChild(hb);
       }
       if(fx.type==='denoise'){
+        sw2.classList.add('dn-wrap');
         const row=document.createElement('div'); row.className='dn-row';
         const lb=document.createElement('button'); lb.className='ir-btn dn-learn'+(fx._learn?' on':''); lb.textContent=fx._learn?'\u23f9 Learning':'Learn';
         lb.title='Play the part of the clip where ONLY the background noise is audible, press Learn, let a second or two play, press again to stop \u2014 then the whole track gets filtered against that profile';
@@ -5792,9 +5829,13 @@ function renderFxPanel(){
         const cb=document.createElement('button'); cb.className='ir-btn'; cb.textContent='Clear';
         cb.title='Forget the learned noise profile (the unit passes audio through untouched)';
         cb.onclick=()=>{ pushHistory(); fx.noiseProfile=null; fx.noiseSec=0; fx._learn=false; applyFx(fx);
-          lb.classList.remove('on'); lb.textContent='Learn'; if(fx.dnLab) fx.dnLab.textContent=dnReadout(fx); };
+          lb.classList.remove('on'); lb.textContent='Learn'; if(fx.dnLab) fx.dnLab.textContent=dnReadout(fx); drawDnProfile(fx); };
         const tl=document.createElement('div'); tl.className='tune-lab'; tl.textContent=dnReadout(fx); fx.dnLab=tl;
-        row.append(lb,cb,tl);
+        const pcv=document.createElement('canvas'); pcv.className='dn-cv';
+        pcv.title='Learned noise profile (20 Hz \u2013 20 kHz, log frequency)';
+        fx.dnCv=pcv;
+        row.append(pcv,lb,cb,tl);
+        drawDnProfile(fx);
         sw2.appendChild(row);
       }
       if(fx.type==='duck'){
@@ -7865,6 +7906,7 @@ const HK_ROWS=`    <div><span class="hk"><kbd>Space</kbd></span>play / stop</div
     <div><span class="hk"><kbd>Y</kbd></span>merge selected clips or MIDI items</div>
     <div><span class="hk"><kbd>Click</kbd></span>select clip / item / note · <kbd>Ctrl</kbd>+click toggles · <kbd>Shift</kbd>+click selects the range</div>
     <div><span class="hk"><kbd>Drag</kbd></span>move selection (across tracks) · edges trim · <kbd>Ctrl</kbd>+drag right edge stretches</div>
+    <div><span class="hk"><kbd>Alt</kbd>+drag clip</span>slip edit \u2014 slide the audio inside the clip without moving it</div>
     <div><span class="hk"><kbd>Ctrl</kbd>/<kbd>Shift</kbd>+click chip</span>multi-select tracks · drag chips to reorder together</div>
     <div><span class="hk"><kbd>Dbl-click</kbd></span>lane: new MIDI item · item / roll note: delete</div>
     <div><span class="hk"><kbd>Shift</kbd>+drag note</span>velocity (piano roll / drum hits) · <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+drag drum hit: pitch</div>

@@ -67,7 +67,7 @@
   .eq-wrap.dn-wrap{flex-wrap:wrap}
   .dn-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;flex-basis:100%}
   .dn-row .tune-lab{width:190px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:none}
-  .dn-cv{width:180px;height:54px;background:#0a0c10;border:1px solid var(--line);border-radius:4px;flex:none}
+  .dn-cv{width:260px;height:54px;background:#0a0c10;border:1px solid var(--line);border-radius:4px;flex:none}
   .dn-learn.on{background:#9fd8ff;color:#111;border-color:#9fd8ff}
   /* ---- hotkeys panel ---- */
   .hotkeys{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:5px 20px;padding:8px 18px 12px;font-size:11px;color:var(--ink-dim)}
@@ -755,7 +755,7 @@
         <option value="tune">Auto-Tune</option>
         <option value="crush">Bitcrusher</option>
         <option value="stutter">Stutter</option>
-        <option value="denoise">Noise Reduction</option>
+        <option value="denoise">Noise Filter</option>
       </select>
       <button id="fx-add">Add FX</button>
       <button id="fx-paste" title="Paste the copied FX onto this track">Paste FX</button>
@@ -1045,7 +1045,7 @@ const FX_DEFS={
     decay:{min:0,max:1,step:0.01,val:0,fmt:v=>Math.round(v*100)+'%'},
     mix:{min:0,max:1,step:0.01,val:1,fmt:v=>Math.round(v*100)+'%'},
   }},
-  denoise:{name:'Noise Reduction', color:'#9fd8ff', params:{
+  denoise:{name:'Noise Filter', color:'#9fd8ff', params:{
     reduct:{min:0,max:40,step:0.5,val:12,fmt:v=>(+v).toFixed(1).replace(/\.0$/,'')+' dB',label:'reduction'},
     sens:{min:-12,max:12,step:0.5,val:6,fmt:v=>(v>0?'+':'')+(+v).toFixed(1).replace(/\.0$/,'')+' dB',label:'sensitivity'},
     fsmooth:{min:0,max:8,step:1,val:3,fmt:v=>'\u00b1'+Math.round(v),label:'freq smooth'},
@@ -2176,7 +2176,7 @@ function buildFxCore(fx,c,useWorklet){
           fx.noiseProfile=d.data; fx.profSr=d.sampleRate; fx.profN=d.fftSize; fx.noiseSec=d.frames*512/d.sampleRate;
           node._dnProf=fx.noiseProfile;
           if(fx.dnLab && fx.dnLab.isConnected) fx.dnLab.textContent=dnReadout(fx);
-          drawDnProfile(fx); };
+          drawDnChart(fx); };
       }
       return {in:inN, out, dry, wet, fxNode:node};
     }
@@ -2222,30 +2222,48 @@ function tuneReadout(d){
   const c=Math.round((d.m-Math.round(d.m))*100);
   return name(d.m)+' ('+(c>=0?'+':'')+c+'\u00a2) \u2192 '+name(d.tgt);
 }
-function drawDnProfile(fx){
+const DN_CAL=67;                 // profile power (Hann-windowed FFT units) → AnalyserNode dB axis
+function drawDnChart(fx){
   const cv=fx.dnCv; if(!cv) return;
-  const dpr=devicePixelRatio||1, W=cv.width=180*dpr, H=cv.height=54*dpr;
+  const dpr=devicePixelRatio||1, W=cv.width=260*dpr, H=cv.height=54*dpr;
   const g=cv.getContext('2d'); if(!g) return;
+  const sr=(typeof ctx!=='undefined'&&ctx)?ctx.sampleRate:44100;
+  const LO=-100, HI=-20;
+  const yOf=db=>H-3*dpr-(Math.min(HI,Math.max(LO,db))-LO)/(HI-LO)*(H-6*dpr);
+  const fOf=x=>20*Math.pow(1000,x/W);                    // 20 Hz .. 20 kHz log axis
   g.clearRect(0,0,W,H);
   g.strokeStyle='rgba(139,147,163,.25)'; g.lineWidth=1;
   [100,1000,10000].forEach(f=>{ const x=Math.log(f/20)/Math.log(1000)*W; g.beginPath(); g.moveTo(x,0); g.lineTo(x,H); g.stroke(); });
   const p=fx.noiseProfile;
-  if(!p || !p.length){ g.fillStyle='rgba(139,147,163,.6)'; g.font=(10*dpr)+'px "IBM Plex Mono",monospace'; g.textAlign='center'; g.fillText('no profile',W/2,H/2+3); return; }
-  const sr=fx.profSr||44100, N=(fx.profN||2048);
-  const db=k=>10*Math.log10((p[k]||0)+1e-30);
-  let lo=Infinity,hi2=-Infinity;
-  for(let k=1;k<p.length;k++){ const d=db(k); if(d<lo)lo=d; if(d>hi2)hi2=d; }
-  lo=Math.max(lo,hi2-70); const span=Math.max(10,hi2-lo);
-  g.beginPath();
-  for(let x=0;x<W;x++){
-    const f=20*Math.pow(1000,x/W);                       // 20 Hz .. 20 kHz log axis
-    const k=Math.min(p.length-1,Math.max(0,Math.round(f*N/sr)));
-    const y=H-((db(k)-lo)/span)*(H-6*dpr)-3*dpr;
-    if(x===0) g.moveTo(x,y); else g.lineTo(x,y);
+  if(p && p.length){                                     // learned noise floor: the zone that gets filtered
+    const N=fx.profN||2048, srP=fx.profSr||sr, sens=(fx.params&&fx.params.sens)??6;
+    g.beginPath();
+    for(let x=0;x<W;x+=dpr){
+      const k=Math.min(p.length-1,Math.max(0,Math.round(fOf(x)*N/srP)));
+      const y=yOf(10*Math.log10((p[k]||0)+1e-30)-DN_CAL+sens);
+      if(x===0) g.moveTo(x,y); else g.lineTo(x,y);
+    }
+    g.strokeStyle='#9fd8ff'; g.lineWidth=1.5*dpr; g.stroke();
+    g.lineTo(W,H); g.lineTo(0,H); g.closePath();
+    g.fillStyle='rgba(159,216,255,.18)'; g.fill();
   }
-  g.strokeStyle='#9fd8ff'; g.lineWidth=1.5*dpr; g.stroke();
-  g.lineTo(W,H); g.lineTo(0,H); g.closePath();
-  g.fillStyle='rgba(159,216,255,.15)'; g.fill();
+  const n=fx.nodes;                                      // live spectra from the unit's own analysers
+  if(n && n.preAn){
+    fx._dnFA=fx._dnFA||new Float32Array(n.preAn.frequencyBinCount);
+    const line=(an,color,lw)=>{
+      an.getFloatFrequencyData(fx._dnFA);
+      g.beginPath();
+      for(let x=0;x<W;x+=2*dpr){
+        const b=Math.min(fx._dnFA.length-1,Math.max(0,Math.round(fOf(x)/(sr/2)*fx._dnFA.length)));
+        const v=fx._dnFA[b], y=yOf(v>-1e9?v:LO);
+        if(x===0) g.moveTo(x,y); else g.lineTo(x,y);
+      }
+      g.strokeStyle=color; g.lineWidth=lw; g.stroke();
+    };
+    line(n.preAn,'rgba(139,147,163,.6)',1*dpr);          // input (ghost)
+    line(n.postAn,'rgba(255,179,71,.9)',1.3*dpr);        // filtered output
+  }
+  if(!p || !p.length){ g.fillStyle='rgba(139,147,163,.6)'; g.font=(10*dpr)+'px "IBM Plex Mono",monospace'; g.textAlign='center'; g.fillText('no profile',W/2,H/2+3); }
 }
 function dnReadout(fx){
   if(fx._learn) return 'learning\u2026 '+((fx.noiseSec||0).toFixed(1))+' s \u2014 play the noise-only part';
@@ -5829,13 +5847,13 @@ function renderFxPanel(){
         const cb=document.createElement('button'); cb.className='ir-btn'; cb.textContent='Clear';
         cb.title='Forget the learned noise profile (the unit passes audio through untouched)';
         cb.onclick=()=>{ pushHistory(); fx.noiseProfile=null; fx.noiseSec=0; fx._learn=false; applyFx(fx);
-          lb.classList.remove('on'); lb.textContent='Learn'; if(fx.dnLab) fx.dnLab.textContent=dnReadout(fx); drawDnProfile(fx); };
+          lb.classList.remove('on'); lb.textContent='Learn'; if(fx.dnLab) fx.dnLab.textContent=dnReadout(fx); drawDnChart(fx); };
         const tl=document.createElement('div'); tl.className='tune-lab'; tl.textContent=dnReadout(fx); fx.dnLab=tl;
         const pcv=document.createElement('canvas'); pcv.className='dn-cv';
-        pcv.title='Learned noise profile (20 Hz \u2013 20 kHz, log frequency)';
+        pcv.title='Frequency chart (20 Hz \u2013 20 kHz): grey = input, orange = filtered output, blue zone = learned noise floor that gets filtered';
         fx.dnCv=pcv;
         row.append(pcv,lb,cb,tl);
-        drawDnProfile(fx);
+        drawDnChart(fx);
         sw2.appendChild(row);
       }
       if(fx.type==='duck'){
@@ -7133,7 +7151,7 @@ function frame(now){
       if(fx.type==='eq'){ if(tick2 && fx.eqCv && fx.eqCv.isConnected) drawEq(fx); }
       else if(fx.type==='wt'){ if(fx.wtRoot && fx.wtRoot.isConnected){ drawWt(fx,'A'); drawWt(fx,'B'); drawWt(fx,'C'); drawWtFilter(fx,''); drawWtFilter(fx,'2'); drawWtMod(fx); if(tick2 && fx.synthCv) drawSynthScope(fx); } }
       else if(fx.type==='sampler'){ if(fx.smpCv && fx.smpCv.isConnected) drawSampler(fx); }
-      else if(tick2 && fx.scopeCv && fx.scopeCv.isConnected) drawScope(fx);
+      else if(tick2){ if(fx.scopeCv && fx.scopeCv.isConnected) drawScope(fx); if(fx.dnCv && fx.dnCv.isConnected) drawDnChart(fx); }
     });
   }
   if(recorder && recLiveEl && recAn){
@@ -7526,19 +7544,48 @@ function commitPending(){
   redoStack.length=0;
   pendingSnap=null;
 }
+/* undo/redo restore a full project snapshot — but the UI context (which track / items are selected, the open
+   editor, scroll position) is not part of the project, so capture it around the restore and put it back */
+function captureUiState(){
+  const u={tr:tracksAll.indexOf(selectedTrack), scroll:tlScroll?tlScroll.scrollLeft:0, sel:[]};
+  selSet.forEach(sl=>{
+    const o=selObjOf(sl); if(!o) return;
+    const ti=tracksAll.findIndex(t=>t.id===o.trackId); if(ti<0) return;
+    const t=tracksAll[ti];
+    if(sl.kind==='audio') u.sel.push({k:'audio', ti, i:t.clips.indexOf(o)});
+    else u.sel.push({k:'midi', ti, i:t.items.indexOf(o)});
+  });
+  return u;
+}
+function restoreUiState(u){
+  if(!u) return;
+  if(u.tr>=0 && tracksAll.length) selectTrack(tracksAll[Math.min(u.tr,tracksAll.length-1)]);
+  const list=[];
+  u.sel.forEach(sv=>{
+    const t=tracksAll[sv.ti]; if(!t) return;
+    if(sv.k==='audio'){ const c=t.clips[sv.i]; if(c) list.push({kind:'audio',clip:c}); }
+    else{ const it=t.items[sv.i]; if(it) list.push({kind:'midi',item:it}); }
+  });
+  if(list.length) setSelection(list);
+  if(tlScroll) tlScroll.scrollLeft=u.scroll;
+}
 function undo(){
   if(!undoStack.length){ flash('Nothing to undo.'); return; }
   if(state.playing) stopAll();
+  const ui=captureUiState();
   redoStack.push(snapState());
   const snap=undoStack.pop();
   applyProject(snap.proj,snap.buffers);
+  restoreUiState(ui);
 }
 function redo(){
   if(!redoStack.length){ flash('Nothing to redo.'); return; }
   if(state.playing) stopAll();
+  const ui=captureUiState();
   undoStack.push(snapState());
   const snap=redoStack.pop();
   applyProject(snap.proj,snap.buffers);
+  restoreUiState(ui);
 }
 
 /* ============================== project save / load ============================== */

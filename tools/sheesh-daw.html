@@ -525,7 +525,9 @@
   .fx-meters .mlab{font-size:8px;letter-spacing:.12em;color:var(--ink-dim);width:24px}
   .mbar{flex:1;height:6px;background:#0d0f12;border:1px solid var(--line);border-radius:3px;overflow:hidden}
   .mbar i{display:block;height:100%;width:0;background:linear-gradient(90deg,#5fd4c4 0%,#ffb347 70%,#ff5d5d 100%);transition:width .06s linear}
-  .fx-slot .kill{width:20px;height:20px;padding:0;font-size:9px;border-radius:4px;color:var(--ink-dim);margin-left:auto}
+  .fx-slot .kill{width:20px;height:20px;padding:0;font-size:9px;border-radius:4px;color:var(--ink-dim)}
+  .fx-slot .fx-btns{display:flex;gap:6px;align-items:center;margin-left:auto}
+  .fx-slot.inst .fx-btns{position:absolute;top:9px;right:24px;margin-left:0;z-index:6}
   .fx-empty{font-size:11px;color:var(--ink-dim);letter-spacing:.06em}
 
   .fx-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:14px}
@@ -5974,6 +5976,7 @@ function renderFxPanel(){
       fx.meterOut=col('outgain');
       slot.appendChild(io);
     }
+    const btns=document.createElement('div'); btns.className='fx-btns';
     if(!def.inst){
       const cpy=document.createElement('button'); cpy.className='kill copy'; cpy.textContent='⧉';
       cpy.title='Copy FX settings';
@@ -5984,7 +5987,7 @@ function renderFxPanel(){
                      noiseProfile:fx.noiseProfile||null, profSr:fx.profSr||null, profN:fx.profN||null, noiseSec:fx.noiseSec||0};
         flash('Copied '+def.name+' — Paste FX on any track.');
       };
-      slot.appendChild(cpy);
+      btns.appendChild(cpy);
     }
     const rst=document.createElement('button'); rst.className='kill reset'; rst.textContent='↺';
     rst.title='Reset '+def.name+' to its defaults (loaded IR / sample / noise profile are kept)';
@@ -5997,11 +6000,12 @@ function renderFxPanel(){
       renderFxPanel();
       flash(def.name+' reset to defaults.');
     };
-    slot.appendChild(rst);
+    btns.appendChild(rst);
     const kill=document.createElement('button'); kill.className='kill'; kill.textContent='✕';
     kill.setAttribute('aria-label','Remove '+def.name);
     kill.onclick=()=>{ pushHistory(); removeFxFromTrack(selectedTrack,fx); };
-    slot.appendChild(kill);
+    btns.appendChild(kill);
+    slot.appendChild(btns);
     fxList.appendChild(slot);
   });
 }

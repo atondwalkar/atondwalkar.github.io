@@ -5986,6 +5986,18 @@ function renderFxPanel(){
       };
       slot.appendChild(cpy);
     }
+    const rst=document.createElement('button'); rst.className='kill reset'; rst.textContent='↺';
+    rst.title='Reset '+def.name+' to its defaults (loaded IR / sample / noise profile are kept)';
+    rst.setAttribute('aria-label','Reset '+def.name);
+    rst.onclick=()=>{
+      pushHistory();
+      fx.params=makeFx(fx.type).params;
+      if(fx.type==='denoise') fx._learn=false;
+      rebuildChain(selectedTrack);
+      renderFxPanel();
+      flash(def.name+' reset to defaults.');
+    };
+    slot.appendChild(rst);
     const kill=document.createElement('button'); kill.className='kill'; kill.textContent='✕';
     kill.setAttribute('aria-label','Remove '+def.name);
     kill.onclick=()=>{ pushHistory(); removeFxFromTrack(selectedTrack,fx); };

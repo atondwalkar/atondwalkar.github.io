@@ -34,15 +34,29 @@
     background:linear-gradient(180deg,var(--panel-2),var(--panel));
     border:1px solid var(--line);
     border-radius:var(--radius);
-    padding:12px 14px;
-    display:flex;flex-wrap:wrap;gap:12px;align-items:center;
+    padding:7px 12px;
+    display:flex;flex-wrap:wrap;gap:6px;align-items:center;
   }
   .brand{display:flex;flex-direction:column;line-height:1.05;margin-right:4px}
-  .brand b{font-size:20px;letter-spacing:.14em;font-weight:700}
+  .brand b{font-size:17px;letter-spacing:.14em;font-weight:700}
   .brand span{font-size:9px;letter-spacing:.3em;color:var(--ink-dim);text-transform:uppercase}
   .brand b{display:flex;align-items:center}
   .brand .ver{font-size:9px;letter-spacing:.16em;color:var(--amber);margin-left:8px;font-weight:700;text-transform:none;
-    border:1px solid rgba(255,179,71,.5);border-radius:3px;padding:1px 4px;line-height:1.2}
+    border:1px solid rgba(255,179,71,.5);border-radius:3px;padding:0 4px;line-height:1.3}
+  .brand .pname{margin-left:12px;padding-left:12px;border-left:1px solid var(--line);font-size:11px;letter-spacing:.04em;font-weight:500;
+    color:var(--ink-dim);cursor:text;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-transform:none}
+  .brand .pname:hover{color:var(--ink)}
+  .brand .pname input{font:inherit;font-size:11px;width:180px;background:#161a22;color:var(--ink);border:1px solid var(--amber);border-radius:4px;padding:1px 5px;outline:none}
+  .hk-btn{color:var(--ink-dim)}
+  .hk-btn[aria-expanded="true"]{background:var(--amber);border-color:var(--amber);color:#221a08}
+  .hk-pop{position:fixed;z-index:70;top:62px;left:50%;transform:translateX(-50%);width:min(780px,94vw);max-height:80vh;overflow:auto;
+    background:#1e2229;border:1px solid var(--line);border-radius:8px;padding:8px 12px 10px;box-shadow:0 10px 30px rgba(0,0,0,.65)}
+  .hk-pop .hk-head{display:flex;align-items:center;justify-content:space-between;font-size:11px;letter-spacing:.28em;text-transform:uppercase;color:var(--ink-dim);margin-bottom:2px}
+  .hk-pop .hk-head .kill{width:20px;height:20px;padding:0;font-size:10px;border-radius:4px;color:var(--ink-dim)}
+  .hk-pop .hotkeys{grid-template-columns:1fr 1fr;gap:6px 24px;padding:6px 2px 2px}
+  .hk-pop .hotkeys div{align-items:flex-start;line-height:1.5}
+  .hk-pop .hotkeys .hk{flex:0 0 150px;display:flex;flex-wrap:wrap;gap:3px;align-items:center}
+  @media (max-width:700px){ .hk-pop .hotkeys{grid-template-columns:1fr} }
   .brand .gh{display:inline-flex;margin-left:8px;color:var(--ink-dim);transition:color .15s}
   .brand .gh:hover{color:var(--ink)}
   .brand .gh svg{width:17px;height:17px;fill:currentColor;display:block}
@@ -70,24 +84,24 @@
     border:1px solid var(--line);border-radius:6px;font-size:12px;padding:6px 8px;
   }
 
-  .play-btn{width:54px;height:44px;font-size:16px;background:#2a3038}
+  .play-btn{width:44px;height:34px;font-size:15px;background:#2a3038}
   .play-btn.on{background:var(--amber);border-color:var(--amber);color:#221a08}
-  .rec-btn{width:54px;height:44px;font-size:18px;color:var(--red)}
+  .rec-btn{width:44px;height:34px;font-size:16px;color:var(--red)}
   .rec-btn.on{background:var(--red);border-color:var(--red);color:#fff;animation:pulse 1s infinite}
-  .loop-btn{height:44px;font-size:10px;letter-spacing:.16em}
-  #metro{display:inline-flex;align-items:center;justify-content:center;padding:0 10px}
+  .loop-btn{height:34px;font-size:9px;letter-spacing:.16em;padding:0 9px}
+  #metro{display:inline-flex;align-items:center;justify-content:center;padding:0 8px}
   #metro svg{display:block}
   .loop-btn.on{background:var(--amber);border-color:var(--amber);color:#221a08}
   @keyframes pulse{50%{box-shadow:0 0 14px rgba(255,93,93,.8)}}
 
   .lcd{
     background:#0d0f12;border:1px solid var(--line);border-radius:6px;
-    padding:6px 10px;display:flex;flex-direction:column;gap:1px;min-width:74px;
+    padding:3px 7px;display:flex;flex-direction:column;gap:0;min-width:56px;
   }
-  .lcd label{font-size:8px;letter-spacing:.25em;color:var(--ink-dim);text-transform:uppercase}
-  .lcd .val{font-family:'IBM Plex Mono',monospace;font-size:17px;font-weight:600;color:var(--amber);text-shadow:0 0 8px rgba(255,179,71,.45)}
-  .stepper{display:flex;align-items:center;gap:6px}
-  .stepper button{width:30px;height:30px;padding:0;font-size:14px}
+  .lcd label{font-size:7px;letter-spacing:.25em;color:var(--ink-dim);text-transform:uppercase}
+  .lcd .val{font-family:'IBM Plex Mono',monospace;font-size:14px;font-weight:600;color:var(--amber);text-shadow:0 0 8px rgba(255,179,71,.45)}
+  .stepper{display:flex;align-items:center;gap:4px}
+  .stepper button{width:24px;height:24px;padding:0;font-size:12px}
 
   #scope{display:block;background:#0d0f12;border:1px solid var(--line);border-radius:4px;width:100%;height:52px}
   .mixer-row{display:flex;gap:10px;align-items:stretch}
@@ -572,10 +586,11 @@
 
   footer{margin-top:12px;text-align:center;font-size:9px;letter-spacing:.24em;text-transform:uppercase;color:#5a6070}
 
-  header .file-tools{margin-left:auto;display:flex;gap:8px;position:relative}
+  header .file-tools{margin-left:auto;display:flex;gap:6px;position:relative;align-items:center}
+  header .file-tools button{padding:6px 10px;font-size:11px}
   .io-lcd select{
-    max-width:170px;background:#161a22;color:var(--ink);border:1px solid var(--line);
-    border-radius:4px;font-size:12px;padding:3px 4px;
+    max-width:128px;background:#161a22;color:var(--ink);border:1px solid var(--line);
+    border-radius:4px;font-size:11px;padding:2px 3px;
   }
   @media (max-width:640px){ .brand b{font-size:16px} }
   @media (prefers-reduced-motion:reduce){ *{transition:none !important;animation:none !important} }
@@ -584,7 +599,7 @@
 <body>
 
 <header>
-  <div class="brand"><b>SHEESH&nbsp;DAW<span class="ver">V1.0</span><a class="gh" href="https://github.com/atondwalkar/sheesh-daw" target="_blank" rel="noopener" title="SHEESH DAW on GitHub" aria-label="SHEESH DAW on GitHub"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg></a></b></div>
+  <div class="brand"><b>SHEESH&nbsp;DAW<span class="ver">V1.0</span><a class="gh" href="https://github.com/atondwalkar/sheesh-daw" target="_blank" rel="noopener" title="SHEESH DAW on GitHub" aria-label="SHEESH DAW on GitHub"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg></a><span class="pname" id="proj-name" role="button" tabindex="0" title="Project: Untitled — click to rename">Untitled</span></b></div>
   <button id="play" class="play-btn" aria-label="Play or stop">&#9654;</button>
   <button id="rec" class="rec-btn" aria-label="Record from microphone">&#9679;</button>
   <button id="loop" class="loop-btn" aria-pressed="false">LOOP</button>
@@ -628,36 +643,13 @@
   </div>
   <div class="tools file-tools">
     <span id="file-msg" hidden></span>
+    <button id="hk-btn" class="hk-btn" title="Show all keyboard shortcuts (?)" aria-expanded="false">Hotkeys</button>
     <button id="new-proj" title="Save the current project, then start an empty one">New</button>
     <button id="save-proj">Save</button>
     <button id="open-proj">Open</button>
-    <button id="export-wav">Export WAV</button>
+    <button id="export-wav" title="Export a bar range as WAV">Export</button>
   </div>
 </header>
-
-<!-- ============ HOTKEYS ============ -->
-<section class="panel hotkeys-panel">
-  <div class="panel-head"><h2><button class="pfold" data-k="keys" data-def="1" aria-label="Collapse hotkeys">▾</button>Hotkeys</h2></div>
-  <div class="hotkeys">
-    <div><span class="hk"><kbd>Space</kbd></span>play / stop</div>
-    <div><span class="hk"><kbd>R</kbd></span>record (2-bar count-in)</div>
-    <div><span class="hk"><kbd>S</kbd></span>split clip at playhead</div>
-    <div><span class="hk"><kbd>Del</kbd></span>delete selected clips / items</div>
-    <div><span class="hk"><kbd>Esc</kbd></span>clear selection</div>
-    <div><span class="hk"><kbd>Ctrl</kbd>+<kbd>Z</kbd> / <kbd>Ctrl</kbd>+<kbd>Y</kbd></span>undo / redo</div>
-    <div><span class="hk"><kbd>Ctrl</kbd>+<kbd>C</kbd> <kbd>X</kbd> <kbd>V</kbd></span>copy / cut / paste selection at playhead</div>
-    <div><span class="hk"><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>C</kbd> / <kbd>V</kbd></span>copy / paste whole tracks</div>
-    <div><span class="hk"><kbd>G</kbd></span>group / ungroup selection (selecting one selects all)</div>
-    <div><span class="hk"><kbd>Y</kbd></span>merge selected clips or MIDI items</div>
-    <div><span class="hk"><kbd>Click</kbd></span>select clip / item · <kbd>Ctrl</kbd>/<kbd>Shift</kbd>+click adds to selection</div>
-    <div><span class="hk"><kbd>Drag</kbd></span>move selection (across tracks) · edges trim · <kbd>Ctrl</kbd>+drag right edge stretches</div>
-    <div><span class="hk"><kbd>Ctrl</kbd>/<kbd>Shift</kbd>+click chip</span>multi-select tracks · drag chips to reorder together</div>
-    <div><span class="hk"><kbd>Dbl-click</kbd></span>lane: new MIDI item · item / roll note: delete</div>
-    <div><span class="hk"><kbd>Shift</kbd>+drag note</span>velocity (piano roll)</div>
-    <div><span class="hk"><kbd>Drag ruler</kbd></span>loop region · dbl-click ruler clears</div>
-    <div><span class="hk"><kbd>Ctrl</kbd>+wheel</span>zoom timeline · click a lane moves the playhead</div>
-  </div>
-</section>
 
 <!-- ============ TRACKS / TIMELINE ============ -->
 <section class="panel">
@@ -837,6 +829,7 @@ state.tracks.master={vol:0.85, mute:false, solo:false, pan:0, fxBypass:false, ga
 
 let tracksAll=[];          // {id,name,armed,clips:[],items:[],fx:[],laneEl,armBtn,chipEl,instEl}
 let trackCounter=0, clipCounter=0, itemCounter=0, fxCounter=0;
+let projectName='Untitled';
 let selected=null, itemClipboard=null;         // primary selection: {kind:'audio',clip} | {kind:'midi',item}
 let selSet=[];                                  // every selected clip/item (primary is the last clicked)
 let selTracks=new Set(), trackClipboard=null, lastCopied=null, grpCounter=0;
@@ -6028,10 +6021,33 @@ function serFx(f,ref){
   if(f.type==='cab' && f.irBuffer){ o.ir=ref(f.irBuffer); o.irName=f.irName||'IR'; }
   return o;
 }
+/* ---- project name: shown in the header, click to rename, used as the Save filename ---- */
+const projNameEl=document.getElementById('proj-name');
+function setProjectName(n){
+  projectName=String(n||'Untitled').replace(/\.(sheesh|zip|json)$/i,'').trim()||'Untitled';
+  projNameEl.textContent=projectName;
+  projNameEl.title='Project: '+projectName+' — click to rename';
+  document.title=projectName+' — SHEESH DAW';
+}
+function safeProjectFile(){ return projectName.replace(/[\\/:*?"<>|]+/g,'-').trim()||'project'; }
+function renameProject(){
+  if(projNameEl.querySelector('input')) return;
+  const inp=document.createElement('input'); inp.type='text'; inp.value=projectName; inp.maxLength=60; inp.setAttribute('aria-label','Project name');
+  projNameEl.textContent=''; projNameEl.appendChild(inp); inp.focus(); inp.select();
+  let doneR=false;
+  const commit=()=>{ if(doneR) return; doneR=true; setProjectName(inp.value); };
+  inp.onblur=commit;
+  inp.onkeydown=e=>{ e.stopPropagation(); if(e.key==='Enter') inp.blur(); if(e.key==='Escape'){ inp.value=projectName; inp.blur(); } };
+  inp.onpointerdown=e=>e.stopPropagation();
+}
+setProjectName(projectName);
+projNameEl.addEventListener('click',e=>{ e.stopPropagation(); renameProject(); });
+projNameEl.addEventListener('keydown',e=>{ if(e.target===projNameEl && (e.key==='Enter'||e.key===' ')){ e.preventDefault(); renameProject(); } });
 function snapState(){
   const bufs=[], idx=new Map();
   const ref=b=>{ if(!idx.has(b)){ idx.set(b,bufs.length); bufs.push(b); } return idx.get(b); };
   const proj={
+    name:projectName,
     bpm:state.bpm, swing:state.swing, loopOn, pps:PPS,
     master:{mvol:+mvol.value, fxBypass:!!state.tracks.master.fxBypass, fx:MASTER_TRACK.fx.map(f=>serFx(f,ref)), auto:serAutos(MASTER_TRACK), amode:MASTER_TRACK.autoMode||'read'},
     routes:{},
@@ -6150,12 +6166,36 @@ function abToB64(ab){
   return btoa(bin);
 }
 async function saveProject(){
-  fileSay('Saving\u2026');
+  fileSay('Saving…');
   try{
+    // 1. where to? (picker in Chrome/Edge, named download elsewhere) — the chosen name becomes the project name
+    let handle=null, dlName=null;
+    if(window.showSaveFilePicker){
+      try{
+        handle=await showSaveFilePicker({
+          suggestedName:safeProjectFile()+'.sheesh',
+          types:[{description:'SHEESH DAW project',accept:{'application/octet-stream':['.sheesh']}}],
+        });
+      }catch(e){
+        fileSay('');
+        if(e && e.name==='AbortError') return false;     // user cancelled the picker
+        fileFlash('Save failed: '+(e&&e.message||e));
+        return false;
+      }
+      setProjectName(handle.name);
+    }else{
+      let name=prompt('File name:',safeProjectFile()+'.sheesh');
+      if(name===null){ fileSay(''); return false; }
+      name=name.trim()||'project.sheesh';
+      if(!/\.sheesh$/i.test(name)) name+='.sheesh';
+      dlName=name; setProjectName(name);
+    }
+    // 2. build the archive
+    fileSay('Saving…');
     const bufs=[], bufIdx=new Map();
     const bufRef=b=>{ if(!bufIdx.has(b)){ bufIdx.set(b,bufs.length); bufs.push(b); } return bufIdx.get(b); };
     const proj={
-      app:'signal16', v:1,
+      app:'signal16', v:1, name:projectName,
       bpm:state.bpm, swing:state.swing, loopOn, pps:PPS,
       master:{mvol:+mvol.value, fxBypass:!!state.tracks.master.fxBypass, fx:MASTER_TRACK.fx.map(f=>serFx(f,bufRef)), auto:serAutos(MASTER_TRACK), amode:MASTER_TRACK.autoMode||'read'},
       routes:{},
@@ -6185,31 +6225,17 @@ async function saveProject(){
     const entries=[{name:'manifest.json', data:new TextEncoder().encode(JSON.stringify(proj)).buffer}];
     for(let i=0;i<bufs.length;i++) entries.push({name:'audio/'+i+'.wav', data:await encodeWavF32(bufs[i]).arrayBuffer()});
     const blob=buildZip(entries);
-    if(window.showSaveFilePicker){                 // pick folder + name (Chrome/Edge)
-      try{
-        const h=await showSaveFilePicker({
-          suggestedName:'project.sheesh',
-          types:[{description:'SHEESH DAW project',accept:{'application/octet-stream':['.sheesh']}}],
-        });
-        const w=await h.createWritable();
-        await w.write(blob);
-        await w.close();
-        fileSay(''); fileFlash('Saved '+h.name);
-        return true;
-      }catch(e){
-        fileSay('');
-        if(e && e.name==='AbortError') return false;     // user cancelled the picker
-        fileFlash('Save failed: '+(e&&e.message||e));
-        return false;
-      }
+    // 3. write
+    if(handle){
+      const w=await handle.createWritable();
+      await w.write(blob);
+      await w.close();
+      fileSay(''); fileFlash('Saved '+handle.name);
+      return true;
     }
-    let name=prompt('File name:','project.sheesh');   // fallback: named download
-    if(name===null){ fileSay(''); return false; }
-    name=name.trim()||'project.sheesh';
-    if(!/\.sheesh$/i.test(name)) name+='.sheesh';
     const url=URL.createObjectURL(blob);
     const a=document.createElement('a');
-    a.href=url; a.download=name;
+    a.href=url; a.download=dlName;
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(()=>URL.revokeObjectURL(url),4000);
     fileSay('');
@@ -6227,6 +6253,7 @@ async function newProject(){
   applyProject(JSON.parse(JSON.stringify(DEFAULT_PROJECT)),[]);
   undoStack.length=0; redoStack.length=0; pendingSnap=null;
   selectObj(null); clearTrackSel();
+  setProjectName('Untitled');
   seek(0);
   fileFlash('New project.');
 }
@@ -6259,6 +6286,7 @@ async function loadProject(f){
     fileSay('Loading project\u2026 building tracks');
     await new Promise(r=>setTimeout(r,0));
     applyProject(proj,buffers);
+    setProjectName(proj.name||f.name);
     seek(0);
     fileSay(''); fileFlash('Project loaded'+(total?' ('+total+' audio file'+(total>1?'s':'')+')':'')+'.');
   }catch(e){ console.error('SHEESH DAW: project load failed',e); fileSay(''); fileFlash('Load failed: '+(e&&e.message||e)); }
@@ -6268,6 +6296,7 @@ function applyProject(proj,buffers){
   try{
     [...tracksAll].forEach(removeTrack);
     [...(MASTER_TRACK.autos||[])].forEach(a=>removeAutoLane(MASTER_TRACK,a));
+    if(proj.name!==undefined) setProjectName(proj.name);
     setBpm(proj.bpm||180);
     setSwing(proj.swing||0);
     loopOn=!!proj.loopOn;
@@ -6403,6 +6432,43 @@ function applyProject(proj,buffers){
     queueGhosts();
   }finally{ histLock=false; }
 }
+/* ---- hotkeys popup (⌨ button / ? key) ---- */
+const HK_ROWS=`    <div><span class="hk"><kbd>Space</kbd></span>play / stop</div>
+    <div><span class="hk"><kbd>R</kbd></span>record (2-bar count-in)</div>
+    <div><span class="hk"><kbd>S</kbd></span>split clip at playhead</div>
+    <div><span class="hk"><kbd>Del</kbd></span>delete selected clips / items</div>
+    <div><span class="hk"><kbd>Esc</kbd></span>clear selection</div>
+    <div><span class="hk"><kbd>Ctrl</kbd>+<kbd>Z</kbd> / <kbd>Ctrl</kbd>+<kbd>Y</kbd></span>undo / redo</div>
+    <div><span class="hk"><kbd>Ctrl</kbd>+<kbd>C</kbd> <kbd>X</kbd> <kbd>V</kbd></span>copy / cut / paste selection at playhead</div>
+    <div><span class="hk"><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>C</kbd> / <kbd>V</kbd></span>copy / paste whole tracks</div>
+    <div><span class="hk"><kbd>G</kbd></span>group / ungroup selection (selecting one selects all)</div>
+    <div><span class="hk"><kbd>Y</kbd></span>merge selected clips or MIDI items</div>
+    <div><span class="hk"><kbd>Click</kbd></span>select clip / item · <kbd>Ctrl</kbd>/<kbd>Shift</kbd>+click adds to selection</div>
+    <div><span class="hk"><kbd>Drag</kbd></span>move selection (across tracks) · edges trim · <kbd>Ctrl</kbd>+drag right edge stretches</div>
+    <div><span class="hk"><kbd>Ctrl</kbd>/<kbd>Shift</kbd>+click chip</span>multi-select tracks · drag chips to reorder together</div>
+    <div><span class="hk"><kbd>Dbl-click</kbd></span>lane: new MIDI item · item / roll note: delete</div>
+    <div><span class="hk"><kbd>Shift</kbd>+drag note</span>velocity (piano roll)</div>
+    <div><span class="hk"><kbd>Drag ruler</kbd></span>loop region · dbl-click ruler clears</div>
+    <div><span class="hk"><kbd>Ctrl</kbd>+wheel</span>zoom timeline · click a lane moves the playhead</div>
+  `;
+let hkPop=null;
+function closeHkPop(){ if(!hkPop) return; hkPop.remove(); hkPop=null; document.removeEventListener('pointerdown',hkPopOutside,true); const b=document.getElementById('hk-btn'); if(b) b.setAttribute('aria-expanded','false'); }
+function hkPopOutside(e){ if(hkPop && !hkPop.contains(e.target) && !e.target.closest('#hk-btn')) closeHkPop(); }
+function toggleHkPop(){
+  if(hkPop){ closeHkPop(); return; }
+  closeAutoMenu();
+  const pop=document.createElement('div'); pop.className='hk-pop'; pop.setAttribute('role','dialog'); pop.setAttribute('aria-label','Hotkeys');
+  const head=document.createElement('div'); head.className='hk-head';
+  const cap=document.createElement('span'); cap.textContent='Hotkeys';
+  const x=document.createElement('button'); x.className='kill'; x.textContent='✕'; x.setAttribute('aria-label','Close hotkeys'); x.onclick=closeHkPop;
+  head.append(cap,x);
+  const grid=document.createElement('div'); grid.className='hotkeys'; grid.innerHTML=HK_ROWS;
+  pop.append(head,grid);
+  document.body.appendChild(pop); hkPop=pop;
+  const b=document.getElementById('hk-btn'); if(b) b.setAttribute('aria-expanded','true');
+  setTimeout(()=>document.addEventListener('pointerdown',hkPopOutside,true),0);
+}
+document.getElementById('hk-btn').onclick=e=>{ e.stopPropagation(); toggleHkPop(); };
 document.getElementById('save-proj').onclick=()=>{ saveProject(); };
 document.getElementById('new-proj').onclick=()=>{ newProject(); };
 const projIn=document.getElementById('proj-in');
@@ -6624,7 +6690,8 @@ document.addEventListener('keydown',e=>{
   if(ctrl && e.code==='KeyY'){ e.preventDefault(); redo(); return; }
   if(!ctrl && !e.altKey && e.code==='KeyG'){ e.preventDefault(); groupSelection(); return; }
   if(!ctrl && !e.altKey && e.code==='KeyY'){ e.preventDefault(); mergeSelection(); return; }
-  if(e.code==='Escape'){ selectObj(null); clearTrackSel(); closeAutoMenu(); return; }
+  if(e.code==='Escape'){ if(hkPop){ closeHkPop(); return; } selectObj(null); clearTrackSel(); closeAutoMenu(); return; }
+  if(e.key==='?' && !ctrl && !e.altKey){ e.preventDefault(); toggleHkPop(); return; }
   if(e.code==='KeyS' && !e.ctrlKey && !e.metaKey && !e.altKey){
     e.preventDefault();
     if(!(selected && selected.kind==='audio')){

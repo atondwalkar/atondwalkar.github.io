@@ -694,7 +694,7 @@
       </div>
     </div>
   </div>
-  <input type="file" id="file-in" accept="audio/*" hidden>
+  <input type="file" id="file-in" accept="audio/*,video/*,.mp4,.m4v,.mov,.mkv,.webm,.avi" hidden>
   <input type="file" id="proj-in" accept=".sheesh,.zip,.json,application/json,application/zip" hidden>
 </section>
 
@@ -4892,16 +4892,63 @@ lanesEl.addEventListener('pointerdown',e=>{
 
 const fileIn=document.getElementById('file-in');
 document.getElementById('import-audio').onclick=()=>fileIn.click();
+/* video files: if the audio decoder can't read the container directly, play the file through a
+   silent capture tap in real time and keep the PCM (works for anything the <video> element can play) */
+function extractVideoAudio(file){
+  return new Promise((resolve,reject)=>{
+    initAudio();
+    const url=URL.createObjectURL(file);
+    const v=document.createElement('video');
+    v.preload='auto'; v.style.position='fixed'; v.style.left='-9999px'; v.style.width='1px'; v.setAttribute('data-extract','1');
+    let src=null,tap=null,sink=null,tick=null,done=false;
+    const chunks=[]; let len=0;
+    const cleanup=()=>{ try{ v.pause(); }catch(_){} [src,tap,sink].forEach(n=>{ try{ n&&n.disconnect(); }catch(_){} });
+      clearInterval(tick); v.remove(); URL.revokeObjectURL(url); fileSay(''); };
+    const fail=e=>{ if(done) return; done=true; cleanup(); reject(e instanceof Error?e:new Error('unplayable video')); };
+    const finish=()=>{ if(done) return; done=true;
+      if(!len){ cleanup(); reject(new Error('no audio track')); return; }
+      const buf=ctx.createBuffer(2,len,ctx.sampleRate);
+      let o=0; chunks.forEach(c2=>{ buf.getChannelData(0).set(c2[0],o); buf.getChannelData(1).set(c2[1],o); o+=c2[0].length; });
+      cleanup(); resolve(buf);
+    };
+    v.onerror=()=>fail(new Error('unplayable video'));
+    v.onended=finish;
+    v.onloadedmetadata=()=>{
+      try{
+        src=ctx.createMediaElementSource(v);
+        tap=ctx.createScriptProcessor(4096,2,1);
+        sink=ctx.createGain(); sink.gain.value=0;
+        tap.onaudioprocess=e2=>{ if(done) return;
+          chunks.push([e2.inputBuffer.getChannelData(0).slice(0), e2.inputBuffer.getChannelData(1).slice(0)]);
+          len+=e2.inputBuffer.length;
+        };
+        src.connect(tap); tap.connect(sink); sink.connect(ctx.destination);
+        tick=setInterval(()=>{ if(v.duration>0) fileSay('Extracting audio from video … '+Math.min(100,Math.round(v.currentTime/v.duration*100))+'%'); },250);
+        v.play().catch(fail);
+      }catch(e){ fail(e); }
+    };
+    document.body.appendChild(v);
+    v.src=url;
+  });
+}
 fileIn.onchange=async ()=>{
   const f=fileIn.files[0]; fileIn.value='';
   if(!f) return;
   initAudio();
+  const isVideo=/^video\//.test(f.type)||/\.(mp4|m4v|mov|mkv|webm|avi)$/i.test(f.name);
+  let buf=null;
   try{
-    const buf=await ctx.decodeAudioData(await f.arrayBuffer());
-    pushHistory();
-    const tr=tracksAll.find(t=>t.armed)||selectedTrack||tracksAll[0]||addTrack();
-    addClip(tr, buf, startPos, f.name.replace(/\.[^.]+$/,'').slice(0,18));
-  }catch(e){ flash('Could not decode that audio file.'); }
+    buf=await ctx.decodeAudioData(await f.arrayBuffer());
+  }catch(e){
+    if(isVideo){
+      flash('Extracting the audio track — the video plays through silently, hold on…');
+      try{ buf=await extractVideoAudio(f); flash('Audio extracted.'); }
+      catch(e2){ flash('Could not get audio from that video ('+(e2&&e2.message||e2)+').'); return; }
+    }else{ flash('Could not decode that audio file.'); return; }
+  }
+  pushHistory();
+  const tr=tracksAll.find(t=>t.armed)||selectedTrack||tracksAll[0]||addTrack();
+  addClip(tr, buf, startPos, f.name.replace(/\.[^.]+$/,'').slice(0,18));
 };
 document.getElementById('add-track').onclick=()=>{ pushHistory(); addTrack(); };
 document.getElementById('to-start').onclick=()=>{ seek(0); tlScroll.scrollLeft=0; };

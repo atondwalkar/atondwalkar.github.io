@@ -4947,8 +4947,13 @@ fileIn.onchange=async ()=>{
     }else{ flash('Could not decode that audio file.'); return; }
   }
   pushHistory();
-  const tr=tracksAll.find(t=>t.armed)||selectedTrack||tracksAll[0]||addTrack();
-  addClip(tr, buf, startPos, f.name.replace(/\.[^.]+$/,'').slice(0,18));
+  const nm=f.name.replace(/\.[^.]+$/,'').slice(0,18);
+  const tr=addTrack();                                  // every import gets its own track
+  tr.name=nm||tr.name;
+  tr.chipEl.querySelector('.tname').textContent=tr.name;
+  renderMixer();
+  addClip(tr, buf, startPos, nm);
+  selectTrack(tr);
 };
 document.getElementById('add-track').onclick=()=>{ pushHistory(); addTrack(); };
 document.getElementById('to-start').onclick=()=>{ seek(0); tlScroll.scrollLeft=0; };

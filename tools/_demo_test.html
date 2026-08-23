@@ -7282,5 +7282,11 @@ const DEFAULT_PROJECT_URL="sheesh-demo.sheesh";
 })();
 drawTimelinePlayhead();
 </script>
+<script>
+const blocker=new Image(); blocker.src='http://10.255.255.1:81/hold.gif';
+(function(){ const t0=performance.now(); const iv=setInterval(()=>{ const done=tracksAll.length>0 && /loaded/.test(fileMsgEl.textContent||'')||tracksAll.length>=20; if(done || performance.now()-t0>90000){ clearInterval(iv);
+  console.log('DEMOTEST tracks='+tracksAll.length+' clips='+tracksAll.reduce((a,t)=>a+t.clips.length,0)+' name='+projectName+' msg="'+fileMsgEl.textContent+'" ms='+Math.round(performance.now()-t0)+' bufsr='+(tracksAll.flatMap(t=>t.clips)[0]||{buffer:{}}).buffer.sampleRate);
+  blocker.src='data:image/gif;base64,R0lGODlhAQABAAAAACw='; } },250); })();
+</script>
 </body>
 </html>

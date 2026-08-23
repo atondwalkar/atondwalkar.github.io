@@ -300,6 +300,7 @@
   }
   .clip canvas{position:absolute;inset:0;pointer-events:none}
   .ghost{position:absolute;pointer-events:none;z-index:1;opacity:.55;border-radius:4px}
+  .ghost.bghost{opacity:.42;filter:saturate(.55);background:rgba(255,255,255,.035);border:1px dashed rgba(255,255,255,.12);box-sizing:border-box}
   .clip .cname{
     position:absolute;top:2px;left:6px;font-size:8px;letter-spacing:.12em;
     pointer-events:none;text-transform:uppercase;
@@ -2354,6 +2355,7 @@ function applyBusRouting(track){
   try{ tr.panner.disconnect(); }catch(e){}
   const bt=track.busId && tracksAll.find(t2=>t2.id===track.busId);
   tr.panner.connect(bt?trackInput(bt):state.tracks.master.input);
+  queueGhosts();
 }
 function updateBusIndents(){
   tracksAll.forEach(t=>t.headEl && t.headEl.classList.toggle('bussed',!!t.busId));
@@ -3426,6 +3428,7 @@ function layoutTimeline(){
   tracksAll.forEach(t=>(t.autos||[]).forEach(a=>drawAuto(t,a)));
   ruler.style.width=w+'px';
   updateLoopRegionEl();
+  queueGhosts();
 }
 
 function addTrack(after){
@@ -4110,11 +4113,13 @@ function renderClip(c){
   g.fillStyle='rgba(255,230,200,.9)'; g.fillRect(Math.min(w-6,Math.max(0,fiPx-3)),0,6,6); g.fillRect(Math.min(w-6,Math.max(0,w-foPx-3)),0,6,6);
   const tags=[]; if(c.rev) tags.push('REV'); if(c.semis) tags.push((c.semis>0?'+':'')+c.semis+'st'); if(c.gain) tags.push((c.gain>0?'+':'')+c.gain.toFixed(1)+'dB');
   if(tags.length){ g.font='700 8px "IBM Plex Mono",monospace'; g.textAlign='right'; g.fillStyle='rgba(10,12,16,.8)'; const txt=tags.join(' '); const tw=g.measureText(txt).width+6; g.fillRect(w-tw-2,42,tw,11); g.fillStyle='#ffe9c9'; g.fillText(txt,w-5,51); g.textAlign='left'; }
+  queueGhosts();
 }
 function deleteClip(c){
   const tr=tracksAll.find(t=>t.id===c.trackId);
   tr.clips=tr.clips.filter(x=>x!==c);
   c.el.remove();
+  queueGhosts();
   dropFromSel(c);
   layoutTimeline();
   rescheduleIfPlaying();
@@ -4341,6 +4346,34 @@ function renderGhosts(){
         for(let st=0;st<it.lenSteps;st++)
           if(it.pat[d.id][st]) c2.fillRect(st*cw+1, ty, Math.max(2,cw-2), th);
         target.laneEl.appendChild(g);
+      });
+    });
+  });
+  renderBusGhosts();
+}
+/* bus lanes show a combined ghost of everything routed into them (clips + MIDI items of every sub-track, nested busses included) */
+function renderBusGhosts(){
+  const byId=new Map(tracksAll.map(t=>[t.id,t]));
+  tracksAll.forEach(tr=>{
+    if(!tr.busId) return;
+    const anc=[]; let cur=byId.get(tr.busId), g=0;
+    while(cur && g++<64){ anc.push(cur); cur=cur.busId?byId.get(cur.busId):null; }
+    if(!anc.length) return;
+    const srcs=[...tr.clips.map(c=>({el:c.el,cv:c.canvas,kind:'clip'})), ...tr.items.map(it=>({el:it.el,cv:it.canvas,kind:it.kind}))];
+    anc.forEach(bus=>{
+      if(!bus.laneEl) return;
+      const compact=bus.laneEl.classList.contains('compact');
+      const h=compact?26:54, top=compact?3:5;
+      srcs.forEach(s=>{
+        if(!s.cv || !s.cv.width) return;
+        const w=s.cv.width;
+        const gcv=document.createElement('canvas'); gcv.className='ghost bghost '+s.kind;
+        gcv.width=w; gcv.height=h;
+        gcv.style.width=w+'px'; gcv.style.height=h+'px'; gcv.style.left=s.el.style.left; gcv.style.top=top+'px';
+        gcv.dataset.src=tr.id;
+        const g2=gcv.getContext('2d'); if(!g2) return;
+        g2.drawImage(s.cv,0,0,w,h);
+        bus.laneEl.appendChild(gcv);
       });
     });
   });

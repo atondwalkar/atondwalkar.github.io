@@ -2544,8 +2544,7 @@ function applyFxTo(fx,n){
       n.limNode.parameters.get('thr').value=p.threshold??-6;
       n.limNode.parameters.get('ceil').value=p.ceiling??-0.3;
       n.limNode.parameters.get('rel').value=p.release??0.08;
-      return;
-    }
+    }else{
     n.comp.threshold.value=p.threshold??-6;
     n.comp.release.value=p.release??0.08;
     const ceil=Math.pow(10,(p.ceiling??-0.3)/20);
@@ -2566,6 +2565,7 @@ function applyFxTo(fx,n){
         return cc;
       });
       n.builtCeil=ceil;
+    }
     }
   }else if(fx.type==='width'){
     n.wGain.gain.value=p.width??1;

@@ -230,6 +230,8 @@
     background:rgba(255,179,71,.07);
     border-left:1px solid rgba(255,179,71,.5);border-right:1px solid rgba(255,179,71,.5);
   }
+  .kread-in{width:52px;font:inherit;color:inherit;background:#0b0d11;border:1px solid #ffd166;border-radius:3px;padding:0 2px;text-align:center}
+  .val .kread-in{width:44px}
   #bpm-lock{font-size:9px;letter-spacing:.08em;color:var(--ink-dim)}
   #bpm-lock.on{color:#ffd166;border-color:#ffd166}
   .marker{position:absolute;top:0;bottom:0;width:0;border-left:2px solid #ffd166;z-index:3;cursor:pointer;pointer-events:auto}
@@ -637,6 +639,7 @@
     <div class="stepper">
       <button id="sw-down" aria-label="Decrease swing">−</button>
       <span class="val" id="sw-val">0%</span>
+      <span class="val" id="tsig-val" title="Time signature — double-click to type (e.g. 6/8, 7/8, 3/4)">4/4</span>
       <button id="sw-up" aria-label="Increase swing">+</button>
     </div>
   </div>
@@ -827,7 +830,17 @@ const SAMPLES = /*S16_SAMPLES_START*/{kick:"UklGRgwKAwBXQVZFZm10IBAAAAABAAIARKwA
 /* ============================== constants & state ============================== */
 /* timing grid: 96 ticks per bar (TPQ 24) — 1/16 = 6 ticks, 1/32 = 3, 1/8T = 8, 1/16T = 4. "steps" everywhere are ticks. */
 const TICKS = 96, TPQ = 24, T16 = 6;
-const STEPS = TICKS;
+const TSIG={n:4,d:4};                      // time signature (default 4/4); bar length in ticks below
+let STEPS = TICKS;                          // ticks per bar = TSIG.n * 96/TSIG.d (96 = a 4/4 bar)
+function setTsig(n,d){
+  n=Math.round(n); d=Math.round(d);
+  if(!(n>=1&&n<=16) || ![2,4,8,16].includes(d)) return false;
+  TSIG.n=n; TSIG.d=d;
+  STEPS=n*TICKS/d*1;                       // = n*96/d, integer for d ∈ {2,4,8,16}
+  const el=document.getElementById('tsig-val'); if(el) el.textContent=n+'/'+d;
+  if(typeof layoutTimeline==='function' && typeof tlInner!=='undefined'){ layoutTimeline(); if(typeof selMidiItem==='function' && selMidiItem()) drawPianoRoll(); }
+  return true;
+}
 const GRID_OPTS=[['1/4',24],['1/8',12],['1/8T',8],['1/16',6],['1/16T',4],['1/32',3],['1/32T',2],['off',1]];
 let tlGrid=+(localStorage.getItem('s16-tlgrid')||6)||6, prGrid=+(localStorage.getItem('s16-prgrid')||6)||6;
 const snapT=(t,g)=>Math.round(t/g)*g, floorT=(t,g)=>Math.floor(t/g)*g;
@@ -3442,6 +3455,7 @@ function playFrom(pos){
   playBtn.classList.add('on'); playBtn.innerHTML='&#9632;';
 }
 function haltPlayback(){
+  if(state.playing) startPos=curPos();       // stop in place — the playhead stays until the user moves it
   autoStopWrites();
   clearInterval(timerId); timerId=null;
   activeSources.forEach(s=>{try{s.stop()}catch(e){}});
@@ -3533,9 +3547,9 @@ async function toggleRecord(){
     say('REC \u2014 monitoring through '+recTrack.name);
   };
   if(metroOn){
-    const beat=barSec()/4;
+    const beat=barSec()/TSIG.n;
     const t0=ctx.currentTime+0.08;
-    for(let i=0;i<8;i++) metroClick(t0+i*beat, i%4===0);
+    for(let i=0;i<2*TSIG.n;i++) metroClick(t0+i*beat, i%TSIG.n===0);
     recBtn.classList.add('on');
     say('Count-in\u2026 2 bars');
     countInTimer=setTimeout(beginTake, ((t0-ctx.currentTime)+8*beat)*1000-25);
@@ -5379,9 +5393,32 @@ function makeGKnob(spec){
   };
   if(spec.def!==undefined) k.ondblclick=()=>{ spec.set(spec.def); show(); };
   k.title=spec.label+' \u2014 drag up/down';
+  inlineNumEdit(read,()=>+(+spec.get()).toFixed(4),v=>{ pushHistory(); v=Math.max(spec.min,Math.min(spec.max,v)); v=+(Math.round(v/spec.step)*spec.step).toFixed(6); spec.set(v); show(); });
   show();
   wrap.append(k,lab,read);
   return {el:wrap, refresh:show};
+}
+/* double-click a numeric readout to type the value; Enter applies, Escape cancels */
+function inlineNumEdit(el,getVal,apply){
+  el.title=(el.title?el.title+' \u2014 ':'')+'double-click to type a value';
+  el.addEventListener('dblclick',e=>{
+    e.preventDefault(); e.stopPropagation();
+    if(el.querySelector('input')) return;
+    const old=el.textContent;
+    const inp=document.createElement('input'); inp.type='text'; inp.className='kread-in';
+    inp.value=String(getVal());
+    el.textContent=''; el.appendChild(inp); inp.focus(); inp.select();
+    let done=false;
+    const finish=okv=>{
+      if(done) return; done=true;
+      const v=parseFloat(inp.value.replace(',','.'));
+      inp.remove();
+      if(okv && isFinite(v)) apply(v); else el.textContent=old;
+    };
+    inp.onkeydown=ev=>{ ev.stopPropagation(); if(ev.key==='Enter') finish(true); else if(ev.key==='Escape') finish(false); };
+    inp.onblur=()=>finish(true);
+    inp.onpointerdown=ev=>ev.stopPropagation();
+  });
 }
 function makeKnob(fx,key,p){
   const wrap=document.createElement('div'); wrap.className='knob-wrap';
@@ -5412,6 +5449,7 @@ function makeKnob(fx,key,p){
   };
   k.ondblclick=()=>set(p.val);
   k.title=key+' \u2014 drag up/down, double-click to reset';
+  inlineNumEdit(read,()=>+(+fx.params[key]).toFixed(4),v=>{ pushHistory(); const tid=autoFxTouchId(fx,key); if(tid) autoTouch(tid,true); set(v); if(tid) autoTouch(tid,false); });
   show(fx.params[key]);
   wrap.append(k,lab,read);
   wrap._refresh=show; (fx._knobs=fx._knobs||{})[key]=wrap;
@@ -7629,6 +7667,7 @@ function snapState(){
     bpm:state.bpm, swing:state.swing, loopOn, pps:PPS,
     markers:markers.map(m=>({t:+m.t.toFixed(4), name:m.name})),
     tempoLock:state.tempoLock!==false,
+    tsig:[TSIG.n,TSIG.d],
     master:{mvol:+mvol.value, fxBypass:!!state.tracks.master.fxBypass, fx:MASTER_TRACK.fx.map(f=>serFx(f,ref)), auto:serAutos(MASTER_TRACK), amode:MASTER_TRACK.autoMode||'read'},
     routes:{},
     tracks:tracksAll.map(t=>({
@@ -7672,7 +7711,7 @@ function commitPending(){
 /* undo/redo restore a full project snapshot — but the UI context (which track / items are selected, the open
    editor, scroll position) is not part of the project, so capture it around the restore and put it back */
 function captureUiState(){
-  const u={tr:tracksAll.indexOf(selectedTrack), scroll:tlScroll?tlScroll.scrollLeft:0, sel:[]};
+  const u={tr:tracksAll.indexOf(selectedTrack), scroll:tlScroll?tlScroll.scrollLeft:0, pos:curPos(), sel:[]};
   selSet.forEach(sl=>{
     const o=selObjOf(sl); if(!o) return;
     const ti=tracksAll.findIndex(t=>t.id===o.trackId); if(ti<0) return;
@@ -7692,6 +7731,7 @@ function restoreUiState(u){
     else{ const it=t.items[sv.i]; if(it) list.push({kind:'midi',item:it}); }
   });
   if(list.length) setSelection(list);
+  if(u.pos!==undefined) seek(u.pos);
   if(tlScroll) tlScroll.scrollLeft=u.scroll;
 }
 function undo(){
@@ -7808,6 +7848,7 @@ async function saveProject(){
       bpm:state.bpm, swing:state.swing, loopOn, pps:PPS,
     markers:markers.map(m=>({t:+m.t.toFixed(4), name:m.name})),
     tempoLock:state.tempoLock!==false,
+    tsig:[TSIG.n,TSIG.d],
       master:{mvol:+mvol.value, fxBypass:!!state.tracks.master.fxBypass, fx:MASTER_TRACK.fx.map(f=>serFx(f,bufRef)), auto:serAutos(MASTER_TRACK), amode:MASTER_TRACK.autoMode||'read'},
       routes:{},
       tracks:tracksAll.map(t=>({
@@ -7928,6 +7969,7 @@ function applyProject(proj,buffers){
     setBpm(proj.bpm||180);
     setSwing(proj.swing||0);
     setTempoLock(proj.tempoLock!==false);
+    { const ts=(proj.tsig&&proj.tsig.length===2)?proj.tsig:[4,4]; setTsig(+ts[0]||4,+ts[1]||4)||setTsig(4,4); }
     loopOn=!!proj.loopOn;
     markers=(proj.markers||[]).map(m=>({t:+m.t||0, name:String(m.name||'M')}));
     renderMarkers();
@@ -8402,6 +8444,28 @@ tlockBtn.onclick=()=>{
   setTempoLock(!state.tempoLock);
   flash(state.tempoLock?'Tempo-lock on \u2014 audio clips follow BPM changes (varispeed).':'Tempo-lock off \u2014 audio clips keep their absolute time and speed.');
 };
+inlineNumEdit(bpmVal,()=>state.bpm,v=>{ pushHistory(); setBpm(Math.round(v)); });
+(function(){
+  const el=document.getElementById('tsig-val');
+  el.addEventListener('dblclick',e=>{
+    e.preventDefault(); e.stopPropagation();
+    if(el.querySelector('input')) return;
+    const old=el.textContent;
+    const inp=document.createElement('input'); inp.type='text'; inp.className='kread-in'; inp.value=TSIG.n+'/'+TSIG.d;
+    el.textContent=''; el.appendChild(inp); inp.focus(); inp.select();
+    let done=false;
+    const finish=okv=>{
+      if(done) return; done=true;
+      const m=okv && /^\s*(\d{1,2})\s*\/\s*(\d{1,2})\s*$/.exec(inp.value);
+      inp.remove();
+      if(m){ pushHistory(); if(setTsig(+m[1],+m[2])){ flash('Time signature '+TSIG.n+'/'+TSIG.d+'.'); return; } flash('Use 1\u201316 over 2, 4, 8 or 16 \u2014 e.g. 6/8.'); }
+      el.textContent=old;
+    };
+    inp.onkeydown=ev=>{ ev.stopPropagation(); if(ev.key==='Enter') finish(true); else if(ev.key==='Escape') finish(false); };
+    inp.onblur=()=>finish(true);
+  });
+})();
+inlineNumEdit(swVal,()=>Math.round(state.swing*100),v=>{ pushHistory(); setSwing(v/100); });
 document.getElementById('bpm-up').onclick=()=>{ pushHistory(); setBpm(state.bpm+4); };
 document.getElementById('bpm-down').onclick=()=>{ pushHistory(); setBpm(state.bpm-4); };
 document.getElementById('sw-up').onclick=()=>{ pushHistory(); setSwing(state.swing+0.05); };

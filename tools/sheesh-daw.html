@@ -2296,9 +2296,13 @@ function drawDnChart(fx){
   }
   if(!p || !p.length){ g.fillStyle='rgba(139,147,163,.6)'; g.font='10px "IBM Plex Mono",monospace'; g.textAlign='center'; g.fillText('no profile \u2014 press Learn on the noise',cw/2,ch/2); g.textAlign='left'; }
 }
+function dnPushProfile(fx){
+  const n=fx.nodes;
+  if(n && n.fxNode){ n.fxNode._dnProf=fx.noiseProfile; n.fxNode.port.postMessage({type:'setProfile', fftSize:fx.profN||2048, sampleRate:fx.profSr||ctx.sampleRate, data:fx.noiseProfile}); }
+}
 function dnReadout(fx){
   if(fx._learn) return 'learning\u2026 '+((fx.noiseSec||0).toFixed(1))+' s \u2014 play the noise-only part';
-  if(fx.noiseProfile) return 'profile: '+((fx.noiseSec||0).toFixed(1))+' s of noise';
+  if(fx.noiseProfile) return (fx.noiseSec>0) ? 'profile: '+((+fx.noiseSec).toFixed(1))+' s of noise' : 'hand-drawn profile';
   return 'no profile \u2014 play the noisy gap and press Learn';
 }
 function applyFxTo(fx,n){
@@ -5900,8 +5904,45 @@ function renderFxPanel(){
       if(fx.type==='denoise'){
         sw2.classList.add('dn-wrap');
         const pcv=document.createElement('canvas'); pcv.className='dn-cv';
-        pcv.title='Frequency chart (20 Hz \u2013 20 kHz): grey = input, orange = filtered output, blue zone = learned noise floor that gets filtered';
+        pcv.title='Frequency chart (20 Hz \u2013 20 kHz): grey = input, orange = filtered output, blue zone = the noise floor that gets filtered.\nClick / drag to draw the floor by hand \u2014 works on a learned profile or from scratch.';
+        pcv.style.cursor='crosshair'; pcv.style.touchAction='none';
         fx.dnCv=pcv;
+        pcv.onpointerdown=e=>{
+          if(e.button!==undefined && e.button!==0) return;
+          e.preventDefault();
+          try{ pcv.setPointerCapture(e.pointerId); }catch(_){}
+          pushHistory();
+          if(!fx.noiseProfile){                            // start a blank floor at the chart bottom
+            fx.noiseProfile=new Float32Array(1025).fill(Math.pow(10,(-100+67)/10));
+            fx.profSr=ctx.sampleRate; fx.profN=2048; fx.noiseSec=0;
+          }
+          const r=pcv.getBoundingClientRect(), cw=r.width, ch=r.height;
+          const N=fx.profN||2048, srP=fx.profSr||ctx.sampleRate, HB=fx.noiseProfile.length;
+          const pAt=(x,y)=>{                               // (px,px) → [bin, power] on the profile's own grid
+            const db=Math.max(-100,Math.min(-20, -100+((ch-4-y)*80)/(ch-10)));
+            const sens=(fx.params&&fx.params.sens)??6;
+            return [Math.max(0,Math.min(HB-1,Math.round(fxAxisF(Math.max(0,Math.min(1,x/cw)))*N/srP))), Math.pow(10,(db+67-sens)/10)];
+          };
+          let lastX=null, lastY=null, lastPost=0;
+          const paint=(x,y)=>{
+            const x0=lastX===null?x:lastX, y0=lastY===null?y:lastY;
+            const a=Math.min(x0,x), b=Math.max(x0,x);
+            for(let px=a-1;px<=b+1;px++){
+              const t=(b>a)?(px-x0)/(x-x0||1):0;
+              const [k,v]=pAt(px, y0+(y-y0)*Math.max(0,Math.min(1,t)));
+              const [k2]=pAt(px+1,0);
+              for(let kk=Math.min(k,k2);kk<=Math.max(k,k2);kk++) fx.noiseProfile[Math.max(0,Math.min(HB-1,kk))]=v;   // fill bins between px columns (coarse lows, dense highs)
+            }
+            lastX=x; lastY=y;
+            drawDnChart(fx);
+            if(fx.dnLab) fx.dnLab.textContent=dnReadout(fx);
+            const now=performance.now();
+            if(now-lastPost>120){ lastPost=now; dnPushProfile(fx); }
+          };
+          paint(e.clientX-r.left, e.clientY-r.top);
+          pcv.onpointermove=ev=>paint(ev.clientX-r.left, ev.clientY-r.top);
+          pcv.onpointerup=pcv.onpointercancel=()=>{ pcv.onpointermove=null; dnPushProfile(fx); };
+        };
         sw2.insertBefore(pcv,kr);
         const row=document.createElement('div'); row.className='dn-row';
         const lb=document.createElement('button'); lb.className='ir-btn dn-learn'+(fx._learn?' on':''); lb.textContent=fx._learn?'\u23f9 Learning':'Learn';

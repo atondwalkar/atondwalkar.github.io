@@ -2486,7 +2486,6 @@ function applyFxTo(fx,n){
         if(fx.noiseProfile && n.fxNode._dnProf!==fx.noiseProfile){ n.fxNode._dnProf=fx.noiseProfile; n.fxNode.port.postMessage({type:'setProfile', fftSize:fx.profN||2048, sampleRate:fx.profSr||ctx.sampleRate, data:fx.noiseProfile}); }
         else if(!fx.noiseProfile && n.fxNode._dnProf){ n.fxNode._dnProf=null; n.fxNode.port.postMessage({type:'clearProfile'}); }
         n.wet.gain.value=1; n.dry.gain.value=0;            // mix happens inside (latency-aligned dry)
-        return;
       }
       n.wet.gain.value=mix;
       n.dry.gain.value=1-mix;

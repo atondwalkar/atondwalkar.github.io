@@ -7930,6 +7930,32 @@ function redo(){
 /* ============================== project save / load ============================== */
 const CRC_T=(()=>{ const t=new Uint32Array(256); for(let n=0;n<256;n++){ let c=n; for(let k=0;k<8;k++) c=(c&1)?(0xEDB88320^(c>>>1)):(c>>>1); t[n]=c>>>0; } return t; })();
 function crc32(u8){ let c=~0; for(let i=0;i<u8.length;i++) c=(c>>>8)^CRC_T[(c^u8[i])&255]; return (~c)>>>0; }
+/* streaming variant of buildZip for the File System Access path: nothing is concatenated in memory and the
+   destination is only touched once every part is ready — a failure before write() leaves the old file intact */
+function zipParts(name,u8,offset){
+  const enc=new TextEncoder(), nm=enc.encode(name), crc=crc32(u8);
+  const lh=new DataView(new ArrayBuffer(30+nm.length));
+  lh.setUint32(0,0x04034b50,true); lh.setUint16(4,20,true); lh.setUint16(6,0,true);
+  lh.setUint16(8,0,true); lh.setUint16(10,0,true); lh.setUint16(12,0x21,true);
+  lh.setUint32(14,crc,true); lh.setUint32(18,u8.length,true); lh.setUint32(22,u8.length,true);
+  lh.setUint16(26,nm.length,true); lh.setUint16(28,0,true);
+  new Uint8Array(lh.buffer).set(nm,30);
+  const ch=new DataView(new ArrayBuffer(46+nm.length));
+  ch.setUint32(0,0x02014b50,true); ch.setUint16(4,20,true); ch.setUint16(6,20,true);
+  ch.setUint16(8,0,true); ch.setUint16(10,0,true); ch.setUint16(12,0,true); ch.setUint16(14,0x21,true);
+  ch.setUint32(16,crc,true); ch.setUint32(20,u8.length,true); ch.setUint32(24,u8.length,true);
+  ch.setUint16(28,nm.length,true); ch.setUint16(30,0,true); ch.setUint16(32,0,true);
+  ch.setUint16(34,0,true); ch.setUint16(36,0,true); ch.setUint32(38,0,true); ch.setUint32(42,offset,true);
+  new Uint8Array(ch.buffer).set(nm,46);
+  return {local:[lh.buffer,u8], central:ch.buffer, size:30+nm.length+u8.length};
+}
+function zipEnd(central,count,offset){
+  const cdSize=central.reduce((a,b)=>a+b.byteLength,0);
+  const e=new DataView(new ArrayBuffer(22));
+  e.setUint32(0,0x06054b50,true); e.setUint16(4,0,true); e.setUint16(6,0,true);
+  e.setUint16(8,count,true); e.setUint16(10,count,true); e.setUint32(12,cdSize,true); e.setUint32(16,offset,true); e.setUint16(20,0,true);
+  return e.buffer;
+}
 function buildZip(entries){
   const enc=new TextEncoder(), parts=[], central=[];
   let offset=0;
@@ -8049,16 +8075,28 @@ async function saveProject(){
     });
     proj.audioFiles=bufs.length;
     const entries=[{name:'manifest.json', data:new TextEncoder().encode(JSON.stringify(proj)).buffer}];
-    for(let i=0;i<bufs.length;i++) entries.push({name:'audio/'+i+'.wav', data:await encodeWavF32(bufs[i]).arrayBuffer()});
-    const blob=buildZip(entries);
+    for(let i=0;i<bufs.length;i++){ fileSay('Saving\u2026 encoding audio '+(i+1)+'/'+bufs.length); entries.push({name:'audio/'+i+'.wav', data:await encodeWavF32(bufs[i]).arrayBuffer()}); }
     // 3. write
     if(handle){
-      const w=await handle.createWritable();
-      await w.write(blob);
-      await w.close();
-      fileSay(''); fileFlash('Saved '+handle.name);
+      // everything above is built before the file is touched: a failure so far leaves the previous save intact
+      let total=0; const central=[]; let offset=0;
+      const parts=entries.map(e=>{ const p=zipParts(e.name,new Uint8Array(e.data),offset); offset+=p.size; central.push(p.central); return p; });
+      const tail=zipEnd(central,entries.length,offset);
+      const guard=ev=>{ ev.preventDefault(); ev.returnValue='Save in progress'; };
+      window.addEventListener('beforeunload',guard);
+      try{
+        const w=await handle.createWritable();
+        for(const p of parts){ for(const seg of p.local){ await w.write(seg); total+=seg.byteLength; } }
+        for(const c2 of central){ await w.write(c2); total+=c2.byteLength; }
+        await w.write(tail); total+=tail.byteLength;
+        await w.close();
+      }finally{ window.removeEventListener('beforeunload',guard); }
+      const onDisk=await handle.getFile().then(f=>f.size).catch(()=>-1);
+      if(onDisk>=0 && onDisk!==total) throw new Error('written file is '+onDisk+' bytes, expected '+total+' \u2014 disk full or interrupted?');
+      fileSay(''); fileFlash('Saved '+handle.name+' ('+(total/1048576).toFixed(1)+' MB)');
       return true;
     }
+    const blob=buildZip(entries);
     const url=URL.createObjectURL(blob);
     const a=document.createElement('a');
     a.href=url; a.download=dlName;

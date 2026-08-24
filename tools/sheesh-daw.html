@@ -232,8 +232,10 @@
   }
   .kread-in{width:52px;font:inherit;color:inherit;background:#0b0d11;border:1px solid #ffd166;border-radius:3px;padding:0 2px;text-align:center}
   .val .kread-in{width:44px}
-  #bpm-lock{font-size:9px;letter-spacing:.08em;color:var(--ink-dim)}
+  #bpm-lock,#tap-bar{font-size:9px;letter-spacing:.08em;color:var(--ink-dim)}
   #bpm-lock.on{color:#ffd166;border-color:#ffd166}
+  #tap-bar.on{color:#ff6b6b;border-color:#ff6b6b;animation:tapblink 1s steps(2,start) infinite}
+  @keyframes tapblink{to{opacity:.55}}
   .marker{position:absolute;top:0;bottom:0;width:0;border-left:2px solid #ffd166;z-index:3;cursor:pointer;pointer-events:auto}
   .marker i{position:absolute;top:0;left:0;font:700 9px "IBM Plex Mono",monospace;font-style:normal;color:#111;background:#ffd166;
     padding:0 3px 1px;border-radius:0 4px 4px 0;white-space:nowrap}
@@ -631,6 +633,7 @@
       <button id="bpm-down" aria-label="Decrease tempo">−</button>
       <span class="val" id="bpm-val">180</span>
       <button id="bpm-up" aria-label="Increase tempo">+</button>
+      <button id="tap-bar" aria-pressed="false" title="Set the tempo by playing one measure: arm this, press play, then stop — the played time becomes one full bar (uses the current time signature).">tap bar</button>
       <button id="bpm-lock" class="on" aria-pressed="true" title="Tempo-lock audio clips: ON = clips follow BPM changes (varispeed + position). OFF = clips keep their absolute time and speed when the tempo changes (MIDI always follows).">sync</button>
     </div>
   </div>
@@ -3467,7 +3470,20 @@ function haltPlayback(){
   state.playing=false;
   playBtn.classList.remove('on'); playBtn.innerHTML='&#9654;';
 }
+let tapBarArmed=false;
+function tapBarMeasure(){
+  if(!tapBarArmed || !state.playing || !ctx) return;
+  tapBarArmed=false; updateTapBtn();
+  const elapsed=ctx.currentTime-startCtx;
+  if(!(elapsed>0.25) || elapsed>16){ flash('Tap-bar: played '+elapsed.toFixed(2)+' s \u2014 too '+(elapsed>16?'long':'short')+' for one measure, tempo unchanged.'); return; }
+  const bpm=Math.round(STEPS*60/(TPQ*elapsed));            // elapsed seconds = one bar of the current signature
+  pushHistory();
+  setBpm(bpm);
+  flash('Tap-bar: '+elapsed.toFixed(2)+' s measure \u2192 '+state.bpm+' BPM'+(bpm!==state.bpm?' (clamped)':'')+'.');
+}
+function updateTapBtn(){ const b=document.getElementById('tap-bar'); if(b){ b.classList.toggle('on',tapBarArmed); b.setAttribute('aria-pressed',String(tapBarArmed)); } }
 function stopAll(){
+  tapBarMeasure();
   if(countInTimer){
     clearTimeout(countInTimer); countInTimer=null;
     recorder=null;
@@ -8462,6 +8478,10 @@ function setBpm(v){
   rescheduleIfPlaying();
 }
 function setSwing(v){ state.swing=Math.min(0.6,Math.max(0,v)); swVal.textContent=Math.round(state.swing*100)+'%'; }
+document.getElementById('tap-bar').onclick=()=>{
+  tapBarArmed=!tapBarArmed; updateTapBtn();
+  flash(tapBarArmed?'Tap-bar armed \u2014 press play, then stop after exactly one measure.':'Tap-bar disarmed.');
+};
 const tlockBtn=document.getElementById('bpm-lock');
 function setTempoLock(v){
   state.tempoLock=v!==false;

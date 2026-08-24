@@ -8494,9 +8494,28 @@ function syncMixer(){
 }
 
 /* ============================== transport controls & fx ============================== */
+async function checkAudioSink(){
+  // a saved output device can vanish between sessions (headset unplugged, monitor off) — audio then goes nowhere, silently
+  if(outId && navigator.mediaDevices && navigator.mediaDevices.enumerateDevices){
+    try{
+      const devs=await navigator.mediaDevices.enumerateDevices();
+      if(!devs.some(d2=>d2.kind==='audiooutput' && d2.deviceId===outId)){
+        outId=''; localStorage.setItem('s16-out','');
+        if(ctx && ctx.setSinkId) ctx.setSinkId('').catch(()=>{});
+        const sel=document.getElementById('out-sel'); if(sel) sel.value='';
+        flash('Saved output device not found \u2014 switched to the default output.');
+      }
+    }catch(_){}
+  }
+  if(ctx && ctx.state!=='running'){
+    try{ await ctx.resume(); }catch(_){}
+    setTimeout(()=>{ if(ctx.state!=='running') flash('The browser is blocking audio \u2014 click the page once, or check the site\u2019s sound permission.'); },400);
+  }
+}
 playBtn.onclick=async ()=>{
   if(state.playing){ stopAll(); return; }
   await ensureSamples();
+  checkAudioSink();
   playFrom(startPos);
 };
 loopBtn.onclick=()=>{

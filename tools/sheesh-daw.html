@@ -1864,7 +1864,47 @@ process(inputs,outputs,params){
 finish(){ const f=Math.max(1,this.frames); for(let k=0;k<this.HB;k++) this.P[k]=this.acc[k]/(2*f); this.hasProf=this.frames>0||this.hasProf; }
 postProf(fin){ this.port.postMessage({type:'profile', fftSize:this.N, sampleRate:sampleRate, frames:this.frames, final:!!fin, data:this.P.slice(0)}); }
 }
-registerProcessor('s16-denoise',S16Denoise);`;
+registerProcessor('s16-denoise',S16Denoise);
+class S16Limit extends AudioWorkletProcessor{
+static get parameterDescriptors(){return[
+ {name:'thr',defaultValue:-6,minValue:-24,maxValue:0},
+ {name:'ceil',defaultValue:-0.3,minValue:-6,maxValue:0},
+ {name:'rel',defaultValue:0.08,minValue:0.02,maxValue:0.5}]}
+constructor(){super();
+ this.D=Math.max(64,Math.round(0.003*sampleRate));      // 3 ms lookahead
+ const N=this.N=1<<Math.ceil(Math.log2(this.D*2+256));
+ this.M=N-1;
+ this.dl=[new Float32Array(N),new Float32Array(N)]; this.w=0;
+ this.qV=new Float32Array(N); this.qI=new Int32Array(N); this.qh=0; this.qt=0;   // monotonic deque: sliding max of |x| over the lookahead window
+ this.g=1; this.n=0;
+}
+process(inputs,outputs,params){
+ const inp=inputs[0],out=outputs[0]; if(!out||!out.length) return true;
+ const thr=Math.pow(10,params.thr[0]/20), C=Math.pow(10,params.ceil[0]/20);
+ const drive=C/thr;                                     // fixed makeup: threshold maps to the ceiling
+ const aAtk=1-Math.exp(-1/(0.0012*sampleRate));
+ const aRel=1-Math.exp(-1/(Math.max(0.02,params.rel[0])*sampleRate));
+ const n0=inp&&inp[0], n1=(inp&&inp[1])||n0, L=out[0].length, D=this.D, M=this.M;
+ for(let i=0;i<L;i++){
+  const xl=(n0?n0[i]:0)*drive, xr=(n1?n1[i]:0)*drive;
+  const p=this.w&M;
+  this.dl[0][p]=xl; this.dl[1][p]=xr;
+  const a=Math.max(Math.abs(xl),Math.abs(xr));
+  while(this.qt>this.qh && this.qV[(this.qt-1)&M]<=a) this.qt--;   // maintain decreasing deque
+  this.qV[this.qt&M]=a; this.qI[this.qt&M]=this.n; this.qt++;
+  while(this.qI[this.qh&M]<=this.n-D) this.qh++;                    // drop entries older than the window
+  const wmax=this.qV[this.qh&M];
+  const gT=wmax>C?C/wmax:1;
+  this.g+=(gT-this.g)*(gT<this.g?aAtk:aRel);
+  if(this.g>1) this.g=1;
+  const rp=(this.w-D)&M;
+  let yl=this.dl[0][rp]*this.g, yr=this.dl[1][rp]*this.g;
+  if(yl>C)yl=C; if(yl<-C)yl=-C; if(yr>C)yr=C; if(yr<-C)yr=-C;       // safety clamp (lookahead makes this a no-op)
+  out[0][i]=yl; if(out[1]) out[1][i]=yr;
+  this.w++; this.n++;
+ }
+ return true}}
+registerProcessor('s16-limit',S16Limit);`;
 
 let WORKLET_SRC_CACHE=null;
 function workletSrc(){
@@ -2185,8 +2225,12 @@ function buildFxCore(fx,c,useWorklet){
     return {in:inN, out:duckG, duckG, rect, env, thrShape, depth};
   }
   if(t==='limit'){
+    if(useWorklet){
+      const node=new AudioWorkletNode(c,'s16-limit',{outputChannelCount:[2]});
+      return {in:node, out:node, limNode:node};
+    }
     const cp=c.createDynamicsCompressor();
-    cp.knee.value=0; cp.ratio.value=20; cp.attack.value=0.002;
+    cp.knee.value=3; cp.ratio.value=20; cp.attack.value=0.001;   // fast attack + slight knee: less transient overshoot into the ceiling
     const mk=c.createGain();
     const clip=c.createWaveShaper(); clip.oversample='4x';
     cp.connect(mk); mk.connect(clip);
@@ -2496,14 +2540,29 @@ function applyFxTo(fx,n){
       n.builtThr=thr;
     }
   }else if(fx.type==='limit'){
+    if(n.limNode){
+      n.limNode.parameters.get('thr').value=p.threshold??-6;
+      n.limNode.parameters.get('ceil').value=p.ceiling??-0.3;
+      n.limNode.parameters.get('rel').value=p.release??0.08;
+      return;
+    }
     n.comp.threshold.value=p.threshold??-6;
     n.comp.release.value=p.release??0.08;
     const ceil=Math.pow(10,(p.ceiling??-0.3)/20);
-    n.makeup.gain.value=ceil/Math.pow(10,(p.threshold??-6)/20)*0.9;
+    // DynamicsCompressor self-applies auto-makeup ((1/g0)^0.6); compensate it so a full-scale input
+    // lands just below the soft knee — sustained material stays clean, only overshoots get bent
+    const out0=(p.threshold??-6)*(1-1/20);
+    n.makeup.gain.value=ceil*0.66/Math.pow(10,0.4*out0/20);
     if(n.builtCeil!==ceil){
-      n.clip.curve=curveMemo('clip:'+ceil.toFixed(6),()=>{
-        const cc=new Float32Array(1024);
-        for(let i=0;i<1024;i++){ const x=i/511.5-1; cc[i]=Math.max(-ceil,Math.min(ceil,x)); }
+      n.clip.curve=curveMemo('slimit:'+ceil.toFixed(6),()=>{
+        // soft ceiling: linear below 0.6·ceil, then a smooth tanh knee that never exceeds the ceiling.
+        // (the old hard clamp turned every transient the compressor's attack let through into crackle)
+        const cc=new Float32Array(2048), a=0.6*ceil;
+        for(let i=0;i<2048;i++){
+          const x=i/1023.5-1, ax=Math.abs(x);
+          const y=ax<a ? ax : a+(ceil-a)*Math.tanh((ax-a)/(ceil-a));
+          cc[i]=Math.sign(x)*y;
+        }
         return cc;
       });
       n.builtCeil=ceil;

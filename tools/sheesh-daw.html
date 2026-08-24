@@ -909,7 +909,7 @@ function metroClick(t,accent){
   o.start(t); o.stop(t+0.06);
 }
 let absStep=0;
-let startPos=0, startCtx=0;
+let startPos=0, startCtx=0, userPos=0;    // userPos = where the user placed the playhead (play starts there, stop returns there)
 let pendingAnchors=[];
 let activeSources=new Set();
 
@@ -3455,7 +3455,7 @@ function playFrom(pos){
   playBtn.classList.add('on'); playBtn.innerHTML='&#9632;';
 }
 function haltPlayback(){
-  if(state.playing) startPos=curPos();       // stop in place — the playhead stays until the user moves it
+  if(state.playing) startPos=userPos;        // stop returns to where the user placed the playhead
   autoStopWrites();
   clearInterval(timerId); timerId=null;
   activeSources.forEach(s=>{try{s.stop()}catch(e){}});
@@ -3478,13 +3478,14 @@ function stopAll(){
   haltPlayback();
   drawTimelinePlayhead();
 }
-function seek(pos){
+function seek(pos, internal){
   pos=Math.max(0,pos);
+  if(!internal) userPos=pos;                 // every user placement moves the anchor; internal reschedules don't
   if(state.playing){ haltPlayback(); playFrom(pos); }
   else { startPos=pos; }
   drawTimelinePlayhead();
 }
-function rescheduleIfPlaying(){ if(state.playing) seek(curPos()); }
+function rescheduleIfPlaying(){ if(state.playing) seek(curPos(), true); }
 
 /* ============================== recording ============================== */
 let mediaStream=null, recorder=null, recChunks=[], recStartPos=0, recTrack=null;
@@ -7711,7 +7712,7 @@ function commitPending(){
 /* undo/redo restore a full project snapshot — but the UI context (which track / items are selected, the open
    editor, scroll position) is not part of the project, so capture it around the restore and put it back */
 function captureUiState(){
-  const u={tr:tracksAll.indexOf(selectedTrack), scroll:tlScroll?tlScroll.scrollLeft:0, pos:curPos(), sel:[]};
+  const u={tr:tracksAll.indexOf(selectedTrack), scroll:tlScroll?tlScroll.scrollLeft:0, pos:userPos, sel:[]};
   selSet.forEach(sl=>{
     const o=selObjOf(sl); if(!o) return;
     const ti=tracksAll.findIndex(t=>t.id===o.trackId); if(ti<0) return;

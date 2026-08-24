@@ -4639,6 +4639,21 @@ function deleteItem(it){
   dropFromSel(it);
   layoutTimeline();
 }
+function shiftPat(kind,pat,d,newLen){
+  if(!d) return resizePat(kind,pat,newLen);
+  if(kind==='piano')
+    return pat.map(nn=>({...nn, s:nn.s-d})).filter(nn=>nn.s+nn.l>0 && nn.s<newLen)
+              .map(nn=>{ const s=Math.max(0,nn.s); return {...nn, s, l:Math.max(1,Math.min(nn.l-(s-nn.s), newLen-s))}; });
+  if(kind==='drums'){
+    const p={};
+    DRUMS.forEach(dr=>{ p[dr.id]=new Uint8Array(newLen);
+      for(let st=0;st<newLen;st++){ const src=st+d; if(src>=0 && src<pat[dr.id].length) p[dr.id][st]=pat[dr.id][src]; } });
+    return p;
+  }
+  const out=new Int8Array(newLen).fill(-1);
+  for(let st=0;st<newLen;st++){ const src=st+d; if(src>=0 && src<pat.length) out[st]=pat[src]; }
+  return out;
+}
 function bindItemPointer(it){
   it.el.addEventListener('pointerdown',e=>{
     if(e.button!==undefined && e.button!==0) return;
@@ -4647,7 +4662,7 @@ function bindItemPointer(it){
     const px0=e.clientX, add=e.ctrlKey||e.metaKey, range=e.shiftKey, wasSel=selHas(it);
     const o={start:it.startStep,len:it.lenSteps};
     const r=it.el.getBoundingClientRect(), x=e.clientX-r.left;
-    const mode=(r.width>40 && x>r.width-14) ? 'r' : 'm';
+    const mode=(r.width>40 && x>r.width-14) ? 'r' : (r.width>44 && x<14) ? 'l' : 'm';
     let moved=false, resized=false, G=null;
     if(mode==='m'){
       if(!wasSel && !add && !range) selectObj({kind:'midi',item:it});
@@ -4657,19 +4672,32 @@ function bindItemPointer(it){
       const dSteps=(ev.clientX-px0)/stepPx();
       if(Math.abs(ev.clientX-px0)>4) moved=true;
       if(mode==='m'){ if(dragGroupMove(G,it,dSteps*stepDur(),laneTrackAt(ev.clientY))) moved=true; return; }
-      const bars=Math.max(1,Math.round((o.len+dSteps)/STEPS));
-      const len=bars*STEPS;
-      if(len!==it.lenSteps){
-        it.pat=resizePat(it.kind,it.pat,len);
-        it.lenSteps=len;
-        resized=true;
-        renderItem(it);
+      const snapI=v=>snapOn ? Math.round(v/tlGrid)*tlGrid : Math.round(v);   // items resize on the timeline grid, free when snap is off
+      if(mode==='r'){
+        const len=Math.max(Math.max(1,snapOn?tlGrid:1), snapI(o.len+dSteps));
+        if(len!==it.lenSteps){
+          it.pat=resizePat(it.kind,it.pat,len);
+          it.lenSteps=len;
+          resized=true;
+          renderItem(it);
+        }
+      }else{                                              // left edge: trim/extend, notes keep their absolute time
+        let ns=snapI(o.start+dSteps);
+        ns=Math.max(0, Math.min(ns, o.start+o.len-Math.max(1,snapOn?tlGrid:1)));
+        if(ns!==it.startStep){
+          const d=ns-o.start, len=o.len-d;
+          it.pat=shiftPat(it.kind, it._pat0||(it._pat0=it.pat), d, len);
+          it.startStep=ns; it.lenSteps=len;
+          resized=true;
+          renderItem(it);
+        }
       }
     };
     const up=()=>{
       document.removeEventListener('pointermove',move);
       document.removeEventListener('pointerup',up);
       document.removeEventListener('pointercancel',up);
+      it._pat0=null;
       if(!moved){
         pendingSnap=null;
         const sl={kind:'midi',item:it};
@@ -8127,7 +8155,7 @@ const HK_ROWS=`    <div><span class="hk"><kbd>Space</kbd></span>play / stop</div
     <div><span class="hk"><kbd>M</kbd></span>mute / unmute the selected track</div>
     <div><span class="hk"><kbd>Y</kbd></span>merge selected clips or MIDI items</div>
     <div><span class="hk"><kbd>Click</kbd></span>select clip / item / note · <kbd>Ctrl</kbd>+click toggles · <kbd>Shift</kbd>+click selects the range</div>
-    <div><span class="hk"><kbd>Drag</kbd></span>move selection (across tracks) · edges trim · <kbd>Ctrl</kbd>+drag right edge stretches</div>
+    <div><span class="hk"><kbd>Drag</kbd></span>move selection (across tracks) · edges trim (clips &amp; MIDI items, on the timeline grid) · <kbd>Ctrl</kbd>+drag right edge stretches clips</div>
     <div><span class="hk"><kbd>Alt</kbd>+drag clip</span>slip edit \u2014 slide the audio inside the clip without moving it</div>
     <div><span class="hk"><kbd>Ctrl</kbd>/<kbd>Shift</kbd>+click chip</span>multi-select tracks · drag chips to reorder together</div>
     <div><span class="hk"><kbd>Dbl-click</kbd></span>lane: new MIDI item · item / roll note: delete</div>

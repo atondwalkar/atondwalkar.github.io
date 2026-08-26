@@ -3643,7 +3643,8 @@ function scheduleClips(pos, at){
       if(end<=pos+0.001 || c.start>=cap) return;
       const when=at + Math.max(0,c.start-pos);
       const srcOff=c.offset + Math.max(0,pos-c.start)*rate;
-      const tlPlay=Math.min(end,cap) - Math.max(pos,c.start);
+      const f0=fades.get(c)||{};
+      const tlPlay=Math.min(end+(f0.ext||0),cap) - Math.max(pos,c.start);
       const src=ctx.createBufferSource(); src.buffer=c.buffer;
       src.playbackRate.value=rate;
       const genv=ctx.createGain(), G=clipGainLin(c);
@@ -3878,10 +3879,27 @@ function clipFades(tr){
     }
     if(c.fadeIn>0){ const m1=Math.min(end,c.start+c.fadeIn); fi=fi?[c.start,Math.max(fi[1],m1)]:[c.start,m1]; }
     if(c.fadeOut>0){ const m0=Math.max(c.start,end-c.fadeOut); fo=fo?[Math.min(fo[0],m0),end]:[m0,end]; }
-    fades.set(c,{fi,fo});
+    fades.set(c,{fi,fo,ext:0});
+    // abutting neighbour (a split, or clips butted together): crossfade across the seam instead of a hard cut.
+    // The earlier clip keeps playing XF past its end while this one fades in — identical audio sums to unity.
+    if(i>0 && !fi){
+      const pv=arr[i-1], pf=fades.get(pv), pend=pv.start+clipTlDur(pv);
+      if(pf && !pf.fo && Math.abs(pend-c.start)<=0.005){
+        const room=(pv.buffer.duration-(pv.offset+pv.dur))/clipRate(pv);   // how far the source can run past the trim
+        const xf=Math.min(CLIP_XF, Math.max(0,room), end-c.start);
+        if(xf>0.0005){ fi=[c.start,c.start+xf]; pf.fo=[c.start,c.start+xf]; pf.ext=Math.max(0,(c.start+xf)-pend); fades.get(c).fi=fi; }
+      }
+    }
   }
+  // isolated edges: a few ms of micro-fade so a clip never starts or stops on a non-zero sample
+  fades.forEach((f,c)=>{
+    const end=c.start+clipTlDur(c), dk=Math.min(CLIP_DECLICK, Math.max(0.0005,(end-c.start)/2));
+    if(!f.fi) f.fi=[c.start,c.start+dk];
+    if(!f.fo) f.fo=[end-dk,end];
+  });
   return fades;
 }
+const CLIP_XF=0.005, CLIP_DECLICK=0.004;
 function contentEnd(){
   let end=0;
   tracksAll.forEach(t=>{
@@ -5105,7 +5123,7 @@ function mergeClips(tr,clips){
   const fades=clipFades({clips});                    // crossfades among the merged clips only
   clips.forEach(c=>{
     const rate=clipRate(c), f=fades.get(c)||{}, tl=clipTlDur(c), bsr=c.buffer.sampleRate;
-    const n0=Math.max(0,Math.floor((c.start-t0)*sr)), n1=Math.min(len,Math.ceil((c.start-t0+tl)*sr));
+    const n0=Math.max(0,Math.floor((c.start-t0)*sr)), n1=Math.min(len,Math.ceil((c.start-t0+tl+(f.ext||0))*sr));
     for(let chn=0;chn<ch;chn++){
       const dst=out.getChannelData(chn), src=c.buffer.getChannelData(Math.min(chn,c.buffer.numberOfChannels-1));
       for(let n=n0;n<n1;n++){
@@ -7901,7 +7919,7 @@ async function exportWav(){
         src.connect(genv); genv.connect(dests[tr.id]);
         src.start(Math.max(0,c.start-expStart),
                   c.offset+Math.max(0,expStart-c.start)*rate,
-                  (Math.min(cEnd,expEnd)-Math.max(c.start,expStart))*rate);
+                  (Math.min(cEnd+(f.ext||0),expEnd)-Math.max(c.start,expStart))*rate);
       });
     });
 

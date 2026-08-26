@@ -238,7 +238,8 @@
   #midi-rec.on{color:#fff;background:#c0392b;border-color:#e74c3c}
   #midi-led{display:inline-block;width:8px;height:8px;border-radius:50%;background:#2a3140;margin-left:4px;transition:background .08s}
   #midi-led.on{background:#8adf9a;box-shadow:0 0 6px #8adf9a}
-  #bpm-lock,#tap-bar{font-size:9px;letter-spacing:.08em;color:var(--ink-dim);white-space:nowrap}
+  #bpm-lock,#tap-bar{font-size:9px;letter-spacing:.06em;color:var(--ink-dim);white-space:nowrap;padding:3px 5px;flex:none}
+  .stepper{flex-wrap:nowrap}
   #bpm-lock.on{color:#ffd166;border-color:#ffd166}
   #tap-bar.on{color:#ff6b6b;border-color:#ff6b6b;animation:tapblink 1s steps(2,start) infinite}
   @keyframes tapblink{to{opacity:.55}}
@@ -406,10 +407,12 @@
   .kread{font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--amber)}
   .eq-wrap{display:flex;gap:14px;align-items:center;flex:1;min-width:340px}
   .eq-canvas{
-    flex:1;min-width:260px;height:132px;display:block;cursor:crosshair;touch-action:none;
+    flex:1;min-width:260px;height:264px;display:block;cursor:crosshair;touch-action:none;
     background:#0b0d11;border:1px solid #0c0e12;border-radius:4px;
   }
   .eq-knobs{flex:none;align-items:center}
+  .eq-selrow{display:flex;align-items:center;gap:6px}
+  .eq-type{font-size:10px}
   .synth-wrap{flex-wrap:wrap;align-items:flex-start;gap:10px}
   .synth-scope{flex:1 1 100%;min-width:0;height:74px}
   .duck-key,.ir-btn{
@@ -950,6 +953,30 @@ function stepPx(){ return stepDur()*PPS; }
 
 /* ============================== FX definitions ============================== */
 const EQ_FREQS=[30,60,120,250,450,700,1000,1500,2200,3200,4500,6500,9000,12000,16000,20000];
+const EQ_GMIN=-60, EQ_GMAX=24;                      // -60 dB = full cut ("-∞"), +24 dB max boost
+const EQ_TYPES=['peaking','lowshelf','highshelf','lowpass','highpass','notch','bandpass'];
+const EQ_TYPE_LABELS=['peak','lo shelf','hi shelf','lo pass','hi pass','notch','band pass'];
+function bandType(fx,i){ const t=fx.params['t'+i]; if(t!=null) return Math.max(0,Math.min(EQ_TYPES.length-1,Math.round(t))); return i===0?1:i===EQ_FREQS.length-1?2:0; }
+function bandIsPass(fx,i){ return bandType(fx,i)>=3; }   // gain-less types: lowpass / highpass / notch / bandpass
+/* plot scale: +24…+12 in the top 12 %, ±12 across the middle 58 %, -12…-60 in the bottom 30 % */
+function eqY(db,ch){
+  const t=6, b=ch-6, y12=t+(b-t)*0.12, y0=t+(b-t)*0.41, ym12=t+(b-t)*0.70;
+  db=Math.max(EQ_GMIN,Math.min(EQ_GMAX,db));
+  if(db>=12) return y12-(db-12)/12*(y12-t);
+  if(db>=0)  return y0-(db/12)*(y0-y12);
+  if(db>=-12) return y0+(-db/12)*(ym12-y0);
+  return ym12+((-db-12)/48)*(b-ym12);
+}
+function eqDb(y,ch){
+  const t=6, b=ch-6, y12=t+(b-t)*0.12, y0=t+(b-t)*0.41, ym12=t+(b-t)*0.70;
+  let db;
+  if(y<=y12) db=12+(y12-y)/(y12-t)*12;
+  else if(y<=y0) db=(y0-y)/(y0-y12)*12;
+  else if(y<=ym12) db=-(y-y0)/(ym12-y0)*12;
+  else db=-12-(y-ym12)/(b-ym12)*48;
+  return Math.max(EQ_GMIN,Math.min(EQ_GMAX,db));
+}
+const eqDbFmt=v=>v<=EQ_GMIN?'\u2212\u221e':(v>0?'+':'')+(+v).toFixed(1).replace(/\.0$/,'')+' dB';
 const dbFmt=v=>(v>0?'+':'')+(+v).toFixed(1)+' dB';
 const hzFmt=v=>v>=1000?(v/1000).toFixed(1)+' kHz':Math.round(v)+' Hz';
 const TUNE_KEYS=(()=>{ const n=['C','C#','D','D#','E','F','F#','G','G#','A','A#','B']; return n.map(x=>x+' maj').concat(n.map(x=>x+' min')).concat(['chromatic']); })();
@@ -2435,10 +2462,12 @@ function applyFxTo(fx,n){
   }else if(fx.type==='eq'){
     let key='';
     n.bands.forEach((b,i)=>{
+      const ty=EQ_TYPES[bandType(fx,i)]; if(b.type!==ty) b.type=ty;
       b.gain.value=(p['x'+i]===0)?0:(p['b'+i]||0);
       b.frequency.value=p['f'+i]||EQ_FREQS[i];
-      if(b.type==='peaking') b.Q.value=p['q'+i]||2.2;
-      key+=((p.damt||0)>0 || (p['x'+i]!==0 && (p['b'+i]||0)!==0))?'1':'0';   // only bands that do something get rendered
+      if(ty!=='lowshelf' && ty!=='highshelf') b.Q.value=p['q'+i]||(ty==='peaking'?2.2:0.7);
+      const pass=bandType(fx,i)>=3;
+      key+=((p.damt||0)>0 || (p['x'+i]!==0 && (pass || (p['b'+i]||0)!==0)))?'1':'0';   // only bands that do something get rendered
     });
     if(n.inG && key!==n.activeKey){
       n.activeKey=key;
@@ -6040,6 +6069,7 @@ function renderFxPanel(){
       const bandKnobs=[];
       const refreshBand=()=>{
         selLab.textContent='BAND '+(fx._selBand+1)+' \u00b7 '+hzFmt(bandFreq(fx,fx._selBand));
+        typeSel.value=String(bandType(fx,fx._selBand));
         bandKnobs.forEach(b=>b.refresh());
       };
       cv.onpointerdown=e=>{
@@ -6051,8 +6081,8 @@ function renderFxPanel(){
         refreshBand();
         const move=ev=>{
           const r=cv.getBoundingClientRect(), y=ev.clientY-r.top, x=ev.clientX-r.left;
-          let db=((r.height/2-y)/(r.height/2-6))*14;
-          db=Math.max(-12,Math.min(12,Math.round(db*2)/2));
+          let db=eqDb(y,r.height);
+          db=Math.max(EQ_GMIN,Math.min(EQ_GMAX,Math.round(db*2)/2));
           fx.params['b'+bi]=db;
           let f=fxAxisF(x/r.width);
           fx.params['f'+bi]=Math.max(20,Math.min(20000,Math.round(f)));
@@ -6078,7 +6108,12 @@ function renderFxPanel(){
       cv.title='Drag dots (both axes) \u00b7 double-click deletes a dot \u00b7 click empty space adds one back';
       const kr=document.createElement('div'); kr.className='knob-row eq-knobs';
       const bandCol=document.createElement('div'); bandCol.className='eq-bandknobs';
-      bandCol.appendChild(selLab);
+      const typeSel=document.createElement('select'); typeSel.className='duck-key eq-type'; typeSel.setAttribute('aria-label','Band filter type');
+      typeSel.title='Filter type of the selected band';
+      EQ_TYPE_LABELS.forEach((l,i)=>typeSel.appendChild(new Option(l,i)));
+      typeSel.onchange=()=>{ pushHistory(); fx.params['t'+fx._selBand]=+typeSel.value; applyFx(fx); refreshBand(); };
+      const selRow=document.createElement('div'); selRow.className='eq-selrow'; selRow.append(selLab,typeSel);
+      bandCol.appendChild(selRow);
       const bkRow=document.createElement('div'); bkRow.className='knob-row';
       const mkBand=(label,pref,min,max,step,fmt,log,defV)=>{
         const kb=makeGKnob({label,min,max,step,fmt,log,def:defV,
@@ -6087,7 +6122,7 @@ function renderFxPanel(){
         bandKnobs.push(kb);
         bkRow.appendChild(kb.el);
       };
-      mkBand('gain','b',-12,12,0.5,dbFmt,false,0);
+      mkBand('gain','b',EQ_GMIN,EQ_GMAX,0.5,eqDbFmt,false,0);
       mkBand('freq','f',20,20000,1,hzFmt,true);
       mkBand('q','q',0.3,12,0.1,v=>(+v).toFixed(1),false,2.2);
       bandCol.appendChild(bkRow);
@@ -6363,7 +6398,7 @@ function drawEq(fx){
   g.setTransform(dpr,0,0,dpr,0,0);
   g.clearRect(0,0,cw,ch);
   const X=f=>fxAxisX(f)*cw;
-  const Y=db=>ch/2-(db/14)*(ch/2-6);
+  const Y=db=>eqY(db,ch);
   g.font='8px system-ui'; g.lineWidth=1;
   [50,100,200,500,1000,2000,5000,10000,20000].forEach(f=>{
     const x=X(f);
@@ -6373,10 +6408,12 @@ function drawEq(fx){
     const lab=f>=1000?(f/1000)+'k':''+f;
     g.fillText(lab, f===20000?x-g.measureText(lab).width-3:x+2, ch-3);
   });
-  [-12,-6,0,6,12].forEach(db=>{
+  [24,12,6,0,-6,-12,-24,-60].forEach(db=>{
     const y=Y(db);
     g.strokeStyle=db===0?'rgba(139,147,163,.3)':'rgba(139,147,163,.12)';
     g.beginPath(); g.moveTo(0,y); g.lineTo(cw,y); g.stroke();
+    g.fillStyle='rgba(139,147,163,.4)';
+    g.fillText(db===-60?'\u2212\u221e':(db>0?'+'+db:db), cw-22, y-2);
   });
   const n=fx.nodes;
   if(n && n.preAn && ctx){
@@ -6403,7 +6440,7 @@ function drawEq(fx){
   let rkey='';
   if(n && n.bands){
     const p=fx.params; rkey=(n.dynOn?'D':'')+p.damt;
-    for(let i=0;i<16;i++) rkey+='|'+p['b'+i]+','+p['f'+i]+','+p['q'+i]+','+p['x'+i];
+    for(let i=0;i<16;i++) rkey+='|'+p['b'+i]+','+p['f'+i]+','+p['q'+i]+','+p['x'+i]+','+bandType(fx,i);
   }
   if(n && n.bands && !n.dynOn && fx._eqRespKey===rkey && fx._eqResp){
     eqMagAcc.set(fx._eqResp);
@@ -6417,9 +6454,10 @@ function drawEq(fx){
   }else{
     eqMagAcc.fill(1);
     eqProbeBands().forEach((b,i)=>{
+      b.type=EQ_TYPES[bandType(fx,i)];
       b.gain.value=bandOn(fx,i)?(fx.params['b'+i]||0):0;
       b.frequency.value=bandFreq(fx,i);
-      if(b.type==='peaking') b.Q.value=fx.params['q'+i]||2.2;
+      if(b.type!=='lowshelf' && b.type!=='highshelf') b.Q.value=fx.params['q'+i]||(b.type==='peaking'?2.2:0.7);
       b.getFrequencyResponse(eqFr,eqMag,eqPh);
       for(let j=0;j<EQ_FR_N;j++) eqMagAcc[j]*=eqMag[j];
     });
@@ -6432,9 +6470,12 @@ function drawEq(fx){
   g.strokeStyle='#ffb347'; g.lineWidth=1.6; g.stroke();
   EQ_FREQS.forEach((f,i)=>{
     if(!bandOn(fx,i)) return;
-    const x=X(bandFreq(fx,i)), y=Y(fx.params['b'+i]||0);
-    const sel=fx._selBand===i, drag=fx._dragBand===i;
-    g.beginPath(); g.arc(x,y,drag?5.5:sel?5:3.5,0,7);
+    const ty=bandType(fx,i), x=X(bandFreq(fx,i)), y=Y(ty>=3?0:(fx.params['b'+i]||0));
+    const sel=fx._selBand===i, drag=fx._dragBand===i, R=drag?5.5:sel?5:3.5;
+    g.beginPath();
+    if(ty===1||ty===2) g.rect(x-R,y-R,2*R,2*R);                                   // shelves: square
+    else if(ty>=3){ g.moveTo(x,y-R*1.2); g.lineTo(x+R*1.2,y); g.lineTo(x,y+R*1.2); g.lineTo(x-R*1.2,y); g.closePath(); }   // passes / notch: diamond
+    else g.arc(x,y,R,0,7);
     g.fillStyle=drag?'#ffe08a':sel?'#ffb347':'#5fd4c4';
     g.fill();
     if(sel){ g.strokeStyle='rgba(255,179,71,.6)'; g.lineWidth=1; g.beginPath(); g.arc(x,y,7.5,0,7); g.stroke(); }

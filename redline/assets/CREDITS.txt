@@ -1,0 +1,16 @@
+Nothing here is active. The game is using its own procedurally built cars —
+four body shapes across the sixteen liveries, in src/carmodels.js.
+
+INCLUDED, NOT ACTIVE — assets/example-car.glb
+  "Car Kit" sedan by Kenney — https://kenney.nl
+  Licence: CC0 1.0 (public domain dedication)
+  https://creativecommons.org/publicdomain/zero/1.0/
+
+  Kept only so the loading path is provably working rather than merely
+  written. Copy it to car.glb and reload to see it take over the whole field.
+  CC0 carries no attribution requirement; the credit is here out of courtesy.
+
+If you put your own car.glb here it replaces every car in the race. See
+README.txt for what makes a model work well, and remember that a licence
+which requires attribution — CC BY and friends — means the credit has to
+travel with the game.

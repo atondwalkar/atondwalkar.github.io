@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>REDLINE — CIRCUIT DE VALMONT</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #06080b; }
+  body {
+    font-family: "DejaVu Sans Mono", "Courier New", monospace;
+    color: #e8ecf0; user-select: none;
+  }
+  #game, #game canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+
+  :root {
+    --panel: rgba(10, 13, 17, 0.80);
+    --line: rgba(150, 175, 200, 0.22);
+    --hot: #e8452f;
+    --amber: #e8a92f;
+    --go: #35d06a;
+    --cool: #4fa8e8;
+  }
+
+  #hud { position: absolute; inset: 0; pointer-events: none; display: none; z-index: 5; }
+
+  /* ------------------------------ top strip ------------------------------ */
+  #top {
+    position: absolute; top: 0; left: 50%; transform: translateX(-50%);
+    display: flex; align-items: stretch; background: var(--panel);
+    border: 1px solid var(--line); border-top: none; border-radius: 0 0 5px 5px;
+  }
+  #top .cell { padding: 7px 16px; text-align: center; border-right: 1px solid var(--line); }
+  #top .cell:last-child { border-right: none; }
+  #top .k { font-size: 9px; letter-spacing: 2px; opacity: 0.55; }
+  #top .v { font-size: 20px; line-height: 1.15; letter-spacing: 1px; }
+  #pos-v { color: var(--amber); }
+  #lap-v.final { color: var(--hot); }
+
+  /* ------------------------------ timing --------------------------------- */
+  #timing {
+    position: absolute; top: 74px; left: 50%; transform: translateX(-50%);
+    background: var(--panel); border: 1px solid var(--line); border-radius: 4px;
+    padding: 5px 14px; display: flex; gap: 18px; font-size: 12px;
+  }
+  #timing span b { font-weight: normal; opacity: 0.5; margin-right: 6px; font-size: 9px; letter-spacing: 1px; }
+  #cur-lap { color: #fff; }
+  #best-lap { color: #c58ce8; }
+  #gap-ahead { color: var(--hot); }
+
+  /* ------------------------------ the dash ------------------------------- */
+  #dash {
+    position: absolute; right: 22px; bottom: 20px;
+    display: flex; align-items: flex-end; gap: 14px;
+  }
+  #tacho { position: relative; }
+  #tacho canvas { display: block; }
+  #gear {
+    position: absolute; left: 50%; top: 54%; transform: translate(-50%, -50%);
+    font-size: 46px; line-height: 1; text-shadow: 0 2px 10px #000;
+  }
+  #gear.shift { color: var(--hot); }
+  #speed-box { text-align: right; padding-bottom: 12px; }
+  #speed { font-size: 52px; line-height: 0.9; letter-spacing: -1px; }
+  #speed-u { font-size: 11px; letter-spacing: 3px; opacity: 0.55; }
+  #autobox { font-size: 9px; letter-spacing: 2px; opacity: 0.5; margin-top: 8px; }
+  #autobox.on { color: var(--cool); opacity: 0.9; }
+
+  /* ------------------------------ pedals --------------------------------- */
+  #inputs {
+    position: absolute; left: 22px; bottom: 20px;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 4px;
+    padding: 10px 12px; width: 176px;
+  }
+  #inputs .bar { height: 7px; background: rgba(0,0,0,0.55); margin: 3px 0 7px; border-radius: 2px; overflow: hidden; }
+  #inputs .bar i { display: block; height: 100%; width: 0%; }
+  #thr i { background: var(--go); }
+  #brk i { background: var(--hot); }
+  #hbk i { background: var(--amber); }
+  #inputs .k { font-size: 8px; letter-spacing: 2px; opacity: 0.55; }
+  #wheel { height: 5px; background: rgba(0,0,0,0.55); border-radius: 2px; position: relative; margin-top: 4px; }
+  #wheel i { position: absolute; top: -2px; width: 3px; height: 9px; background: #e8ecf0; left: 50%; margin-left: -1.5px; }
+  #grip { font-size: 9px; letter-spacing: 1px; opacity: 0.6; margin-top: 8px; }
+  #grip.slide { color: var(--amber); opacity: 1; }
+
+  /* ------------------------------ minimap -------------------------------- */
+  #map {
+    position: absolute; left: 22px; top: 18px; width: 216px; height: 216px;
+    background: rgba(8, 11, 15, 0.66); border: 1px solid var(--line); border-radius: 4px;
+  }
+  #map canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+
+  /* ------------------------------ standings ------------------------------ */
+  #standings {
+    position: absolute; right: 22px; top: 18px; width: 250px;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 4px;
+    padding: 8px 10px; font-size: 11px;
+  }
+  #standings .row { display: flex; gap: 8px; padding: 2px 4px; border-radius: 2px; }
+  #standings .row.you { background: rgba(255,255,255,0.10); }
+  #standings .row .p { width: 20px; opacity: 0.6; text-align: right; }
+  #standings .row .sw { width: 4px; border-radius: 1px; }
+  #standings .row .n { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #standings .row .g { opacity: 0.7; }
+  #standings h3 { font-size: 9px; letter-spacing: 2px; opacity: 0.5; font-weight: normal; margin-bottom: 5px; }
+
+  /* ------------------------------ messages ------------------------------- */
+  #lights {
+    position: absolute; left: 50%; top: 20%; transform: translateX(-50%);
+    display: none; gap: 12px;
+  }
+  #lights i {
+    width: 34px; height: 34px; border-radius: 50%;
+    background: #23262b; border: 2px solid #14161a;
+    box-shadow: inset 0 2px 5px rgba(0,0,0,0.6);
+  }
+  #lights i.on { background: var(--hot); box-shadow: 0 0 22px rgba(232,69,47,0.85); }
+
+  #message {
+    position: absolute; left: 50%; top: 32%; transform: translateX(-50%);
+    text-align: center; font-size: 34px; letter-spacing: 6px; opacity: 0;
+    text-shadow: 0 3px 18px #000;
+  }
+  #message .sub { font-size: 13px; letter-spacing: 3px; opacity: 0.8; margin-top: 8px; }
+
+  #flash-lap {
+    position: absolute; left: 50%; top: 46%; transform: translateX(-50%);
+    font-size: 15px; letter-spacing: 3px; opacity: 0; text-shadow: 0 2px 10px #000;
+  }
+
+  /* ------------------------------ results -------------------------------- */
+  #results {
+    position: absolute; inset: 0; z-index: 20; display: none;
+    background: rgba(5, 7, 10, 0.90); padding: 5vh 6vw;
+  }
+  #results.open { display: block; }
+  #results h1 { font-size: 24px; letter-spacing: 8px; font-weight: normal; margin-bottom: 4px; }
+  #results .sub { font-size: 12px; letter-spacing: 3px; opacity: 0.6; margin-bottom: 20px; }
+  #results table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  #results th { text-align: left; font-weight: normal; opacity: 0.5; font-size: 9px; letter-spacing: 2px; padding: 5px 8px; }
+  #results td { padding: 5px 8px; border-top: 1px solid rgba(150,175,200,0.10); }
+  #results tr.you td { background: rgba(255,255,255,0.08); }
+  #results .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 7px; vertical-align: -1px; }
+  #results .again { margin-top: 22px; font-size: 12px; letter-spacing: 3px; opacity: 0.7; }
+
+  /* --------------------------- car select -------------------------------- */
+  #select {
+    position: absolute; inset: 0; z-index: 25; display: none;
+    pointer-events: none;
+  }
+  #select.open { display: block; }
+  #select .head {
+    position: absolute; top: 7%; left: 50%; transform: translateX(-50%);
+    text-align: center;
+  }
+  #select .head h2 { font-size: 11px; letter-spacing: 7px; font-weight: normal; opacity: 0.55; }
+  #sel-name {
+    font-size: 40px; letter-spacing: 8px; margin-top: 10px;
+    text-shadow: 0 3px 22px #000;
+  }
+  /* A count, not a row of dots: there are twenty-two cars and nobody reads
+     twenty-two dots. */
+  #sel-dots {
+    margin-top: 18px; font-size: 13px; letter-spacing: 5px; color: var(--hot);
+  }
+  #select .foot {
+    position: absolute; bottom: 9%; left: 50%; transform: translateX(-50%);
+    text-align: center; font-size: 12px; letter-spacing: 4px;
+  }
+  #select .foot b { color: var(--amber); font-weight: normal; }
+  #select .go {
+    margin-top: 16px; font-size: 15px; letter-spacing: 6px; color: var(--hot);
+  }
+
+  /* ------------------------------ menu ----------------------------------- */
+  /* Two buttons over a moving shot of the city. No title, no control list, no
+     strapline — the cutscene behind it IS the title screen, and anything laid
+     over it is in the way of it. */
+  #menu {
+    position: absolute; inset: 0; z-index: 30; display: flex;
+    align-items: flex-end; justify-content: center;
+    padding-bottom: 11vh; pointer-events: none;
+    background: linear-gradient(to bottom, rgba(4,6,9,0.40) 0%, rgba(4,6,9,0) 32%,
+                rgba(4,6,9,0) 54%, rgba(4,6,9,0.74) 100%);
+  }
+  #menu .btns { display: flex; gap: 18px; pointer-events: auto; }
+  #menu button, #settings button {
+    background: rgba(10, 14, 20, 0.7); color: #f4f6f8;
+    border: 1px solid rgba(232, 236, 240, 0.34);
+    padding: 15px 46px; font: inherit; font-size: 15px; letter-spacing: 7px;
+    cursor: pointer;
+  }
+  #menu button:hover, #settings button:hover {
+    background: var(--hot); border-color: var(--hot); color: #0a0c10;
+  }
+
+  /* ---------------------------- loading ---------------------------------- */
+  /* A spinner, plus a ring that fills as the city goes up. The spin is a pure
+     `transform`, which browsers run on the compositor — but that alone was not
+     enough: building the city blocks the one JavaScript thread, and while it
+     is blocked the browser never gets a frame to composite. The real fix is on
+     the other side, in the staged build; this just has to look like something
+     while it waits. */
+  #loading {
+    position: absolute; inset: 0; z-index: 40; display: flex;
+    align-items: center; justify-content: center; flex-direction: column;
+    gap: 26px; background: #05070b; transition: opacity 0.45s ease;
+  }
+  #loading.done { opacity: 0; pointer-events: none; }
+  #load-ring { position: relative; width: 58px; height: 58px; }
+  #load-ring i, #load-ring b {
+    position: absolute; inset: 0; border-radius: 50%; display: block;
+  }
+  /* The track of the dial, filled to --at by a conic gradient. */
+  #load-ring b {
+    --at: 0;
+    background: conic-gradient(var(--hot) calc(var(--at) * 360deg),
+                rgba(232, 236, 240, 0.10) 0);
+    -webkit-mask: radial-gradient(circle, transparent 61%, #000 62%);
+    mask: radial-gradient(circle, transparent 61%, #000 62%);
+    transition: background 0.3s linear;
+  }
+  /* And the sweep going round on top of it. */
+  #load-ring i {
+    border: 3px solid transparent; border-top-color: rgba(232, 236, 240, 0.85);
+    will-change: transform; animation: spin 0.85s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  #loading .txt { font-size: 11px; letter-spacing: 7px; opacity: 0.5; }
+  #loading .txt span { color: var(--hot); }
+
+  /* The buttons do not exist until there is something behind them. */
+  #menu .btns { visibility: hidden; }
+  #menu.ready .btns { visibility: visible; animation: fadein 0.5s ease both; }
+  @keyframes fadein { from { opacity: 0; } to { opacity: 1; } }
+
+  /* ------------------------------ name ----------------------------------- */
+  #name {
+    position: absolute; inset: 0; z-index: 32; display: none;
+    align-items: center; justify-content: center; flex-direction: column;
+    gap: 18px; background: rgba(4, 6, 9, 0.88);
+  }
+  #name.open { display: flex; }
+  #name h2 { font-size: 15px; letter-spacing: 9px; opacity: 0.7; }
+  #name input {
+    background: rgba(10, 14, 20, 0.9); color: #f4f6f8; text-align: center;
+    border: 1px solid rgba(232, 236, 240, 0.3); border-bottom: 2px solid var(--hot);
+    padding: 14px 20px; font: inherit; font-size: 22px; letter-spacing: 8px;
+    width: 380px; text-transform: uppercase;
+  }
+  #name input::placeholder { color: rgba(232, 236, 240, 0.22); letter-spacing: 6px; }
+  #name button {
+    background: rgba(10, 14, 20, 0.7); color: #f4f6f8;
+    border: 1px solid rgba(232, 236, 240, 0.34);
+    padding: 13px 44px; font: inherit; font-size: 14px; letter-spacing: 6px;
+    cursor: pointer; margin-top: 10px;
+  }
+  #name button:hover { background: var(--hot); border-color: var(--hot); color: #0a0c10; }
+
+  /* ---------------------------- settings --------------------------------- */
+  #settings {
+    position: absolute; inset: 0; z-index: 31; display: none;
+    align-items: center; justify-content: center; flex-direction: column;
+    gap: 15px; background: rgba(4, 6, 9, 0.88);
+  }
+  #settings.open { display: flex; }
+  #settings h2 { font-size: 15px; letter-spacing: 9px; margin-bottom: 12px; }
+  #settings label {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 26px; width: 340px; font-size: 11px; letter-spacing: 4px; opacity: 0.85;
+  }
+  #settings select, #settings input {
+    background: rgba(10, 14, 20, 0.9); color: #f4f6f8;
+    border: 1px solid rgba(232, 236, 240, 0.3); padding: 6px 10px;
+    font: inherit; font-size: 11px; letter-spacing: 2px; width: 150px;
+  }
+  #settings button { margin-top: 16px; }
+</style>
+</head>
+<body>
+<div id="game"></div>
+
+<div id="hud">
+  <div id="top">
+    <div class="cell"><div class="k">POS</div><div class="v" id="pos-v">16/16</div></div>
+    <div class="cell"><div class="k">LAP</div><div class="v" id="lap-v">1/3</div></div>
+    <div class="cell"><div class="k">RACE</div><div class="v" id="race-time">0:00.000</div></div>
+  </div>
+
+  <div id="timing">
+    <span><b>LAP</b><i id="cur-lap">--:--.---</i></span>
+    <span><b>LAST</b><i id="last-lap">--:--.---</i></span>
+    <span><b>BEST</b><i id="best-lap">--:--.---</i></span>
+    <span><b>AHEAD</b><i id="gap-ahead">--</i></span>
+  </div>
+
+  <div id="map"><canvas id="map-c" width="432" height="432"></canvas></div>
+
+  <div id="standings"><h3>ORDER</h3><div id="standings-rows"></div></div>
+
+  <div id="inputs">
+    <div class="k">THROTTLE</div><div class="bar" id="thr"><i></i></div>
+    <div class="k">BRAKE</div><div class="bar" id="brk"><i></i></div>
+    <div class="k">HANDBRAKE</div><div class="bar" id="hbk"><i></i></div>
+    <div class="k">STEERING</div><div id="wheel"><i></i></div>
+    <div id="grip">GRIP OK</div>
+  </div>
+
+  <div id="dash">
+    <div id="speed-box">
+      <div id="speed">0</div>
+      <div id="speed-u">KM/H</div>
+      <div id="autobox">AUTO BOX</div>
+    </div>
+    <div id="tacho">
+      <canvas id="tacho-c" width="260" height="260"></canvas>
+      <div id="gear">N</div>
+    </div>
+  </div>
+
+  <div id="lights"><i></i><i></i><i></i><i></i><i></i></div>
+  <div id="message"><div class="main"></div><div class="sub"></div></div>
+  <div id="flash-lap"></div>
+</div>
+
+<div id="results">
+  <h1>RACE RESULT</h1>
+  <div class="sub" id="results-sub">CIRCUIT DE VALMONT · 3 LAPS</div>
+  <table>
+    <thead><tr><th>POS</th><th>DRIVER</th><th>TIME</th><th>BEST LAP</th><th>GAP</th></tr></thead>
+    <tbody id="results-rows"></tbody>
+  </table>
+  <div class="again">PRESS R TO RACE AGAIN</div>
+</div>
+
+<div id="select">
+  <div class="head">
+    <h2>SELECT YOUR CAR</h2>
+    <div id="sel-name">GT COUPE</div>
+    <div id="sel-dots"></div>
+  </div>
+  <div class="foot">
+    <div><b>&#8592; &#8593; &#8595; &#8594;</b> CHOOSE</div>
+    <div class="go">ENTER TO RACE</div>
+  </div>
+</div>
+
+<div id="loading">
+  <div id="load-ring"><i></i><b></b></div>
+  <div class="txt">BUILDING <span id="load-what">THE CITY</span></div>
+</div>
+
+<div id="menu">
+  <div class="btns">
+    <button id="start">START</button>
+    <button id="settings-btn">SETTINGS</button>
+  </div>
+</div>
+
+<div id="name">
+  <h2>DRIVER</h2>
+  <input id="name-in" type="text" maxlength="14" placeholder="YOUR NAME" autocomplete="off" spellcheck="false">
+  <button id="name-go">CONTINUE</button>
+</div>
+
+<div id="settings">
+  <h2>SETTINGS</h2>
+  <label>VOLUME<input id="set-vol" type="range" min="0" max="100" value="70"></label>
+  <label>CAMERA<select id="set-view">
+    <option value="0">CHASE</option><option value="1">CLOSE</option>
+    <option value="2">BONNET</option><option value="3">COCKPIT</option>
+  </select></label>
+  <label>COLOUR GRADE<select id="set-grade">
+    <option value="0.55">ON</option><option value="0">OFF</option>
+  </select></label>
+  <label>BLOOM<select id="set-bloom">
+    <option value="1.15">ON</option><option value="0">OFF</option>
+  </select></label>
+  <button id="settings-close">BACK</button>
+</div>
+
+<script>
+  window.__errors = [];
+  addEventListener('error', (e) => window.__errors.push(`${e.message} @${(e.filename || '').split('/').pop()}:${e.lineno}`));
+  addEventListener('unhandledrejection', (e) => window.__errors.push(`promise: ${(e.reason && e.reason.stack) || e.reason}`));
+  if (new URLSearchParams(location.search).has('boot')) {
+    setTimeout(() => fetch('/__result', {
+      method: 'POST', body: `BOOT REPORT\n${window.__errors.join('\n') || 'no errors'}`,
+    }), 5000);
+  }
+</script>
+<script type="importmap">
+{ "imports": {
+    "three": "./vendor/three.module.js",
+    "three/addons/": "./vendor/addons/"
+} }
+</script>
+<script type="module" src="./src/main.js"></script>
+</body>
+</html>

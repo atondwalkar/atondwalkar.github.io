@@ -232,6 +232,10 @@
   }
   .kread-in{width:52px;font:inherit;color:inherit;background:#0b0d11;border:1px solid #ffd166;border-radius:3px;padding:0 2px;text-align:center}
   .val .kread-in{width:44px}
+  #midi-rec{font-size:9px;letter-spacing:.08em;color:var(--ink-dim)}
+  #midi-rec.on{color:#fff;background:#c0392b;border-color:#e74c3c}
+  #midi-led{display:inline-block;width:8px;height:8px;border-radius:50%;background:#2a3140;margin-left:4px;transition:background .08s}
+  #midi-led.on{background:#8adf9a;box-shadow:0 0 6px #8adf9a}
   #bpm-lock,#tap-bar{font-size:9px;letter-spacing:.08em;color:var(--ink-dim)}
   #bpm-lock.on{color:#ffd166;border-color:#ffd166}
   #tap-bar.on{color:#ff6b6b;border-color:#ff6b6b;animation:tapblink 1s steps(2,start) infinite}
@@ -643,6 +647,14 @@
       <button id="sw-down" aria-label="Decrease swing">−</button>
       <span class="val" id="sw-val">0%</span>
       <button id="sw-up" aria-label="Increase swing">+</button>
+    </div>
+  </div>
+  <div class="lcd" id="midi-wrap" hidden>
+    <label>MIDI</label>
+    <div class="stepper">
+      <select id="midi-in" class="duck-key" aria-label="MIDI input device" title="MIDI keyboard: plays the selected track's instrument; REC records what you play into MIDI items while the transport runs"></select>
+      <button id="midi-rec" aria-pressed="false" title="Record MIDI: while playing (Space), notes from the keyboard are written into the selected track's MIDI items (tick resolution — snap them afterwards if you like)">REC</button>
+      <i id="midi-led" title="MIDI activity"></i>
     </div>
   </div>
   <div class="lcd">
@@ -1536,7 +1548,7 @@ class S16WTVoice extends AudioWorkletProcessor{
   this.chaos=[]; Object.keys(sp.chaos||{}).forEach(k=>this.chaos.push({o:sp.chaos[k], u:0, pts:wtChaosPts(+k)}));
   this.tgtPrev=new Float64Array(32); this.tgtNow=new Float64Array(32); this.src=new Float64Array(22);
   this.slots=sp.slots||[]; this.first=true; this.killed=false; this.sh=wtvSh();
-  this.port.onmessage=e=>{ const d=e.data||{}; if(d.mac){ for(let i=0;i<4;i++) this.macT[i]=+d.mac[i]||0; } if(d.kill){ this.amp.startKill(); this.killed=true; } }; }
+  this.port.onmessage=e=>{ const d=e.data||{}; if(d.mac){ for(let i=0;i<4;i++) this.macT[i]=+d.mac[i]||0; } if(d.kill){ this.amp.startKill(); this.killed=true; } if(d.off) this.offReq=true; }; }
  evalSources(nEnd,dt){
   const sp=this.sp, sr=sampleRate, tau=nEnd/sr, tauEnd=this.endN/sr, S=this.src, tp=this.tgtPrev;
   const km=dt>0?1-Math.exp(-dt/0.02):1;
@@ -1556,6 +1568,7 @@ class S16WTVoice extends AudioWorkletProcessor{
   const L=out[0], R=out[1]||out[0], n=L.length, sr=sampleRate, sp=this.sp;
   const nRel=currentFrame-this.startF;
   if(nRel+n<=0){ L.fill(0); R.fill(0); return true; }
+  if(this.offReq){ this.offReq=false; if(nRel<this.amp.endN){ this.amp.endN=nRel; this.endN=nRel; this.stopN=Math.min(this.stopN, nRel+Math.round(3*sampleRate)); } }
   if(nRel>=this.stopN) return false;
   if(this.killed && this.amp.killN>0.05*sr) return false;
   const s0=nRel<0?-nRel:0, nStart=Math.max(0,nRel), nEnd=nRel+n;
@@ -2741,6 +2754,17 @@ function regVoice(c,env,srcs,stopT){
   const v=isNode?{node:env}:{env, srcs:srcs.filter(Boolean)};
   liveVoices.add(v);
   setTimeout(()=>{ liveVoices.delete(v); if(v.node){ try{ v.node.disconnect(); }catch(e){} } }, Math.max(0,(stopT-ctx.currentTime))*1000+200);
+  return v;
+}
+/* release one live voice early (MIDI note-off): worklet voices get an 'off' message, graph voices ramp their envelope */
+function releaseVoice(v,rel){
+  if(!v || !ctx) return;
+  const now=ctx.currentTime, r=Math.max(0.02,rel||0.25);
+  if(v.node){ try{ v.node.port.postMessage({off:true}); }catch(_){} return; }
+  try{
+    const g=v.env.gain; g.cancelScheduledValues(now); g.setValueAtTime(Math.max(1e-4,g.value),now); g.setTargetAtTime(1e-4,now,r/3);
+  }catch(_){}
+  v.srcs.forEach(s=>{ try{ s.stop(now+r*3+0.05); }catch(_){} });
 }
 function killVoices(){
   if(!ctx) return;
@@ -2864,7 +2888,7 @@ function samplerVoice(t,k,dur,dest,p,c,tap,vel,fx){
   src.connect(g); g.connect(dest); if(tap) g.connect(tap);
   src.start(t,s0, loop?undefined:Math.max(0.001,(s1-s0)));
   src.stop(stopT);
-  regVoice(c,g,[src],stopT);
+  return regVoice(c,g,[src],stopT);
 }
 function pluckVoice(t,k,dur,dest,p,c,tap,vel,bank){
   c=c||ctx;
@@ -2887,7 +2911,7 @@ function pluckVoice(t,k,dur,dest,p,c,tap,vel,bank){
   g.gain.setTargetAtTime(0.0001,end,relT/3);
   src.connect(g); g.connect(dest); if(tap) g.connect(tap);
   src.start(t); src.stop(stopT);
-  regVoice(c,g,[src],stopT);
+  return regVoice(c,g,[src],stopT);
 }
 function eguitarVoice(t,k,dur,dest,p,c,tap,vel){ return pluckVoice(t,k,dur,dest,p,c,tap,vel,egBufs); }
 function ebassVoice(t,k,dur,dest,p,c,tap,vel){ return pluckVoice(t,k,dur,dest,p,c,tap,vel,ebBufs); }
@@ -2938,7 +2962,7 @@ function choirVoice(t,k,dur,dest,p,c,vel){
   env.gain.setTargetAtTime(0.0001,end,rel);
   out.connect(env); env.connect(dest);
   lfo.start(t); lfo.stop(stopT);
-  regVoice(c,env,[...chOscs,lfo],stopT);
+  return regVoice(c,env,[...chOscs,lfo],stopT);
 }
 function fftRadix2(re,im,inv){
   const n=re.length;
@@ -3185,7 +3209,7 @@ function wavetableVoice(t,k,dur,dest,p,c,tap,vel,fx,fromK,legato){
     fx._liveMacros=(fx._liveMacros||[]).filter(m=>m.stopT>c.currentTime);
     fx._liveMacros.push({port:node.port,stopT:spec.stopT});
   }
-  regVoice(c,node,[],spec.stopT);
+  return regVoice(c,node,[],spec.stopT);
 }
 function wavetableVoiceGraph(t,k,dur,dest,p,c,tap,vel,fx,fromK,legato){
   c=c||ctx;
@@ -3388,7 +3412,7 @@ function wavetableVoiceGraph(t,k,dur,dest,p,c,tap,vel,fx,fromK,legato){
       sn.connect(g); g.connect(tgt.ap);
     });
   });
-  regVoice(c,ampEnv,vSrcs,stopT);
+  return regVoice(c,ampEnv,vSrcs,stopT);
 }
 function pianoVoice(t,k,dur,dest,c,vel){
   c=c||ctx;
@@ -3410,7 +3434,7 @@ function pianoVoice(t,k,dur,dest,c,vel){
   lp.connect(g); g.connect(dest);
   o1.start(t); o2.start(t);
   o1.stop(end+0.4); o2.stop(end+0.4);
-  regVoice(c,g,[o1,o2],end+0.4);
+  return regVoice(c,g,[o1,o2],end+0.4);
 }
 function noiseBuf(c){
   if(!c._s16noise){
@@ -3608,6 +3632,7 @@ function tapBarMeasure(){
 function updateTapBtn(){ const b=document.getElementById('tap-bar'); if(b){ b.classList.toggle('on',tapBarArmed); b.setAttribute('aria-pressed',String(tapBarArmed)); } }
 function stopAll(){
   tapBarMeasure();
+  if(typeof midiHeld!=='undefined'){ midiHeld.forEach(h=>{ if(h.rec) midiRecordOff(h); }); midiTakeHist=false; }
   if(countInTimer){
     clearTimeout(countInTimer); countInTimer=null;
     recorder=null;
@@ -8339,6 +8364,7 @@ const HK_ROWS=`    <div><span class="hk"><kbd>Space</kbd></span>play / stop</div
     <div><span class="hk"><kbd>G</kbd></span>group / ungroup selection (selecting one selects all)</div>
     <div><span class="hk"><kbd>K</kbd></span>marker at the playhead (press on a marker's spot to remove \u00b7 click jumps \u00b7 drag moves \u00b7 dbl-click deletes)</div>
     <div><span class="hk"><kbd>M</kbd></span>mute / unmute the selected track</div>
+    <div><span class="hk"><kbd>MIDI</kbd></span>a connected keyboard plays the selected track's instrument (velocity, sustain pedal); MIDI REC + play writes notes into its items</div>
     <div><span class="hk"><kbd>Y</kbd></span>merge selected clips or MIDI items</div>
     <div><span class="hk"><kbd>Click</kbd></span>select clip / item / note · <kbd>Ctrl</kbd>+click toggles · <kbd>Shift</kbd>+click selects the range</div>
     <div><span class="hk"><kbd>Drag</kbd></span>move selection (across tracks) · edges trim (clips &amp; MIDI items, on the timeline grid) · <kbd>Ctrl</kbd>+drag right edge stretches clips</div>
@@ -8671,6 +8697,123 @@ document.getElementById('tap-bar').onclick=()=>{
   tapBarArmed=!tapBarArmed; updateTapBtn();
   flash(tapBarArmed?'Tap-bar armed \u2014 press play, then stop after exactly one measure.':'Tap-bar disarmed.');
 };
+/* ============================== MIDI keyboard ============================== */
+let midiAccess=null, midiInId=localStorage.getItem('s16-midi')||'all', midiRec=false, midiSustain=false;
+const midiHeld=new Map(), midiSustained=new Set();     // note number → {v, tr, rec}
+let midiTakeHist=false;
+const MIDI_LIVE_DUR=60;                                   // sustaining voices run until note-off
+const midiWrap=document.getElementById('midi-wrap'), midiSel=document.getElementById('midi-in'), midiRecBtn=document.getElementById('midi-rec'), midiLed=document.getElementById('midi-led');
+function midiBlink(){ if(!midiLed) return; midiLed.classList.add('on'); clearTimeout(midiBlink._t); midiBlink._t=setTimeout(()=>midiLed.classList.remove('on'),90); }
+function midiTrack(){ return (selectedTrack && !selectedTrack.isMaster && tracksAll.includes(selectedTrack)) ? selectedTrack : null; }
+function midiVoiceOn(tr,k,vel){
+  const mfx=tr.fx.find(f=>f.type==='sampler' && !f.bypass);
+  const wfx=mfx?null:tr.fx.find(f=>f.type==='wt' && !f.bypass);
+  const cfx=(mfx||wfx)?null:tr.fx.find(f=>f.type==='choir' && !f.bypass);
+  const t=ctx.currentTime, dest=trackInput(tr);
+  if(mfx) return samplerVoice(t,k,mfx.params.oneShot?2:MIDI_LIVE_DUR,dest,mfx.params,ctx,synthAn(mfx),vel,mfx);
+  if(wfx) return wavetableVoice(t,k,MIDI_LIVE_DUR,dest,wfx.params,ctx,synthAn(wfx),vel,wfx);
+  if(gfxOf(tr)) return eguitarVoice(t,k,4,dest,gfxOf(tr).params,ctx,undefined,vel);
+  if(bfxOf(tr)) return ebassVoice(t,k,4,dest,bfxOf(tr).params,ctx,undefined,vel);
+  if(cfx) return choirVoice(t,k,MIDI_LIVE_DUR,dest,cfx.params,ctx,vel);
+  return pianoVoice(t,k,4,dest,ctx,vel);
+}
+function midiTick(){ return Math.max(0,Math.round(curPos()/stepDur())); }
+function midiItemAt(tr,kind,tick){
+  let it=tr.items.find(x=>x.kind===kind && tick>=x.startStep && tick<x.startStep+x.lenSteps);
+  if(!it){
+    if(!midiTakeHist){ pushHistory(); midiTakeHist=true; }
+    it=addMidiItem(tr,kind,Math.floor(tick/STEPS)*STEPS,STEPS);
+  }
+  return it;
+}
+function midiRecordOn(tr,k,vel,h){
+  if(!midiRec || !state.playing) return;
+  const tick=midiTick(), it=midiItemAt(tr,'piano',tick);
+  if(!midiTakeHist){ pushHistory(); midiTakeHist=true; }
+  const note={k, s:tick-it.startStep, l:Math.max(1,prGrid), v:+vel.toFixed(3)};
+  it.pat.push(note); h.rec={it,note};
+  renderItem(it); if(selMidiItem()===it) drawPianoRoll();
+}
+function midiRecordOff(h){
+  if(!h.rec) return;
+  const {it,note}=h.rec; h.rec=null;
+  if(state.playing){
+    const end=midiTick(); note.l=Math.max(1,end-(it.startStep+note.s));
+    if(note.s+note.l>it.lenSteps){ it.lenSteps=Math.ceil((note.s+note.l)/STEPS)*STEPS; }
+  }
+  renderItem(it); if(selMidiItem()===it) drawPianoRoll();
+}
+function midiRecordDrum(tr,id,vel){
+  if(!midiRec || !state.playing) return;
+  const tick=midiTick(), it=midiItemAt(tr,'drums',tick);
+  it.pat[id][tick-it.startStep]=Math.max(1,Math.round(vel*127));
+  renderItem(it); if(selMidiItem()===it) drawPianoRoll();
+}
+function midiNoteOn(note,vel){
+  const tr=midiTrack(); if(!tr) return;
+  ensureSamples().then(()=>{
+    const inst=trackInstrument(tr); if(!inst || !tracksAll.includes(tr)) return;
+    if(inst==='drums'){
+      const id=KEY_TO_DRUM[note-21]; if(!id) return;
+      playDrum(id,ctx.currentTime,drumDest(tr,id),ctx,{kit:drumKitOf(tr),vel,semi:0});
+      midiRecordDrum(tr,id,vel); return;
+    }
+    const k=note-21; if(k<0||k>87) return;
+    const prev=midiHeld.get(note); if(prev){ releaseVoice(prev.v); midiRecordOff(prev); midiSustained.delete(note); }
+    const h={v:midiVoiceOn(tr,k,vel), tr, rec:null};
+    midiHeld.set(note,h);
+    midiRecordOn(tr,k,vel,h);
+  });
+}
+function midiNoteOff(note){
+  const h=midiHeld.get(note); if(!h) return;
+  if(midiSustain){ midiSustained.add(note); return; }
+  midiHeld.delete(note);
+  releaseVoice(h.v); midiRecordOff(h);
+}
+function midiSustainSet(on){
+  midiSustain=on;
+  if(!on){ [...midiSustained].forEach(n=>{ midiSustained.delete(n); midiNoteOff(n); }); }
+}
+function midiAllOff(){ [...midiHeld.keys()].forEach(n=>{ const h=midiHeld.get(n); midiHeld.delete(n); releaseVoice(h.v); midiRecordOff(h); }); midiSustained.clear(); }
+function onMidiMessage(e){
+  const d=e.data; if(!d || d.length<2) return;
+  const type=d[0]&0xf0, d1=d[1], d2=d.length>2?d[2]:0;
+  midiBlink();
+  if(type===0x90 && d2>0) midiNoteOn(d1, d2/127);
+  else if(type===0x80 || (type===0x90 && d2===0)) midiNoteOff(d1);
+  else if(type===0xB0 && d1===64) midiSustainSet(d2>=64);
+  else if(type===0xB0 && (d1===120||d1===123)) midiAllOff();
+}
+function midiBind(){
+  if(!midiAccess) return;
+  midiAccess.inputs.forEach(inp=>{ inp.onmidimessage=(midiInId==='all'||inp.id===midiInId)?onMidiMessage:null; });
+}
+function midiFillSel(){
+  if(!midiSel) return;
+  midiSel.innerHTML='';
+  const inputs=midiAccess?[...midiAccess.inputs.values()]:[];
+  midiSel.appendChild(new Option(inputs.length?'all inputs':'no MIDI devices','all'));
+  inputs.forEach(i=>midiSel.appendChild(new Option(i.name||i.id,i.id)));
+  midiSel.value=[...midiSel.options].some(o=>o.value===midiInId)?midiInId:'all';
+  if(midiSel.value!==midiInId){ midiInId=midiSel.value; }
+}
+async function initMidi(){
+  if(!navigator.requestMIDIAccess){ if(midiWrap) midiWrap.hidden=true; return false; }
+  if(midiWrap) midiWrap.hidden=false;
+  try{
+    midiAccess=await navigator.requestMIDIAccess({sysex:false});
+    midiAccess.onstatechange=()=>{ midiFillSel(); midiBind(); };
+    midiFillSel(); midiBind();
+    return true;
+  }catch(e){ midiFillSel(); if(midiSel){ midiSel.innerHTML=''; midiSel.appendChild(new Option('MIDI blocked','all')); } return false; }
+}
+if(midiSel){
+  midiSel.onchange=()=>{ midiInId=midiSel.value; localStorage.setItem('s16-midi',midiInId); midiBind(); };
+  midiRecBtn.onclick=()=>{ midiRec=!midiRec; midiRecBtn.classList.toggle('on',midiRec); midiRecBtn.setAttribute('aria-pressed',String(midiRec));
+    flash(midiRec?'MIDI record on \u2014 press play; what you play on the keyboard is written into the selected track.':'MIDI record off.'); };
+  initMidi();
+}
 const tlockBtn=document.getElementById('bpm-lock');
 function setTempoLock(v){
   state.tempoLock=v!==false;

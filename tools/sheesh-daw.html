@@ -35,8 +35,10 @@
     border:1px solid var(--line);
     border-radius:var(--radius);
     padding:7px 12px;
-    display:flex;flex-wrap:wrap;gap:6px;align-items:center;
+    display:flex;flex-direction:column;gap:6px;align-items:stretch;
   }
+  header .hrow{display:flex;flex-wrap:wrap;gap:6px;align-items:center;min-width:0}
+  header .hrow2{padding-top:6px;border-top:1px solid var(--line)}
   .brand{display:flex;flex-direction:column;line-height:1.05;margin-right:4px}
   .brand b{font-size:17px;letter-spacing:.14em;font-weight:700}
   .brand span{font-size:9px;letter-spacing:.3em;color:var(--ink-dim);text-transform:uppercase}
@@ -236,7 +238,7 @@
   #midi-rec.on{color:#fff;background:#c0392b;border-color:#e74c3c}
   #midi-led{display:inline-block;width:8px;height:8px;border-radius:50%;background:#2a3140;margin-left:4px;transition:background .08s}
   #midi-led.on{background:#8adf9a;box-shadow:0 0 6px #8adf9a}
-  #bpm-lock,#tap-bar{font-size:9px;letter-spacing:.08em;color:var(--ink-dim)}
+  #bpm-lock,#tap-bar{font-size:9px;letter-spacing:.08em;color:var(--ink-dim);white-space:nowrap}
   #bpm-lock.on{color:#ffd166;border-color:#ffd166}
   #tap-bar.on{color:#ff6b6b;border-color:#ff6b6b;animation:tapblink 1s steps(2,start) infinite}
   @keyframes tapblink{to{opacity:.55}}
@@ -626,71 +628,75 @@
 <body>
 
 <header>
-  <div class="brand"><b>SHEESH&nbsp;DAW<span class="ver">V1.0</span><a class="gh" href="https://github.com/atondwalkar/sheesh-daw" target="_blank" rel="noopener" title="SHEESH DAW on GitHub" aria-label="SHEESH DAW on GitHub"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg></a><span class="pname" id="proj-name" role="button" tabindex="0" title="Project: Untitled — click to rename">Untitled</span></b></div>
-  <button id="play" class="play-btn" aria-label="Play or stop">&#9654;</button>
-  <button id="rec" class="rec-btn" aria-label="Record from microphone">&#9679;</button>
-  <button id="loop" class="loop-btn" aria-pressed="false">LOOP</button>
-  <button id="metro" class="loop-btn" aria-pressed="false" aria-label="Metronome" title="Metronome click — when on, recording starts after a 2-bar count-in"><svg width="17" height="17" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M5.4 2.2 L3.1 13.2 H12.9 L10.6 2.2 Z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><line x1="6.6" y1="2.2" x2="9.4" y2="2.2" stroke="currentColor" stroke-width="1.3"/><line x1="8" y1="11" x2="11.6" y2="3.4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><circle cx="11.6" cy="3.4" r="1.3" fill="currentColor"/><line x1="4.4" y1="10.6" x2="11.6" y2="10.6" stroke="currentColor" stroke-width="1"/></svg></button>
-  <div class="lcd">
-    <label>Tempo</label>
-    <div class="stepper">
-      <button id="bpm-down" aria-label="Decrease tempo">−</button>
-      <span class="val" id="bpm-val">180</span>
-      <button id="bpm-up" aria-label="Increase tempo">+</button>
-      <button id="tap-bar" aria-pressed="false" title="Set the tempo by playing one measure: arm this, press play, then stop — the played time becomes one full bar (uses the current time signature).">tap bar</button>
-      <button id="bpm-lock" class="on" aria-pressed="true" title="Tempo-lock audio clips: ON = clips follow BPM changes (varispeed + position). OFF = clips keep their absolute time and speed when the tempo changes (MIDI always follows).">sync</button>
+  <div class="hrow">
+    <div class="brand"><b>SHEESH&nbsp;DAW<span class="ver">V1.0</span><a class="gh" href="https://github.com/atondwalkar/sheesh-daw" target="_blank" rel="noopener" title="SHEESH DAW on GitHub" aria-label="SHEESH DAW on GitHub"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg></a><span class="pname" id="proj-name" role="button" tabindex="0" title="Project: Untitled — click to rename">Untitled</span></b></div>
+    <button id="play" class="play-btn" aria-label="Play or stop">&#9654;</button>
+    <button id="rec" class="rec-btn" aria-label="Record from microphone">&#9679;</button>
+    <button id="loop" class="loop-btn" aria-pressed="false">LOOP</button>
+    <button id="metro" class="loop-btn" aria-pressed="false" aria-label="Metronome" title="Metronome click — when on, recording starts after a 2-bar count-in"><svg width="17" height="17" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M5.4 2.2 L3.1 13.2 H12.9 L10.6 2.2 Z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><line x1="6.6" y1="2.2" x2="9.4" y2="2.2" stroke="currentColor" stroke-width="1.3"/><line x1="8" y1="11" x2="11.6" y2="3.4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><circle cx="11.6" cy="3.4" r="1.3" fill="currentColor"/><line x1="4.4" y1="10.6" x2="11.6" y2="10.6" stroke="currentColor" stroke-width="1"/></svg></button>
+    <div class="lcd">
+      <label>Position</label>
+      <span class="val" id="pos-val">1.1</span>
+    </div>
+    <div class="tools file-tools">
+      <span id="file-msg" hidden></span>
+      <button id="hk-btn" class="hk-btn" title="Show all keyboard shortcuts (?)" aria-expanded="false">Hotkeys</button>
+      <button id="new-proj" title="Save the current project, then start an empty one">New</button>
+      <button id="save-proj">Save</button>
+      <button id="open-proj">Open</button>
+      <button id="export-wav" title="Export a bar range as WAV">Export</button>
     </div>
   </div>
-  <div class="lcd">
-    <label>Swing</label>
-    <div class="stepper">
-      <button id="sw-down" aria-label="Decrease swing">−</button>
-      <span class="val" id="sw-val">0%</span>
-      <button id="sw-up" aria-label="Increase swing">+</button>
+  <div class="hrow hrow2">
+    <div class="lcd">
+      <label>Tempo</label>
+      <div class="stepper">
+        <button id="bpm-down" aria-label="Decrease tempo">−</button>
+        <span class="val" id="bpm-val">180</span>
+        <button id="bpm-up" aria-label="Increase tempo">+</button>
+        <button id="tap-bar" aria-pressed="false" title="Set the tempo by playing one measure: arm this, press play, then stop — the played time becomes one full bar (uses the current time signature).">tap bar</button>
+        <button id="bpm-lock" class="on" aria-pressed="true" title="Tempo-lock audio clips: ON = clips follow BPM changes (varispeed + position). OFF = clips keep their absolute time and speed when the tempo changes (MIDI always follows).">sync</button>
+      </div>
     </div>
-  </div>
-  <div class="lcd" id="midi-wrap" hidden>
-    <label>MIDI</label>
-    <div class="stepper">
-      <select id="midi-in" class="duck-key" aria-label="MIDI input device" title="MIDI keyboard: plays the selected track's instrument; REC records what you play into MIDI items while the transport runs"></select>
-      <button id="midi-rec" aria-pressed="false" title="Record MIDI: while playing (Space), notes from the keyboard are written into the selected track's MIDI items (tick resolution — snap them afterwards if you like)">REC</button>
-      <i id="midi-led" title="MIDI activity"></i>
+    <div class="lcd">
+      <label>Swing</label>
+      <div class="stepper">
+        <button id="sw-down" aria-label="Decrease swing">−</button>
+        <span class="val" id="sw-val">0%</span>
+        <button id="sw-up" aria-label="Increase swing">+</button>
+      </div>
     </div>
-  </div>
-  <div class="lcd">
-    <label>Meter</label>
-    <div class="stepper">
-      <span class="val" id="tsig-val" title="Time signature — double-click to type (e.g. 6/8, 7/8, 3/4)">4/4</span>
+    <div class="lcd">
+      <label>Meter</label>
+      <div class="stepper">
+        <span class="val" id="tsig-val" title="Time signature — double-click to type (e.g. 6/8, 7/8, 3/4)">4/4</span>
+      </div>
     </div>
-  </div>
-  <div class="lcd">
-    <label>Position</label>
-    <span class="val" id="pos-val">1.1</span>
-  </div>
-  <div class="lcd io-lcd">
-    <label>Input</label>
-    <select id="mic-sel"><option value="">default</option></select>
-  </div>
-  <div class="lcd io-lcd">
-    <label>Mode</label>
-    <select id="ch-sel">
-      <option value="monoL">Mono (In 1)</option>
-      <option value="monoR">Mono (In 2)</option>
-      <option value="monoSum">Mono (sum)</option>
-      <option value="stereo">Stereo</option>
-    </select>
-  </div>
-  <div class="lcd io-lcd" id="out-wrap" hidden>
-    <label>Output</label>
-    <select id="out-sel"><option value="">default</option></select>
-  </div>
-  <div class="tools file-tools">
-    <span id="file-msg" hidden></span>
-    <button id="hk-btn" class="hk-btn" title="Show all keyboard shortcuts (?)" aria-expanded="false">Hotkeys</button>
-    <button id="new-proj" title="Save the current project, then start an empty one">New</button>
-    <button id="save-proj">Save</button>
-    <button id="open-proj">Open</button>
-    <button id="export-wav" title="Export a bar range as WAV">Export</button>
+    <div class="lcd" id="midi-wrap" hidden>
+      <label>MIDI</label>
+      <div class="stepper">
+        <select id="midi-in" class="duck-key" aria-label="MIDI input device" title="MIDI keyboard: plays the selected track's instrument; REC records what you play into MIDI items while the transport runs"></select>
+        <button id="midi-rec" aria-pressed="false" title="Record MIDI: while playing (Space), notes from the keyboard are written into the selected track's MIDI items (tick resolution — snap them afterwards if you like)">REC</button>
+        <i id="midi-led" title="MIDI activity"></i>
+      </div>
+    </div>
+    <div class="lcd io-lcd">
+      <label>Input</label>
+      <select id="mic-sel"><option value="">default</option></select>
+    </div>
+    <div class="lcd io-lcd">
+      <label>Mode</label>
+      <select id="ch-sel">
+        <option value="monoL">Mono (In 1)</option>
+        <option value="monoR">Mono (In 2)</option>
+        <option value="monoSum">Mono (sum)</option>
+        <option value="stereo">Stereo</option>
+      </select>
+    </div>
+    <div class="lcd io-lcd" id="out-wrap" hidden>
+      <label>Output</label>
+      <select id="out-sel"><option value="">default</option></select>
+    </div>
   </div>
 </header>
 

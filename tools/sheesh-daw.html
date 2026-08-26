@@ -8804,18 +8804,36 @@ function midiFillSel(){
   midiSel.value=[...midiSel.options].some(o=>o.value===midiInId)?midiInId:'all';
   if(midiSel.value!==midiInId){ midiInId=midiSel.value; }
 }
-async function initMidi(){
+let midiBusy=false;
+async function initMidi(fromGesture){
   if(!navigator.requestMIDIAccess){ if(midiWrap) midiWrap.hidden=true; return false; }
   if(midiWrap) midiWrap.hidden=false;
+  if(midiBusy) return false;
+  midiBusy=true;
   try{
     midiAccess=await navigator.requestMIDIAccess({sysex:false});
     midiAccess.onstatechange=()=>{ midiFillSel(); midiBind(); };
     midiFillSel(); midiBind();
+    if(midiSel) midiSel.title='MIDI keyboard: plays the selected track\u2019s instrument; REC records what you play into MIDI items while the transport runs';
+    if(fromGesture) flash(midiAccess.inputs.size?'MIDI connected \u2014 '+[...midiAccess.inputs.values()].map(i=>i.name).join(', '):'MIDI allowed, but no input devices are visible yet.');
     return true;
-  }catch(e){ midiFillSel(); if(midiSel){ midiSel.innerHTML=''; midiSel.appendChild(new Option('MIDI blocked','all')); } return false; }
+  }catch(e){
+    midiAccess=null;
+    // Chrome auto-denies requests that don't come from a click: show a "connect" entry and retry on the next gesture
+    if(midiSel){ midiSel.innerHTML=''; midiSel.appendChild(new Option('connect MIDI\u2026','all')); midiSel.title='Click to connect your MIDI keyboard ('+(e&&e.name||'error')+': '+(e&&e.message||e)+')'; }
+    if(fromGesture) flash('MIDI not allowed: '+(e&&e.message||e)+' \u2014 allow MIDI for this page (lock icon \u2192 Site settings) and click again.');
+    return false;
+  }finally{ midiBusy=false; }
 }
+function midiWatchPermission(){                                    // re-request as soon as the user grants it in the browser UI
+  if(!(navigator.permissions && navigator.permissions.query)) return;
+  navigator.permissions.query({name:'midi'}).then(p=>{ p.onchange=()=>{ if(p.state!=='denied' && !midiAccess) initMidi(false); }; }).catch(()=>{});
+}
+midiWatchPermission();
 if(midiSel){
-  midiSel.onchange=()=>{ midiInId=midiSel.value; localStorage.setItem('s16-midi',midiInId); midiBind(); };
+  midiSel.addEventListener('pointerdown',()=>{ if(!midiAccess) initMidi(true); });   // a click is the gesture Chrome wants
+  midiSel.addEventListener('keydown',e=>{ if(!midiAccess && (e.key==='Enter'||e.key===' ')) initMidi(true); });
+  midiSel.onchange=()=>{ if(!midiAccess){ initMidi(true); return; } midiInId=midiSel.value; localStorage.setItem('s16-midi',midiInId); midiBind(); };
   midiRecBtn.onclick=()=>{ midiRec=!midiRec; midiRecBtn.classList.toggle('on',midiRec); midiRecBtn.setAttribute('aria-pressed',String(midiRec));
     flash(midiRec?'MIDI record on \u2014 press play; what you play on the keyboard is written into the selected track.':'MIDI record off.'); };
   initMidi();

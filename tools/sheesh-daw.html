@@ -958,6 +958,15 @@ const EQ_TYPES=['peaking','lowshelf','highshelf','lowpass','highpass','notch','b
 const EQ_TYPE_LABELS=['peak','lo shelf','hi shelf','lo pass','hi pass','notch','band pass'];
 function bandType(fx,i){ const t=fx.params['t'+i]; if(t!=null) return Math.max(0,Math.min(EQ_TYPES.length-1,Math.round(t))); return i===0?1:i===EQ_FREQS.length-1?2:0; }
 function bandIsPass(fx,i){ return bandType(fx,i)>=3; }   // gain-less types: lowpass / highpass / notch / bandpass
+function bandIsShelf(fx,i){ const t=bandType(fx,i); return t===1||t===2; }
+function bandQDefault(fx,i){ return bandType(fx,i)===0?2.2:0.7; }
+/* RBJ audio-EQ-cookbook shelf coefficients — Q sets the shelf's sharpness (0.7 = flattest, higher = a resonant edge) */
+function shelfCoef(type,f,gDb,Q,sr){
+  const A=Math.pow(10,gDb/40), w0=2*Math.PI*Math.min(f,sr*0.49)/sr, cs=Math.cos(w0), sn=Math.sin(w0), al=sn/(2*Math.max(0.05,Q)), k=2*Math.sqrt(A)*al;
+  if(type==='lowshelf') return [[A*((A+1)-(A-1)*cs+k), 2*A*((A-1)-(A+1)*cs), A*((A+1)-(A-1)*cs-k)], [(A+1)+(A-1)*cs+k, -2*((A-1)+(A+1)*cs), (A+1)+(A-1)*cs-k]];
+  return [[A*((A+1)+(A-1)*cs+k), -2*A*((A-1)+(A+1)*cs), A*((A+1)+(A-1)*cs-k)], [(A+1)-(A-1)*cs+k, 2*((A-1)-(A+1)*cs), (A+1)-(A-1)*cs-k]];
+}
+function shelfNode(c,type,f,gDb,Q){ const [ff,fb]=shelfCoef(type,f,gDb,Q,c.sampleRate); const n=c.createIIRFilter(ff,fb); n.shelfKey=type+'|'+f+'|'+gDb+'|'+Q; n.isShelf=true; return n; }
 /* plot scale: +24…+12 in the top 12 %, ±12 across the middle 58 %, -12…-60 in the bottom 30 % */
 function eqY(db,ch){
   const t=6, b=ch-6, y12=t+(b-t)*0.12, y0=t+(b-t)*0.41, ym12=t+(b-t)*0.70;
@@ -1148,6 +1157,7 @@ const FX_DEFS={
   }},
   width:{name:'Stereo Width', color:'#8adf9a', params:{
     width:{min:0,max:2,step:0.01,val:1,fmt:v=>Math.round(v*100)+'%'},
+    spread:{min:0,max:30,step:0.5,val:0,fmt:v=>(+v).toFixed(1).replace(/\.0$/,'')+' ms',label:'mono spread'},
     monofreq:{min:20,max:500,step:5,val:20,fmt:hzFmt,label:'mono below'},
   }},
 };
@@ -2171,7 +2181,7 @@ function buildFxCore(fx,c,useWorklet){
     });
     const inG=c.createGain(), outG=c.createGain();
     inG.connect(outG);                                          // flat EQ = straight through; bands are wired in applyFxTo
-    return {in:inG, out:outG, inG, outG, bands, activeKey:'-'};
+    return {in:inG, out:outG, inG, outG, bands, activeKey:'-', ctxRef:c};
   }
   if(t==='comp'){
     const cp=c.createDynamicsCompressor();
@@ -2338,8 +2348,11 @@ function buildFxCore(fx,c,useWorklet){
   }
   if(t==='width'){
     const inN=c.createGain(), out=c.createGain();
+    inN.channelCount=2; inN.channelCountMode='explicit'; inN.channelInterpretation='speakers';   // mono in → L=R (a splitter alone would leave R silent)
     const sp=c.createChannelSplitter(2), mg=c.createChannelMerger(2);
-    inN.connect(sp);
+    // mono spread: a short delay on the right channel (Haas) gives a mono source a side signal to widen
+    const hs=c.createChannelSplitter(2), hm=c.createChannelMerger(2), hd=c.createDelay(0.05);
+    inN.connect(hs); hs.connect(hm,0,0); hs.connect(hm,1,1); hd.connect(hm,0,1); hm.connect(sp);   // delay is only patched in when spread > 0 (a 0 ms DelayNode still adds latency)
     const mSum=c.createGain(); mSum.gain.value=0.5;
     sp.connect(mSum,0); sp.connect(mSum,1);
     const sL=c.createGain(); sL.gain.value=0.5;
@@ -2354,7 +2367,7 @@ function buildFxCore(fx,c,useWorklet){
     mSum.connect(mg,0,0); wGain.connect(mg,0,0);
     mSum.connect(mg,0,1); wGain.connect(sInv); sInv.connect(mg,0,1);
     mg.connect(out);
-    return {in:inN, out, wGain, sHp};
+    return {in:inN, out, wGain, sHp, hd, hs, hm, spreadOn:false};
   }
   return null;
 }
@@ -2461,14 +2474,22 @@ function applyFxTo(fx,n){
     const a=n.worklet.parameters.get('attack'); if(a) a.value=p.attack??0.002;
   }else if(fx.type==='eq'){
     let key='';
+    let rewire=false;
     n.bands.forEach((b,i)=>{
-      const ty=EQ_TYPES[bandType(fx,i)]; if(b.type!==ty) b.type=ty;
-      b.gain.value=(p['x'+i]===0)?0:(p['b'+i]||0);
-      b.frequency.value=p['f'+i]||EQ_FREQS[i];
-      if(ty!=='lowshelf' && ty!=='highshelf') b.Q.value=p['q'+i]||(ty==='peaking'?2.2:0.7);
+      const ty=EQ_TYPES[bandType(fx,i)];
+      const g=(p['x'+i]===0)?0:(p['b'+i]||0), f=p['f'+i]||EQ_FREQS[i], q=p['q'+i]||bandQDefault(fx,i);
+      if(ty==='lowshelf'||ty==='highshelf'){
+        const sk=ty+'|'+f+'|'+g+'|'+q;
+        if(!b.isShelf || b.shelfKey!==sk){ try{ b.disconnect(); }catch(e){} b=n.bands[i]=shelfNode(n.ctxRef||ctx,ty,f,g,q); rewire=true; }
+      }else{
+        if(b.isShelf){ try{ b.disconnect(); }catch(e){} b=n.bands[i]=(n.ctxRef||ctx).createBiquadFilter(); rewire=true; }
+        if(b.type!==ty) b.type=ty;
+        b.gain.value=g; b.frequency.value=f; b.Q.value=q;
+      }
       const pass=bandType(fx,i)>=3;
-      key+=((p.damt||0)>0 || (p['x'+i]!==0 && (pass || (p['b'+i]||0)!==0)))?'1':'0';   // only bands that do something get rendered
+      key+=((p.damt||0)>0 || (p['x'+i]!==0 && (pass || g!==0)))?'1':'0';   // only bands that do something get rendered
     });
+    if(rewire) n.activeKey='-';
     if(n.inG && key!==n.activeKey){
       n.activeKey=key;
       try{ n.inG.disconnect(); }catch(e){}
@@ -2616,6 +2637,15 @@ function applyFxTo(fx,n){
     }
     }
   }else if(fx.type==='width'){
+    if(n.hd){
+      const spd=(p.spread||0)/1000, on=spd>0;
+      n.hd.delayTime.value=spd;
+      if(on!==n.spreadOn){
+        n.spreadOn=on;
+        try{ n.hs.disconnect(1); }catch(e){}
+        if(on) n.hs.connect(n.hd,1); else n.hs.connect(n.hm,1,1);
+      }
+    }
     n.wGain.gain.value=p.width??1;
     n.sHp.frequency.value=p.monofreq??20;
   }else if(fx.type==='chorus'){
@@ -6117,7 +6147,7 @@ function renderFxPanel(){
       const bkRow=document.createElement('div'); bkRow.className='knob-row';
       const mkBand=(label,pref,min,max,step,fmt,log,defV)=>{
         const kb=makeGKnob({label,min,max,step,fmt,log,def:defV,
-          get:()=>fx.params[pref+fx._selBand] ?? (pref==='b'?0:pref==='f'?EQ_FREQS[fx._selBand]:2.2),
+          get:()=>fx.params[pref+fx._selBand] ?? (pref==='b'?0:pref==='f'?EQ_FREQS[fx._selBand]:bandQDefault(fx,fx._selBand)),
           set:v=>{ fx.params[pref+fx._selBand]=v; applyFx(fx); refreshBand(); }});
         bandKnobs.push(kb);
         bkRow.appendChild(kb.el);
@@ -6353,13 +6383,14 @@ function processDynEq(){
     if(fx.type!=='eq' || !fx.nodes || !fx.nodes.preAn) return;
     const n=fx.nodes, amt=fx.params.damt||0;
     if(!amt){
-      if(n.dynOn){ n.dynOn=false; n.bands.forEach((b,i)=>{ b.gain.value=bandOn(fx,i)?(fx.params['b'+i]||0):0; }); }
+      if(n.dynOn){ n.dynOn=false; n.bands.forEach((b,i)=>{ if(b.gain) b.gain.value=bandOn(fx,i)?(fx.params['b'+i]||0):0; }); }
       return;
     }
     n.dynOn=true;
     n.preAn.getByteFrequencyData(dynBuf);
     const binHz=ctx.sampleRate/2/n.preAn.frequencyBinCount;
     n.bands.forEach((b,i)=>{
+      if(!b.gain) return;                                        // IIR shelves: static gain
       if(!bandOn(fx,i)){ b.gain.value=0; return; }
       const f=bandFreq(fx,i);
       const k0=Math.max(0,Math.floor(f/Math.SQRT2/binHz));
@@ -6375,9 +6406,11 @@ function processDynEq(){
 }
 const EQ_FR_N=160;
 let eqFr=null, eqMag=null, eqPh=null, eqMagAcc=null, eqProbe=null;
+let eqProbeCtx=null;
 function eqProbeBands(){
   if(!eqProbe){
     const pc=new OfflineAudioContext(1,128,(ctx&&ctx.sampleRate)||44100);
+    eqProbeCtx=pc;
     eqProbe=EQ_FREQS.map((f,i)=>{
       const b=pc.createBiquadFilter();
       b.type = i===0 ? 'lowshelf' : i===EQ_FREQS.length-1 ? 'highshelf' : 'peaking';
@@ -6454,10 +6487,15 @@ function drawEq(fx){
   }else{
     eqMagAcc.fill(1);
     eqProbeBands().forEach((b,i)=>{
-      b.type=EQ_TYPES[bandType(fx,i)];
+      const ty=EQ_TYPES[bandType(fx,i)];
+      if(ty==='lowshelf'||ty==='highshelf'){
+        const sh=shelfNode(eqProbeCtx,ty,bandFreq(fx,i),bandOn(fx,i)?(fx.params['b'+i]||0):0,fx.params['q'+i]||0.7);
+        sh.getFrequencyResponse(eqFr,eqMag,eqPh); for(let j=0;j<EQ_FR_N;j++) eqMagAcc[j]*=eqMag[j]; return;
+      }
+      b.type=ty;
       b.gain.value=bandOn(fx,i)?(fx.params['b'+i]||0):0;
       b.frequency.value=bandFreq(fx,i);
-      if(b.type!=='lowshelf' && b.type!=='highshelf') b.Q.value=fx.params['q'+i]||(b.type==='peaking'?2.2:0.7);
+      b.Q.value=fx.params['q'+i]||(ty==='peaking'?2.2:0.7);
       b.getFrequencyResponse(eqFr,eqMag,eqPh);
       for(let j=0;j<EQ_FR_N;j++) eqMagAcc[j]*=eqMag[j];
     });

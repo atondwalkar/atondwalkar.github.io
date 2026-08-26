@@ -3642,11 +3642,12 @@ function scheduleClips(pos, at){
       const end=c.start+tlDur;
       if(end<=pos+0.001 || c.start>=cap) return;
       const when=at + Math.max(0,c.start-pos);
-      const srcOff=c.offset + Math.max(0,pos-c.start)*rate;
+      const srcOff=wrapOff(c, c.offset + Math.max(0,pos-c.start)*rate);
       const f0=fades.get(c)||{};
       const tlPlay=Math.min(end+(f0.ext||0),cap) - Math.max(pos,c.start);
       const src=ctx.createBufferSource(); src.buffer=c.buffer;
       src.playbackRate.value=rate;
+      src.loop=true; src.loopStart=0; src.loopEnd=c.buffer.duration;   // clips loop their source: slip/trim past the ends wraps around
       const genv=ctx.createGain(), G=clipGainLin(c);
       const T=tl=>at+(tl-pos);
       const f=fades.get(c)||{};
@@ -3839,6 +3840,7 @@ const splitBtn=document.getElementById('clip-split');
 
 function clipRate(c){ return (state.bpm/(c.nativeBpm||state.bpm))/(c.stretch||1)*Math.pow(2,(c.semis||0)/12); }
 function clipGainLin(c){ return Math.pow(10,(c.gain||0)/20); }
+function wrapOff(c,off){ const D=c.buffer.duration; return ((off%D)+D)%D; }   // clip sources loop: any offset is valid
 /* reversed copy of an AudioBuffer, cached both ways so toggling is free */
 function reversedBuffer(b){
   if(b._rev) return b._rev;
@@ -3848,7 +3850,7 @@ function reversedBuffer(b){
 }
 function toggleClipReverse(c){
   const nb=reversedBuffer(c.buffer);
-  c.offset=Math.max(0,c.buffer.duration-c.offset-c.dur);
+  c.offset=wrapOff(c,c.buffer.duration-c.offset-c.dur);
   c.buffer=nb; c.rev=!c.rev; c._pk=undefined;
 }
 function splitClipAt(c,pos){
@@ -3885,7 +3887,7 @@ function clipFades(tr){
     if(i>0 && !fi){
       const pv=arr[i-1], pf=fades.get(pv), pend=pv.start+clipTlDur(pv);
       if(pf && !pf.fo && Math.abs(pend-c.start)<=0.005){
-        const room=(pv.buffer.duration-(pv.offset+pv.dur))/clipRate(pv);   // how far the source can run past the trim
+        const room=Infinity;                                               // sources loop, so the earlier clip can always run past its trim
         const xf=Math.min(CLIP_XF, Math.max(0,room), end-c.start);
         if(xf>0.0005){ fi=[c.start,c.start+xf]; pf.fo=[c.start,c.start+xf]; pf.ext=Math.max(0,(c.start+xf)-pend); fades.get(c).fi=fi; }
       }
@@ -4601,7 +4603,8 @@ function renderClip(c){
     for(let x=0;x<w;x++){
       let mn=1,mx=-1;
       const a=s0+Math.floor(x*spp), b=a+Math.max(1,Math.floor(spp));
-      for(let i=a;i<b;i+=stride){ const val=data[i]||0; if(val<mn)mn=val; if(val>mx)mx=val; }
+      const N=data.length;
+      for(let i=a;i<b;i+=stride){ const val=data[((i%N)+N)%N]||0; if(val<mn)mn=val; if(val>mx)mx=val; }
       if(mx<mn){mn=0;mx=0;}
       g.fillRect(x, mid-mx*amp, 1, Math.max(1,(mx-mn)*amp));
     }
@@ -4703,7 +4706,7 @@ function bindClipPointer(clip){
       if(mode==='m'){ if(dragGroupMove(G,clip,dx,laneTrackAt(ev.clientY))) moved=true; return; }
       if(mode==='slip'){
         const rate=clipRate(clip);
-        clip.offset=Math.max(0,Math.min(clip.buffer.duration-o.dur, o.offset-dx*rate));
+        clip.offset=wrapOff(clip, o.offset-dx*rate);        // unbounded: the source loops
         renderClip(clip); return;
       }
       if(mode==='fi'||mode==='fo'){
@@ -4715,14 +4718,14 @@ function bindClipPointer(clip){
         const rate=clipRate(clip);
         let ns=snapSec(o.start+dx);
         ns=Math.min(ns, o.start+o.dur/rate-0.05);
-        ns=Math.max(ns, o.start-o.offset/rate, 0);
-        clip.offset=o.offset+(ns-o.start)*rate;
+        ns=Math.max(ns, 0);
+        clip.offset=wrapOff(clip, o.offset+(ns-o.start)*rate);
         clip.dur=o.dur-(ns-o.start)*rate;
         clip.start=ns;
       }else if(mode==='r'){
         const rate=clipRate(clip);
         let nd=snapSec(o.dur/rate+dx)*rate;
-        nd=Math.max(0.05,Math.min(nd, clip.buffer.duration-o.offset));
+        nd=Math.max(0.05,Math.min(nd, 1800));                 // may run past the source: it loops
         clip.dur=nd;
       }else if(mode==='rs'){
         const bpmRatio=state.bpm/(clip.nativeBpm||state.bpm);
@@ -5128,12 +5131,13 @@ function mergeClips(tr,clips){
       const dst=out.getChannelData(chn), src=c.buffer.getChannelData(Math.min(chn,c.buffer.numberOfChannels-1));
       for(let n=n0;n<n1;n++){
         const tlT=t0+n/sr;
-        const sp=(c.offset+(tlT-c.start)*rate)*bsr, i=Math.floor(sp), fr=sp-i;
-        if(i<0 || i+1>=src.length) continue;
+        const sp=(c.offset+(tlT-c.start)*rate)*bsr, ii=Math.floor(sp), fr=sp-ii;
+        const i=((ii%src.length)+src.length)%src.length;
+        if(src.length<2) continue;
         let g=1;
         if(f.fi && tlT<f.fi[1]) g*=Math.max(0,Math.min(1,(tlT-f.fi[0])/Math.max(1e-6,f.fi[1]-f.fi[0])));
         if(f.fo && tlT>f.fo[0]) g*=Math.max(0,Math.min(1,1-(tlT-f.fo[0])/Math.max(1e-6,f.fo[1]-f.fo[0])));
-        dst[n]+=(src[i]+(src[i+1]-src[i])*fr)*g*clipGainLin(c);
+        dst[n]+=(src[i]+(src[(i+1)%src.length]-src[i])*fr)*g*clipGainLin(c);
       }
     }
   });
@@ -7904,6 +7908,7 @@ async function exportWav(){
         if(c.start>=expEnd || cEnd<=expStart) return;
         const src=off.createBufferSource(); src.buffer=c.buffer;
         src.playbackRate.value=rate;
+        src.loop=true; src.loopStart=0; src.loopEnd=c.buffer.duration;
         const genv=off.createGain(), G=clipGainLin(c);
         const T=tl=>Math.max(0,tl-expStart);
         const f=fades.get(c)||{};
@@ -7918,7 +7923,7 @@ async function exportWav(){
         }
         src.connect(genv); genv.connect(dests[tr.id]);
         src.start(Math.max(0,c.start-expStart),
-                  c.offset+Math.max(0,expStart-c.start)*rate,
+                  wrapOff(c, c.offset+Math.max(0,expStart-c.start)*rate),
                   (Math.min(cEnd+(f.ext||0),expEnd)-Math.max(c.start,expStart))*rate);
       });
     });
@@ -8000,7 +8005,7 @@ function snapState(){
           : Array.from(it.pat),
       })),
       auto:serAutos(t), amode:t.autoMode||'read',
-      clips:t.clips.map(c=>({buf:ref(c.rev&&c.buffer._rev?c.buffer._rev:c.buffer), start:c.start, offset:c.rev?Math.max(0,c.buffer.duration-c.offset-c.dur):c.offset, dur:c.dur, name:c.name, nb:c.nativeBpm, st:c.stretch||1, g:c.grp??null, gn:c.gain||0, fi:c.fadeIn||0, fo:c.fadeOut||0, sm:c.semis||0, rv:c.rev?1:0})),
+      clips:t.clips.map(c=>({buf:ref(c.rev&&c.buffer._rev?c.buffer._rev:c.buffer), start:c.start, offset:c.rev?wrapOff(c,c.buffer.duration-c.offset-c.dur):c.offset, dur:c.dur, name:c.name, nb:c.nativeBpm, st:c.stretch||1, g:c.grp??null, gn:c.gain||0, fi:c.fadeIn||0, fo:c.fadeOut||0, sm:c.semis||0, rv:c.rev?1:0})),
     })),
   };
   DRUMS.forEach(d=>{
@@ -8206,7 +8211,7 @@ async function saveProject(){
             : Array.from(it.pat),
         })),
         auto:serAutos(t), amode:t.autoMode||'read',
-        clips:t.clips.map(c=>({buf:bufRef(c.rev&&c.buffer._rev?c.buffer._rev:c.buffer), start:c.start, offset:c.rev?Math.max(0,c.buffer.duration-c.offset-c.dur):c.offset, dur:c.dur, name:c.name, nb:c.nativeBpm, st:c.stretch||1, g:c.grp??null, gn:c.gain||0, fi:c.fadeIn||0, fo:c.fadeOut||0, sm:c.semis||0, rv:c.rev?1:0})),
+        clips:t.clips.map(c=>({buf:bufRef(c.rev&&c.buffer._rev?c.buffer._rev:c.buffer), start:c.start, offset:c.rev?wrapOff(c,c.buffer.duration-c.offset-c.dur):c.offset, dur:c.dur, name:c.name, nb:c.nativeBpm, st:c.stretch||1, g:c.grp??null, gn:c.gain||0, fi:c.fadeIn||0, fo:c.fadeOut||0, sm:c.semis||0, rv:c.rev?1:0})),
       })),
     };
     DRUMS.forEach(d=>{

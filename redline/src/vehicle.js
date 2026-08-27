@@ -61,7 +61,7 @@ export class Vehicle {
     this.omegaF = 0;         // front axle wheel speed, rad/s
     this.omegaR = 0;         // rear axle wheel speed, rad/s
     this.rpm = spec.idleRpm;
-    this.gear = 1;           // index into spec.gears; 0 is reverse, 1 neutral
+    this.gear = 1;           // index into spec.gears; 0 is reverse, 1 is first
     this.shiftT = 0;
     this.autoShift = true;
     this.wantReverse = false;
@@ -109,7 +109,8 @@ export class Vehicle {
   get forwardX() { return Math.sin(this.yaw); }
   get forwardZ() { return Math.cos(this.yaw); }
   get gearRatio() { return this.spec.gears[this.gear]; }
-  get inGear() { return this.gear !== 1 && this.shiftT <= 0; }
+  // Always in a gear now, except during the change itself.
+  get inGear() { return this.shiftT <= 0; }
 
   // Where the wheels sit in body coordinates — used by the models, the tyre
   // smoke and the collision box alike.
@@ -159,7 +160,11 @@ export class Vehicle {
   }
 
   shiftDown() {
-    if (this.shiftT > 0 || this.gear <= 0) return false;
+    // Down to first and no further. Reverse is not below first, it is chosen
+    // by holding the brake at a standstill — with no neutral between the two,
+    // letting the lever reach it would mean two pulls at a red light selects
+    // reverse.
+    if (this.shiftT > 0 || this.gear <= 1) return false;
     this.gear--;
     this.shiftT = this.spec.shiftTime;
     return true;
@@ -179,14 +184,9 @@ export class Vehicle {
     if (this.shiftT > 0) return;
     const top = this.spec.gears.length - 1;
     const wantsBack = this.wantReverse;
-    if (this.gear === 1) {
-      if (wantsBack && Math.abs(this.u) < 1) { this.gear = 0; this.reverseT = 1.4; }
-      else if (this.throttle > 0.02) this.gear = 2;
-      return;
-    }
     if (this.gear === 0) {                                  // reverse
       // Stay in it long enough to actually get out of trouble.
-      if (!this.wantReverse && this.reverseT <= 0 && this.u > -0.4) this.gear = 2;
+      if (!this.wantReverse && this.reverseT <= 0 && this.u > -0.4) this.gear = 1;
       return;
     }
     if (wantsBack && Math.abs(this.u) < 0.6) { this.gear = 0; this.reverseT = 1.4; return; }
@@ -195,7 +195,7 @@ export class Vehicle {
       this.shiftUp();
       return;
     }
-    if (this.gear > 2 && this.rpmInGear(this.gear - 1) < this.spec.redline * 0.86) {
+    if (this.gear > 1 && this.rpmInGear(this.gear - 1) < this.spec.redline * 0.86) {
       // Only drop down when we actually want the engine: coasting into a corner
       // on the brakes, or asking for more than this gear can give.
       if (this.rpm < this.spec.redline * 0.55 || this.brake > 0.25) this.shiftDown();

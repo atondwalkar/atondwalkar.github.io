@@ -311,7 +311,7 @@ class Game {
         // with paddles does not let you do — but a keyboard should.
         const n = ['Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5', 'Digit6'].indexOf(code);
         if (n >= 0 && !v.autoShift) {
-          const want = n + 2;
+          const want = n + 1;
           if (want !== v.gear && v.shiftT <= 0) {
             const up = want > v.gear;
             v.gear = want;

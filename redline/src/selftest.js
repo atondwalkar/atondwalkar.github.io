@@ -58,10 +58,11 @@ function checkAcceleration() {
   const top = v.speedKmh;
   const ok = to100 > 2.2 && to100 < 6.5 && top > 240 && top < 360;
   return `${ok ? 'as specified' : 'OUT OF RANGE'} — 0–100 in ${to100.toFixed(2)}s, ` +
-    `0–200 in ${to200 ? to200.toFixed(2) : '--'}s, top ${top.toFixed(0)} km/h in ${v.gear - 1}${nth(v.gear)}`;
+    `0–200 in ${to200 ? to200.toFixed(2) : '--'}s, top ${top.toFixed(0)} km/h in ${v.gear}${nth(v.gear)}`;
 }
 
-const nth = (g) => (g === 2 ? 'st' : g === 3 ? 'nd' : g === 4 ? 'rd' : 'th');
+// Takes the gear NUMBER, which is now the same as its index into CAR.gears.
+const nth = (g) => (g === 1 ? 'st' : g === 2 ? 'nd' : g === 3 ? 'rd' : 'th');
 
 // A hundred kilometres an hour to a standstill, in metres.
 function checkBraking() {
@@ -90,10 +91,28 @@ function checkBraking() {
 
 // Six gears that actually do different things. The speed each one reaches at
 // the redline must climb, and first must not be able to reach top speed.
+// No neutral. The array is [R, 1..6]: shifting down from first must stay in
+// first rather than dropping into reverse, and there must be no ratio of zero
+// anywhere in it.
+function checkNoNeutral() {
+  const zeros = CAR.gears.filter((g) => g === 0).length;
+  const v = bench();
+  v.autoShift = false;
+  v.gear = 1;
+  v.shiftT = 0;
+  v.shiftDown();
+  const held = v.gear === 1;
+  const ok = zeros === 0 && held && CAR.gears.length === 7;
+  return `${ok ? 'no neutral to fall into' : 'WRONG'} — ` +
+    `${CAR.gears.length - 1} ratios and reverse, ${zeros} of them zero, ` +
+    `shifting down from first ${held ? 'stays in first' : `gave ${v.gear}`}`;
+}
+
 function checkGearbox() {
   const v = bench();
   const speeds = [];
-  for (let g = 2; g < CAR.gears.length; g++) {
+  // From index 1: the array is [R, 1..6] now, with no neutral between them.
+  for (let g = 1; g < CAR.gears.length; g++) {
     const ratio = CAR.gears[g] * CAR.finalDrive;
     const omega = (CAR.redline / 60) * Math.PI * 2 / ratio;
     speeds.push(omega * CAR.wheelRadius * 3.6);
@@ -104,7 +123,7 @@ function checkGearbox() {
   // And the shift itself: changing up must drop the revs.
   const c = bench();
   c.autoShift = false;
-  step(c, 6, (x) => { x.throttle = 1; if (x.gear === 1) x.gear = 2; });
+  step(c, 6, (x) => { x.throttle = 1; });
   const before = c.rpm;
   const gearBefore = c.gear;
   c.shiftUp();
@@ -287,7 +306,7 @@ function checkSteering(game) {
     step(v, 6, (c) => { c.throttle = 0.7; });
     v.reset(0, 0, 0);
     v.setSpeed(26);
-    v.gear = 4;
+    v.gear = 3;
     step(v, 1.4, (c) => { c.throttle = 0.35; c.steerInput = input; });
     return { x: v.x, yaw: v.yaw, steer: v.steer };
   };
@@ -323,7 +342,11 @@ function checkSteering(game) {
   const v = player.vehicle;
   const wasAuto = v.autoShift, wasGear = v.gear, wasThr = v.throttle, wasBrk = v.brake;
   v.autoShift = false;
-  v.gear = 3;
+  // Relative to wherever it starts, rather than hard-coded gear numbers: the
+  // numbers changed when neutral was taken out of the array, and an assertion
+  // written in absolute indices reported a working gearbox as broken.
+  const START = 2;
+  v.gear = START;
   v.shiftT = 0;
   v.throttle = 0;
   v.brake = 0;
@@ -347,9 +370,12 @@ function checkSteering(game) {
   race.state = wasState;
   player.driver = wasDriver;
   player.vehicle.steerInput = wasInput;
-  notes.push(up === 4 && down === 3
+  // Two downs, one shift: the second is inside the shift time and refused,
+  // which is the gearbox behaving, so it lands back where it started.
+  notes.push(up === START + 1 && down === START
     ? 'up-arrow shifts up, down-arrow shifts down'
-    : `ARROWS DO NOT SHIFT — from 3rd, up gave ${up} and two downs gave ${down}`);
+    : `ARROWS DO NOT SHIFT — from ${START}${nth(START)}, `
+      + `up gave ${up} and a down gave ${down}`);
   notes.push(pedals < 0.01 ? 'and neither touches a pedal'
     : `ARROW ALSO DRIVES A PEDAL (${pedals.toFixed(2)})`);
   return notes.join(', ');
@@ -1076,6 +1102,7 @@ function assertions(game) {
     `braking        ${checkBraking()}`,
     `brake balance  ${checkBrakeStability()}`,
     `gearbox        ${checkGearbox()}`,
+    `neutral        ${checkNoNeutral()}`,
     `cornering      ${checkCornering()}`,
     `held turn      ${checkHeldTurn()}`,
     `steering       ${checkSteering(game)}`,
@@ -1127,7 +1154,7 @@ export function runSelfTest(game, seconds) {
         `player ${race.player.position}/${RACE.cars}`,
       `activity       ${stats.laps} timed laps by the field`,
       `player         ${race.player.speedKmh.toFixed(0)} km/h in gear ` +
-        `${race.player.vehicle.gear - 1}, best lap ${lapTime(race.player.bestLap)}`,
+        `${race.player.vehicle.gear}, best lap ${lapTime(race.player.bestLap)}`,
     ];
 
     const lines = [

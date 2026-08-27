@@ -87,7 +87,7 @@ export class Hud {
 
     // --- dash
     this._set('spd', this.el.speed, String(Math.round(Math.abs(v.speedKmh))));
-    const gearName = v.gear === 0 ? 'R' : v.gear === 1 ? 'N' : String(v.gear - 1);
+    const gearName = v.gear === 0 ? 'R' : String(v.gear);
     this._set('gear', this.el.gear, gearName);
     const nearRed = v.rpm > v.spec.redline * 0.94;
     this.el.gear.classList.toggle('shift', nearRed);

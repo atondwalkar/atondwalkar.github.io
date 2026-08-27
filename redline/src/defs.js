@@ -35,7 +35,15 @@ export const CAR = {
   limiter: 8000,            // hard cut
   torque: TORQUE,
   // Six speeds and a final drive. Top gear pulls about 300 km/h at the redline.
-  gears: [-3.30, 0, 3.60, 2.35, 1.72, 1.35, 1.10, 0.90],   // [R, N, 1..6]
+  // [R, 1..6]. No neutral.
+  //
+  // There was one, at index 1, and it earned nothing: you cannot coast to any
+  // advantage in a race this short, selecting it by hand only ever cost you
+  // drive, and it sat between first and reverse so that shifting down twice at
+  // a standstill put you in reverse by accident. Reverse is chosen the way it
+  // always was — hold the brake at a standstill — not by shifting past a
+  // neutral to reach it.
+  gears: [-3.30, 3.60, 2.35, 1.72, 1.35, 1.10, 0.90],
   finalDrive: 3.55,
   shiftTime: 0.16,          // seconds of cut torque while the gear changes
   clutchTorque: 620,        // Nm the clutch can hold while it is slipping

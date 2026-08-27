@@ -82,6 +82,22 @@ gear. Changing up cuts the drive for a sixth of a second and drops
 the revs by about two thousand, which you can hear, because the engine note is
 synthesised from the rpm the physics is already calculating.
 
+**There is no neutral.** The ratio table is `[R, 1..6]`, and reverse is chosen
+the way it always was — hold the brake at a standstill — rather than by
+shifting past a neutral to reach it. Neutral earned nothing: you cannot coast
+to any advantage over three laps, selecting it by hand only ever cost you
+drive, and sitting between first and reverse meant two pulls of the lever at a
+standstill put you in reverse by accident. Shifting down from first now stays
+in first.
+
+Taking it out moved every index in the array, which is the sort of change that
+quietly breaks things one at a time — the HUD's gear letter, the number keys,
+the automatic's thresholds, the acceleration report's ordinal. The smoke test
+caught the one I missed, and the assertion it caught it with was itself written
+in absolute gear numbers, so that had to be rewritten relative to where the
+test starts. It now also asserts the array has no zero ratio in it and that
+first is the bottom of the box.
+
 **G** hands the box to the automatic if you would rather steer.
 
 The clutch slips below idle, so you can pull away from the grid — and light the

@@ -589,6 +589,24 @@ function checkSideStreets(track) {
   // Every corner must be signed, whether or not it has a side street to hang
   // the board on. The shallow ones have no street — the sign is the part that
   // matters, and losing the street must not lose the sign.
+  // And none of them may run alongside the circuit. "Straight on" at a corner
+  // continues the leg you arrived down, so at a shallow bend it separates from
+  // the course so slowly that it sits a few metres off the kerb for a hundred
+  // metres — a second carriageway beside the racing line rather than a fork.
+  let hug = Infinity, hugPar = 0;
+  for (const t of track.stubs) {
+    for (let d = 26; d < t.len; d += 4) {
+      const x = t.x + t.ux * d, z = t.z + t.uz * d;
+      const loc = track.locate(x, z);
+      const gap = Math.abs(loc.lateral) - loc.width / 2;
+      if (gap < hug) {
+        hug = gap;
+        hugPar = Math.abs(t.ux * loc.sample.dirX + t.uz * loc.sample.dirZ);
+      }
+    }
+  }
+  if (hug < 16) bad.push(`one running ${hug.toFixed(0)} m off the kerb`);
+
   // How many corners have a street off them at all — the thing that makes a
   // corner read as a junction rather than as a bend with a sign beside it.
   let withStreet = 0;
@@ -613,7 +631,8 @@ function checkSideStreets(track) {
     `${track.stubs.length} of them, ${blocked} blockaded, ${teed} Teeing into a cross street, ` +
     `${withStreet}/${track.corners.length} corners with a street off them` +
     `${bare.length ? ` (bare at ${bare.join(' ')})` : ''}, ` +
-    `${signedCorners} signed, ${corners} curb returns, ` +
+    `${signedCorners} signed, closest runs ${hug.toFixed(0)} m off the kerb ` +
+    `at ${hugPar.toFixed(2)} parallel, ${corners} curb returns, ` +
     `beacons ${lit ? 'flashing' : 'DEAD'}`;
 }
 
@@ -1230,6 +1249,15 @@ function dumpFrames(game) {
           [sign.x + t.ux * 5, y + 2.2, sign.z + t.uz * 5], 44);
       }
     }
+  }
+
+  // Straight down the longest side street from the circuit — which is the
+  // view that shows whatever is standing behind it.
+  {
+    const t = track.stubs.reduce((best, q) => (q.len > best.len ? q : best), track.stubs[0]);
+    const y = track.locate(t.x, t.z).y;
+    shot('down-stub', [t.x - t.ux * 18, y + 2.2, t.z - t.uz * 18],
+      [t.x + t.ux * 200, y + 34, t.z + t.uz * 200], 50);
   }
 
   // The far end of a side street, where it Ts into a cross street. What is

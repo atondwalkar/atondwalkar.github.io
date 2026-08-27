@@ -1570,18 +1570,30 @@ export class Track {
     //
     // The way straight on, and the way back off the other side. Those two plus
     // the two the circuit uses make the crossroads.
+    const SQUARE = 1.05;                 // sixty degrees, in radians
     for (const c of this.corners) {
       corner = c;
-      // Straight on is the one a driver arriving at the corner is looking at.
-      ahead = true;
-      let any = add(c.x, c.z, c.u1x, c.u1z);
-      ahead = false;
-      any = add(c.x, c.z, -c.u2x, -c.u2z) || any;
+      let any = false;
+      // Straight on, and back off the far side — but only at a corner square
+      // enough for them to go anywhere.
+      //
+      // "Straight on" continues the leg you arrived down, by construction. At
+      // a right angle the course leaves at ninety degrees and the two separate
+      // immediately; at forty-one degrees they diverge so slowly that the side
+      // street sits eleven metres off the kerb for a hundred metres, which
+      // does not read as a fork, it reads as a second carriageway laid beside
+      // the racing line. No amount of clearance-walking fixes that, because
+      // the street is not running into anything — it is just running alongside.
+      // So at the shallow corners these two are not offered at all.
+      if (Math.abs(c.turn) > SQUARE) {
+        ahead = true;
+        any = add(c.x, c.z, c.u1x, c.u1z);
+        ahead = false;
+        any = add(c.x, c.z, -c.u2x, -c.u2z) || any;
+      }
 
-      // A corner with no street off it at all looks wrong, and the shallow
-      // ones end up that way: both the obvious directions — straight on, and
-      // back off the far side — lie too nearly along the circuit for a street
-      // to go anywhere but alongside it, so both get refused.
+      // Which leaves the shallow corners with nothing, and a corner with no
+      // street off it looks wrong.
       //
       // The way out is the OUTWARD BISECTOR, `u1 - u2`, which points away from
       // the centre of the turn. For a forty-one degree corner that is about
@@ -2489,8 +2501,33 @@ export class Track {
       const py = this.groundAt(px, pz);
       b.add(G.cyl(0.5, 15, 190, 4), 0xd0cec6, { x: px, y: py + 95, z: pz, ry: Math.PI / 4 });
       b.add(G.cyl(0.2, 1.6, 26, 4), 0xd0cec6, { x: px, y: py + 200, z: pz, ry: Math.PI / 4 });
+      // Floors up the pyramid, narrowing as it does.
+      //
+      // It was a blank white spike, and the two pylons beside it blank white
+      // slabs — the last things in the place built without windows, and a
+      // hundred and ninety metres of blank wall is not something you fail to
+      // notice at the end of a street. The bands are sized to the section at
+      // each height, and doubled so they stand proud of all four faces.
+      {
+        const FLOORS = 42;
+        for (let k = 1; k < FLOORS; k++) {
+          const t = k / FLOORS;
+          const r = lerp(15, 0.5, t) * 0.98;
+          const y = py + t * 190;
+          b.add(G.box(r * 2, 2.2, r * 2 + 0.12), 0x3a4550, { x: px, y, z: pz, ry: Math.PI / 4 });
+          b.add(G.box(r * 2 + 0.12, 2.2, r * 2), 0x3a4550, { x: px, y, z: pz, ry: Math.PI / 4 });
+          if (Math.random() < 0.55) {
+            const c2 = pick([0xffd9a0, 0xd8e8f0, 0xffc478]);
+            b.add(G.box(r * 1.5, 1.5, r * 2 + 0.2), c2, { x: px, y, z: pz, ry: Math.PI / 4 });
+            b.add(G.box(r * 2 + 0.2, 1.5, r * 1.5), c2, { x: px, y, z: pz, ry: Math.PI / 4 });
+          }
+        }
+      }
       for (const sx of [-1, 1]) {
-        b.add(G.box(7, 62, 7), 0xc4c2ba, { x: px + sx * 13, y: py + 62, z: pz, ry: Math.PI / 4 });
+        const bx = px + sx * 13;
+        b.add(G.box(7, 62, 7), 0xc4c2ba, { x: bx, y: py + 62, z: pz, ry: Math.PI / 4 });
+        floorsOn(bx, pz, py + 31, 7, 7, 62, Math.PI / 4);
+        floorsOn(bx, pz, py + 31, 7, 7, 62, Math.PI * 0.75);
       }
       for (let i = 0, tries = 0; i < 16 && tries < 300; tries++) {
         const a = rand(0, Math.PI * 2), d = rand(60, 260);

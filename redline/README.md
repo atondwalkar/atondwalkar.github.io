@@ -343,22 +343,30 @@ wall that keeps them on the road, and were shoved by the side street's own
 walls instead. Twelve of sixteen finished that race stranded. The smoke test
 now asserts the wall is unbroken across every mouth.
 
-**Every corner gets one, including the shallow ones.** The two obvious
-directions off a corner are straight on and back off the far side, and at a
-forty-five degree bend both of those lie too nearly along the circuit for a
-street to go anywhere but beside it — so both get refused and the corner is
-left as a bend with a sign next to it. The way out is the **outward bisector**,
-`u1 - u2`, which points away from the centre of the turn: about seventy degrees
-off the road at a forty-one degree corner, which is what a fork in a real
-street looks like and far enough across for the street to leave.
+**Every corner gets one, including the shallow ones — but not straight on.**
+"Straight on" continues the leg you arrived down, by construction. At a right
+angle the course leaves at ninety degrees and the two separate immediately; at
+forty-one degrees they diverge so slowly that the side street sits eleven
+metres off the kerb for a hundred metres, which does not read as a fork, it
+reads as a second carriageway laid beside the racing line. No amount of
+clearance-checking fixes that, because the street is not running *into*
+anything — it is just running alongside. So below sixty degrees, straight on
+and back-off-the-far-side are not offered at all.
 
-That still did not work at first, for a reason worth recording. The walk that
-decides how far a street runs measures clearance against the circuit — and the
-junction it is leaving *is* the circuit. At a shallow corner a street heading
-out at sixty-five degrees is still only seventeen metres from that corner's own
-kerb twenty-six metres along, so every one of them was refused against the very
-junction it belonged to. The walk now ignores circuit within forty-six metres
-of where the street starts.
+What is offered instead is the **outward bisector**, `u1 - u2`, which points
+away from the centre of the turn: about seventy degrees off the road at a
+forty-one degree corner, which is what a fork in a real street looks like and
+steep enough for the street to actually leave. Every corner ends up with a
+street, and the closest any of them now runs to the racing line is nineteen
+metres, at four hundredths of parallel — which is to say, square to it.
+
+One trap on the way. The walk that decides how far a street runs measures
+clearance against the circuit — and the junction it is leaving *is* circuit, so
+the shallow corners were refusing streets against the very junction they
+belonged to. The walk ignores circuit within forty-six metres of where the
+street starts. That fix is necessary and was not sufficient: it let a street
+hug the road for its first forty-six metres, which is exactly the stretch you
+see from the car.
 
 **And they have to go somewhere else.** The walk that decides how far a side
 street runs stops it short of any other part of the circuit, and that clearance
@@ -446,6 +454,12 @@ pavement actually *is*, is the ground that no road covers, and that is not
 knowable until every road is down. So it is a separate pass that runs last,
 emits tiles, and drops any tile whose middle is on tarmac or inside a curb
 return.
+
+**Everything has windows**, including the things that are not really
+buildings: the waterfront sheds, the pyramid downtown and the two pylons beside
+it. Those were the last plain boxes in the place, and a hundred and ninety
+metres of blank wall at the end of a street is not something you fail to
+notice.
 
 **Windows go on all four faces**, which they did not while every building was
 a narrow frontage seen from the street it fronts. The moment the city was

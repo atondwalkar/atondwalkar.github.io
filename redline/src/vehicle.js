@@ -31,6 +31,9 @@ import { clamp, curve, sign, approach } from './utils.js';
 
 const KMH = 3.6;
 const RPM_PER_RADS = 60 / (Math.PI * 2);
+// Below this, in m/s, the car counts as stopped for the purpose of selecting
+// reverse — about nine km/h.
+const REVERSE_BELOW = 2.5;
 
 // The shape of a tyre: how much of its available grip it is using at a given
 // amount of slip. It climbs to a peak at slip = 1 and then holds very nearly
@@ -160,11 +163,17 @@ export class Vehicle {
   }
 
   shiftDown() {
-    // Down to first and no further. Reverse is not below first, it is chosen
-    // by holding the brake at a standstill — with no neutral between the two,
-    // letting the lever reach it would mean two pulls at a red light selects
-    // reverse.
-    if (this.shiftT > 0 || this.gear <= 1) return false;
+    if (this.shiftT > 0 || this.gear <= 0) return false;
+    // First goes down to reverse, but only at a standstill.
+    //
+    // With no neutral in the box, reverse sits directly below first, and the
+    // lever has to be able to reach it: holding the brake at rest is how the
+    // AUTOMATIC selects reverse, and with neutral gone that left manual with
+    // no way into it at all. The speed check is what makes it safe — below
+    // about nine km/h you are stopped and asking for reverse deliberately;
+    // above it you are downshifting into a corner and would get it by
+    // accident.
+    if (this.gear === 1 && Math.abs(this.u) > REVERSE_BELOW) return false;
     this.gear--;
     this.shiftT = this.spec.shiftTime;
     return true;

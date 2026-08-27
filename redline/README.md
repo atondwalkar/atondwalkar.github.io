@@ -82,13 +82,17 @@ gear. Changing up cuts the drive for a sixth of a second and drops
 the revs by about two thousand, which you can hear, because the engine note is
 synthesised from the rpm the physics is already calculating.
 
-**There is no neutral.** The ratio table is `[R, 1..6]`, and reverse is chosen
-the way it always was — hold the brake at a standstill — rather than by
-shifting past a neutral to reach it. Neutral earned nothing: you cannot coast
-to any advantage over three laps, selecting it by hand only ever cost you
-drive, and sitting between first and reverse meant two pulls of the lever at a
-standstill put you in reverse by accident. Shifting down from first now stays
-in first.
+**There is no neutral.** The ratio table is `[R, 1..6]`. Neutral earned
+nothing: you cannot coast to any advantage over three laps, and selecting it by
+hand only ever cost you drive.
+
+That leaves reverse directly below first, and **the lever reaches it** — down
+from first when you are stopped, up from reverse to get out again. It has to:
+holding the brake at rest is how the *automatic* picks reverse, so with neutral
+gone, manual had no way into it at all. What makes that safe is a speed check
+rather than a gear the lever has to pass through. Below about nine km/h you are
+stopped and asking for reverse deliberately; above it you are downshifting into
+a corner and would get it by accident, so it is refused.
 
 Taking it out moved every index in the array, which is the sort of change that
 quietly breaks things one at a time — the HUD's gear letter, the number keys,

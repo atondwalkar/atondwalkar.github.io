@@ -96,16 +96,32 @@ function checkBraking() {
 // anywhere in it.
 function checkNoNeutral() {
   const zeros = CAR.gears.filter((g) => g === 0).length;
-  const v = bench();
-  v.autoShift = false;
-  v.gear = 1;
-  v.shiftT = 0;
-  v.shiftDown();
-  const held = v.gear === 1;
-  const ok = zeros === 0 && held && CAR.gears.length === 7;
-  return `${ok ? 'no neutral to fall into' : 'WRONG'} — ` +
+
+  // Stopped, first goes down to reverse: with no neutral in the box that is
+  // the only way the lever reaches it, and without it manual mode has no way
+  // into reverse at all.
+  const a = bench();
+  a.autoShift = false;
+  a.gear = 1; a.shiftT = 0; a.setSpeed(0);
+  a.shiftDown();
+  const gotR = a.gear === 0;
+  // And back out of it the same way.
+  a.shiftT = 0;
+  a.shiftUp();
+  const outOfR = a.gear === 1;
+
+  // Moving, it does not: downshifting into a corner must not select reverse.
+  const b2 = bench();
+  b2.autoShift = false;
+  b2.gear = 1; b2.shiftT = 0; b2.setSpeed(22);
+  b2.shiftDown();
+  const refused = b2.gear === 1;
+
+  const ok = zeros === 0 && gotR && outOfR && refused && CAR.gears.length === 7;
+  return `${ok ? 'no neutral, and reverse is under first' : 'WRONG'} — ` +
     `${CAR.gears.length - 1} ratios and reverse, ${zeros} of them zero, ` +
-    `shifting down from first ${held ? 'stays in first' : `gave ${v.gear}`}`;
+    `stopped 1→R ${gotR ? 'works' : 'FAILS'} and R→1 ${outOfR ? 'works' : 'FAILS'}, ` +
+    `at 79 km/h it ${refused ? 'refuses' : 'WRONGLY GIVES REVERSE'}`;
 }
 
 function checkGearbox() {

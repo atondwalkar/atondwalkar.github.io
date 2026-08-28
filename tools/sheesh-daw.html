@@ -30,6 +30,16 @@
   html,body{background:var(--bg);color:var(--ink);font-family:'Chakra Petch',sans-serif}
   body{padding:14px}
 
+  #tabbar{display:flex;align-items:flex-end;gap:4px;padding:6px 8px 0}
+  #tabs{display:flex;gap:4px;flex-wrap:wrap;align-items:flex-end}
+  .ptab{display:flex;align-items:center;gap:6px;padding:4px 9px;border:1px solid var(--line);border-bottom:none;border-radius:6px 6px 0 0;
+    background:var(--panel);color:var(--ink-dim);font-size:11px;letter-spacing:.04em;cursor:pointer;max-width:220px;user-select:none}
+  .ptab span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .ptab.active{color:var(--amber);background:var(--panel-2);border-color:var(--amber)}
+  .ptab .dirty{color:#ffd166;font-size:9px}
+  .ptab .x{opacity:.55;font-size:10px;padding:0 2px;border-radius:3px}
+  .ptab .x:hover{opacity:1;color:#ff6b6b}
+  #tab-add{padding:3px 9px;font-size:12px;line-height:1;margin-bottom:1px}
   header{
     background:linear-gradient(180deg,var(--panel-2),var(--panel));
     border:1px solid var(--line);
@@ -706,6 +716,10 @@
     </div>
   </div>
 </header>
+<div id="tabbar" role="tablist" aria-label="Project tabs">
+  <div id="tabs"></div>
+  <button id="tab-add" title="Open another project in a new tab">+</button>
+</div>
 
 <!-- ============ TRACKS / TIMELINE ============ -->
 <section class="panel">
@@ -8097,11 +8111,67 @@ function serFx(f,ref){
 }
 /* ---- project name: shown in the header, click to rename, used as the Save filename ---- */
 const projNameEl=document.getElementById('proj-name');
+/* ---- project tabs: several projects open at once; inactive tabs hold a snapshot (project + buffers + history) ---- */
+const TABS=[]; let activeTab=null, tabCounter=0;
+function tabLabel(t){ return t.name||'Untitled'; }
+function renderTabs(){
+  const host=document.getElementById('tabs'); if(!host) return;
+  host.innerHTML='';
+  TABS.forEach(t=>{
+    const el=document.createElement('div'); el.className='ptab'+(t===activeTab?' active':''); el.setAttribute('role','tab'); el.setAttribute('aria-selected',String(t===activeTab));
+    el.title=tabLabel(t)+(t.dirty?' \u2014 unsaved changes':'')+' \u00b7 double-click to rename, middle-click to close';
+    const nm=document.createElement('span'); nm.textContent=tabLabel(t);
+    const d=document.createElement('span'); d.className='dirty'; d.textContent=t.dirty?'\u25cf':'';
+    const x=document.createElement('span'); x.className='x'; x.textContent='\u2715'; x.title='Close tab'; x.setAttribute('role','button'); x.setAttribute('aria-label','Close '+tabLabel(t));
+    x.onclick=e=>{ e.stopPropagation(); closeTab(t); };
+    el.append(nm,d,x);
+    el.onclick=()=>switchTab(t);
+    el.ondblclick=()=>{ if(t!==activeTab) switchTab(t); renameProject(); };
+    el.onauxclick=e=>{ if(e.button===1){ e.preventDefault(); closeTab(t); } };
+    host.appendChild(el);
+  });
+}
+function stashActiveTab(){
+  if(!activeTab) return;
+  activeTab.snap=snapState(); activeTab.undo=undoStack.slice(); activeTab.redo=redoStack.slice();
+  activeTab.userPos=userPos; activeTab.name=projectName; activeTab.scroll=tlScroll?tlScroll.scrollLeft:0;
+}
+function loadTab(t){
+  if(state.playing) stopAll();
+  activeTab=t;
+  histLock=true;
+  try{
+    undoStack.length=0; redoStack.length=0; pendingSnap=null;
+    if(t.snap) applyProject(t.snap.proj,t.snap.buffers); else applyProject(JSON.parse(JSON.stringify(DEFAULT_PROJECT)),[]);
+  }finally{ histLock=false; }
+  undoStack.push(...(t.undo||[])); redoStack.push(...(t.redo||[]));
+  setProjectName(t.name||'Untitled');
+  selectObj(null); clearTrackSel();
+  seek(t.userPos||0); if(tlScroll) tlScroll.scrollLeft=t.scroll||0;
+  renderTabs();
+}
+function switchTab(t){ if(t===activeTab) return; stashActiveTab(); loadTab(t); }
+function newTab(){
+  stashActiveTab();
+  const t={id:++tabCounter,name:'Untitled',snap:null,undo:[],redo:[],userPos:0,scroll:0,dirty:false};
+  TABS.push(t); loadTab(t); return t;
+}
+function closeTab(t){
+  if(t.dirty && !confirm('"'+tabLabel(t)+'" has unsaved changes. Close it anyway?')) return;
+  const i=TABS.indexOf(t); if(i<0) return;
+  TABS.splice(i,1);
+  if(t===activeTab){ activeTab=null; if(TABS.length) loadTab(TABS[Math.max(0,i-1)]); else newTab(); }
+  else renderTabs();
+}
+function markDirty(){ if(activeTab && !activeTab.dirty){ activeTab.dirty=true; renderTabs(); } }
+function markClean(){ if(activeTab && activeTab.dirty){ activeTab.dirty=false; renderTabs(); } }
+function tabIsBlank(){ return tracksAll.length===0 && MASTER_TRACK.fx.length===0 && !(activeTab&&activeTab.dirty); }
 function setProjectName(n){
   projectName=String(n||'Untitled').replace(/\.(sheesh|zip|json)$/i,'').trim()||'Untitled';
   projNameEl.textContent=projectName;
   projNameEl.title='Project: '+projectName+' — click to rename';
   document.title=projectName+' — SHEESH DAW';
+  if(activeTab){ activeTab.name=projectName; renderTabs(); }
 }
 function safeProjectFile(){ return projectName.replace(/[\\/:*?"<>|]+/g,'-').trim()||'project'; }
 function renameProject(){
@@ -8158,6 +8228,7 @@ function pushHistory(){
   undoStack.push(snapState());
   if(undoStack.length>50) undoStack.shift();
   redoStack.length=0;
+  markDirty();
 }
 function commitPending(){
   if(!pendingSnap) return;
@@ -8377,6 +8448,7 @@ async function saveProject(){
       }finally{ window.removeEventListener('beforeunload',guard); }
       const onDisk=await handle.getFile().then(f=>f.size).catch(()=>-1);
       if(onDisk>=0 && onDisk!==total) throw new Error('written file is '+onDisk+' bytes, expected '+total+' \u2014 disk full or interrupted?');
+      markClean();
       fileSay(''); fileFlash('Saved '+handle.name+' ('+(total/1048576).toFixed(1)+' MB)');
       return true;
     }
@@ -8386,6 +8458,7 @@ async function saveProject(){
     a.href=url; a.download=dlName;
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(()=>URL.revokeObjectURL(url),4000);
+    markClean();
     fileSay('');
     return true;
   }catch(e){ fileSay(''); fileFlash('Save failed: '+(e&&e.message||e)); return false; }
@@ -8433,8 +8506,10 @@ async function loadProject(f){
     buffers.push(...decoded);
     fileSay('Loading project\u2026 building tracks');
     await new Promise(r=>setTimeout(r,0));
+    if(!tabIsBlank()) newTab();                               // an open project keeps its tab; the file gets its own
     applyProject(proj,buffers);
     setProjectName(proj.name||f.name);
+    markClean();
     seek(0);
     fileSay(''); fileFlash('Project loaded'+(total?' ('+total+' audio file'+(total>1?'s':'')+')':'')+'.');
   }catch(e){ console.error('SHEESH DAW: project load failed',e); fileSay(''); fileFlash('Load failed: '+(e&&e.message||e)); }
@@ -8621,6 +8696,7 @@ const HK_ROWS=`    <div><span class="hk"><kbd>Space</kbd></span>play / stop</div
     <div><span class="hk"><kbd>Ctrl</kbd>+<kbd>C</kbd> <kbd>X</kbd> <kbd>V</kbd></span>copy / cut / paste selection at playhead</div>
     <div><span class="hk"><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>C</kbd> / <kbd>V</kbd></span>copy / paste whole tracks</div>
     <div><span class="hk"><kbd>G</kbd></span>group / ungroup selection (selecting one selects all)</div>
+    <div><span class="hk"><kbd>Tabs</kbd></span>several projects open at once (bar under the header): + or New opens a tab, Open loads into a new tab, dbl-click renames, ✕ / middle-click closes</div>
     <div><span class="hk"><kbd>K</kbd></span>marker at the playhead (press on a marker's spot to remove \u00b7 click jumps \u00b7 drag moves \u00b7 dbl-click deletes)</div>
     <div><span class="hk"><kbd>M</kbd></span>mute / unmute the selected track</div>
     <div><span class="hk"><kbd>MIDI</kbd></span>a connected keyboard plays the selected track's instrument (velocity, sustain pedal); MIDI REC + play writes notes into its items</div>
@@ -8656,7 +8732,10 @@ function toggleHkPop(){
 }
 document.getElementById('hk-btn').onclick=e=>{ e.stopPropagation(); toggleHkPop(); };
 document.getElementById('save-proj').onclick=()=>{ saveProject(); };
-document.getElementById('new-proj').onclick=()=>{ newProject(); };
+document.getElementById('new-proj').onclick=()=>{ newTab(); };
+document.getElementById('new-proj').title='Open a fresh project in a new tab (the current one stays open)';
+document.getElementById('tab-add').onclick=()=>newTab();
+TABS.push(activeTab={id:++tabCounter,name:projectName||'Untitled',snap:null,undo:[],redo:[],userPos:0,scroll:0,dirty:false}); renderTabs();
 const projIn=document.getElementById('proj-in');
 document.getElementById('open-proj').onclick=()=>projIn.click();
 projIn.onchange=()=>{ const f=projIn.files[0]; projIn.value=''; if(f) loadProject(f); };

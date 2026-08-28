@@ -6,8 +6,8 @@
 // into smoke, noise and numbers on the dash.
 
 import * as THREE from 'three';
-import { Track, TRACK_NAME } from './track.js';
-import { Race } from './race.js';
+import { Track, LAYOUTS, disposeTrack, TRACK_NAME } from './track.js';
+import { Race, defaultField } from './race.js';
 import { Hud } from './hud.js';
 import { ChaseCamera } from './camera.js';
 import { FX } from './fx.js';
@@ -15,13 +15,34 @@ import { AudioFX } from './audio.js';
 import { RACE, CAR, AI, SELECTABLE } from './defs.js';
 import { CarSelect } from './carselect.js';
 import { Driver } from './ai.js';
-import { clamp, lerp, approach, lapTime, ordinal } from './utils.js';
+import { Cutscene, SCRIPTS } from './cutscene.js';
+import { Campaign, STAGES } from './campaign.js';
+import { findCheat } from './cheats.js';
+import { ACTIONS, actionFor, codesFor, isBound, rebind, resetBinds, label } from './keybinds.js';
+import { clamp, lerp, approach, lapTime, ordinal, dist2D } from './utils.js';
 import { Post } from './post.js';
 import { loadCarModel } from './carload.js';
 import { setCarTemplate, buildCar } from './carmodels.js';
 import { runSelfTest } from './selftest.js';
 
 const FIXED = 1 / 120;              // the physics runs at a fixed 120 Hz
+
+// What the game is doing. `attract` is the title cutscene, `select` is the car
+// grid, `cutscene` is a scripted scene between campaign stages, `racing` is
+// the race. The name box and the settings panel are deliberately not phases:
+// they are overlays that leave whatever is behind them running.
+// The sky dome and the star shell. Both ride with the camera, so these are
+// distances from the VIEWER, not from the middle of the map: far enough out to
+// sit beyond the fog and well inside the camera's 3000 m far plane.
+// How long the opening slow motion lasts and how slow it gets.
+const SLOWMO_TIME = 1.6;
+const SLOWMO_MIN = 0.32;
+
+const SKY_R = 2400;
+const STAR_R = 2200;
+
+const PHASE = { ATTRACT: 'attract', SELECT: 'select', CUTSCENE: 'cutscene', RACING: 'racing' };
+const MODE = { RACE: 'race', CAMPAIGN: 'campaign' };
 
 class Game {
   constructor() {
@@ -43,10 +64,17 @@ class Game {
     this.audio = new AudioFX();
     this.chase = new ChaseCamera(this.camera);
 
-    this.started = false;
+    // One state, read in one place.
+    //
+    // This was three booleans — started, picking, _attracting — read in
+    // priority order in three separate ladders, where the ordering was
+    // load-bearing and nothing enforced it. A fourth state (a cutscene) would
+    // have made that ladder four deep in three places. `started` and `picking`
+    // survive as accessors below because the smoke test assigns to them.
+    this.phase = PHASE.ATTRACT;
+    this.mode = MODE.RACE;
     // 'menu' -> 'select' -> racing. The select screen owns the canvas while it
     // is up, so the race behind it is not being drawn at all.
-    this.picking = false;
     this.time = 0;
     this.accumulator = 0;
     this.keys = new Set();
@@ -58,6 +86,17 @@ class Game {
     this._resize();
   }
 
+  // Kept so the smoke test — which assigns `game.started` to drive the frame
+  // dumps — keeps working, and so the read sites elsewhere read as English.
+  get started() { return this.phase === PHASE.RACING; }
+  set started(on) { this.phase = on ? PHASE.RACING : PHASE.ATTRACT; }
+
+  get picking() { return this.phase === PHASE.SELECT; }
+  set picking(on) {
+    if (on) this.phase = PHASE.SELECT;
+    else if (this.phase === PHASE.SELECT) this.phase = PHASE.ATTRACT;
+  }
+
   // The heavy half of setting up, run in stages with the thread handed back
   // between them so the loading screen can draw. `onStep` is told what is
   // being built and how far along it is.
@@ -66,16 +105,7 @@ class Game {
     const say = async (what, at) => { onStep(what, at); await frame(); };
 
     await say('the circuit', 0.05);
-    this.track = new Track();
-    await say('the ground', 0.15);
-
-    const stages = this.track.build(this.scene);
-    const total = 7;
-    for (let k = 0; ; k++) {
-      const step = stages.next();
-      if (step.done) break;
-      await say(step.value, 0.15 + (0.75 * (k + 1)) / total);
-    }
+    await this.buildTrack(LAYOUTS.folsom, say);
 
     await say('the field', 0.94);
     this.fx = new FX(this.scene);
@@ -85,13 +115,54 @@ class Game {
     await say('ready', 1);
   }
 
+  // Put a layout in the world, taking down whatever was there.
+  //
+  // Staged the same way the first load is, and for the same reason: building a
+  // city is a second or two of one blocked thread, and between stages is the
+  // only time the loading screen gets to draw. `say` is optional so a swap
+  // between stages can happen behind a cutscene without a loading screen.
+  async buildTrack(layout, say = null) {
+    const frame = () => new Promise((r) => requestAnimationFrame(() => r()));
+    if (this.track) {
+      disposeTrack(this.scene, this.track);
+      // The lamp lights belong to the old street furniture.
+      for (const l of this.lampLights || []) l.intensity = 0;
+    }
+    this.track = new Track(layout);
+    // Fog is a property of the place, not of the game.
+    //
+    // Ninety to seven hundred and eighty metres is right for a street circuit
+    // where the next block is the horizon. Over open water at night it is
+    // wrong twice over: it hides an eleven-kilometre bridge from six hundred
+    // metres away, and it turns everything past that into one flat colour —
+    // which is what "blank canvas" looks like from the middle of the bay.
+    const f = layout.fog || { near: 90, far: 780 };
+    this.scene.fog.near = f.near;
+    this.scene.fog.far = f.far;
+    this.scene.fog.color.setHex(f.colour ?? 0x141a26);
+    if (say) await say('the ground', 0.15);
+
+    const stages = this.track.build(this.scene);
+    const total = 7;
+    for (let k = 0; ; k++) {
+      const step = stages.next();
+      if (step.done) break;
+      if (say) await say(step.value, 0.15 + (0.75 * (k + 1)) / total);
+      else await frame();
+    }
+    // Everything that cached a position on the old circuit has to be told.
+    if (this.race) this.race.setTrack(this.track);
+    if (this.hud) this.hud.trackChanged();
+    return this.track;
+  }
+
   _sky() {
     // Night. The sky is not black — a city this size puts enough light into
     // the air that the horizon glows and only the top of the dome goes dark,
     // and that gradient is most of what makes it read as a city at night
     // rather than as a scene with the lights turned off.
     const sky = new THREE.Mesh(
-      new THREE.SphereGeometry(1400, 24, 16),
+      new THREE.SphereGeometry(SKY_R, 28, 18),
       new THREE.ShaderMaterial({
         side: THREE.BackSide,
         depthWrite: false,
@@ -121,17 +192,18 @@ class Game {
     );
     sky.frustumCulled = false;
     this.scene.add(sky);
+    this.sky = sky;
 
     // Stars, thinned out toward the horizon where the city glow drowns them.
     {
-      const n = 900, pos = new Float32Array(n * 3), col = new Float32Array(n * 3);
+      const n = 1600, pos = new Float32Array(n * 3), col = new Float32Array(n * 3);
       for (let i = 0; i < n; i++) {
         const a = Math.random() * Math.PI * 2;
         const y = Math.pow(Math.random(), 0.55);
         const r = Math.sqrt(1 - y * y);
-        pos[i * 3] = Math.cos(a) * r * 1300;
-        pos[i * 3 + 1] = y * 1300;
-        pos[i * 3 + 2] = Math.sin(a) * r * 1300;
+        pos[i * 3] = Math.cos(a) * r * STAR_R;
+        pos[i * 3 + 1] = y * STAR_R;
+        pos[i * 3 + 2] = Math.sin(a) * r * STAR_R;
         const b = 0.35 + Math.random() * 0.65;
         const warm = Math.random() < 0.25;
         col[i * 3] = b * (warm ? 1 : 0.86);
@@ -147,6 +219,7 @@ class Game {
       }));
       stars.frustumCulled = false;
       this.scene.add(stars);
+      this.stars = stars;
     }
 
     // Night air over a bay: it does not go far, and what it goes to is the
@@ -229,7 +302,15 @@ class Game {
   // --------------------------------------------------------------- input
 
   _input() {
-    document.getElementById('start').addEventListener('click', () => this.openName());
+    document.getElementById('start').addEventListener('click', () => {
+      this.mode = MODE.RACE;
+      this.campaign = null;
+      this.openName();
+    });
+    document.getElementById('campaign-btn').addEventListener('click', () => this.startCampaign());
+    this._cheatPanel();
+    this._settingsTabs();
+    this._bindPanel();
     const nameBox = document.getElementById('name');
     const nameIn = document.getElementById('name-in');
     const takeName = () => {
@@ -254,6 +335,11 @@ class Game {
     document.getElementById('set-view').addEventListener('change', (e) => {
       while (this.chase.view !== Number(e.target.value)) this.chase.cycle();
     });
+    // The yellow-green wash, on a switch.
+    //
+    // It was already here and already worked, under the label COLOUR GRADE —
+    // which is what it is and not what it looks like, so nobody found it. A
+    // setting nobody can find is a setting that does not exist.
     document.getElementById('set-grade').addEventListener('change', (e) => {
       this.post.composite.uniforms.grade.value = Number(e.target.value);
     });
@@ -268,14 +354,18 @@ class Game {
     });
     window.addEventListener('keyup', (e) => {
       this.keys.delete(e.code);
-      if (e.code === 'Tab') this.hud.showAll = false;
-      if (e.code === 'KeyL') this.chase.lookBack = false;
+      if (isBound('standings', e.code)) this.hud.showAll = false;
+      if (isBound('lookBack', e.code)) this.chase.lookBack = false;
     });
     window.addEventListener('blur', () => this.keys.clear());
   }
 
   _press(code) {
-    if (this.picking) {
+    if (this.phase === PHASE.CUTSCENE) {
+      if (code === 'Space' || code === 'Enter' || code === 'Escape') this.cut.skip();
+      return;
+    }
+    if (this.phase === PHASE.SELECT) {
       if (code === 'ArrowLeft' || code === 'KeyA') this._pick(-1, 0);
       else if (code === 'ArrowRight' || code === 'KeyD') this._pick(1, 0);
       else if (code === 'ArrowUp' || code === 'KeyW') this._pick(0, -1);
@@ -283,29 +373,36 @@ class Game {
       else if (code === 'Enter' || code === 'Space') this.begin();
       return;
     }
-    if (!this.started) {
+    if (this.phase === PHASE.ATTRACT) {
       if (code === 'Enter' || code === 'Space') this.openName();
+      // Every scene, playable from the title screen without racing to it.
+      // Written before any campaign flow existed, because a cutscene that is
+      // only reachable by winning a three-lap race is a cutscene nobody tests.
+      else if (code === 'KeyK') this.debugCutscene();
       return;
     }
     const v = this.race.player.vehicle;
-    switch (code) {
-      case 'ArrowUp': case 'KeyE': case 'ShiftRight':
+    // By ACTION, not by key code. Every one of these used to be a `case` on a
+    // literal, in a switch that a rebinding screen would have had no way to
+    // reach — so the settings would have moved the label and not the key.
+    switch (actionFor(code)) {
+      case 'shiftUp':
         if (!v.autoShift && v.shiftUp()) this.audio.shift(true);
         break;
-      case 'ArrowDown': case 'KeyQ': case 'ShiftLeft':
+      case 'shiftDown':
         if (!v.autoShift && v.shiftDown()) this.audio.shift(false);
         break;
-      case 'KeyG':
+      case 'gearbox':
         v.autoShift = !v.autoShift;
         this.hud.flashLap(v.autoShift ? 'AUTOMATIC GEARBOX' : 'MANUAL GEARBOX', 1.6);
         break;
-      case 'KeyC':
+      case 'camera':
         this.hud.flashLap(`CAMERA · ${this.chase.cycle()}`, 1.2);
         break;
-      case 'KeyL': this.chase.lookBack = true; break;
-      case 'Tab': this.hud.showAll = true; break;
-      case 'KeyR': this.restart(); break;
-      case 'KeyM': this.audio.setVolume(this.audio.volume > 0 ? 0 : 0.75); break;
+      case 'lookBack': this.chase.lookBack = true; break;
+      case 'standings': this.hud.showAll = true; break;
+      case 'restart': this.restart(); break;
+      case 'mute': this.audio.setVolume(this.audio.volume > 0 ? 0 : 0.75); break;
       default: {
         // Number keys go straight to a gear, which is what a sequential box
         // with paddles does not let you do — but a keyboard should.
@@ -341,10 +438,11 @@ class Game {
     // are on separate paths anyway — a shift is an event, fired once on the
     // key going down, while a pedal is a state read every frame.
     const k = this.keys;
-    const gas = k.has('KeyW');
-    const brake = k.has('KeyS');
-    const left = k.has('KeyA') || k.has('ArrowLeft');
-    const right = k.has('KeyD') || k.has('ArrowRight');
+    const held = (id) => codesFor(id).some((c) => k.has(c));
+    const gas = held('throttle');
+    const brake = held('brake');
+    const left = held('left');
+    const right = held('right');
 
     v.throttle = approach(v.throttle, gas ? 1 : 0, dt * (gas ? 5.5 : 9));
     v.brake = approach(v.brake, brake ? 1 : 0, dt * (brake ? 7 : 11));
@@ -354,7 +452,8 @@ class Game {
     if (brake && Math.abs(v.u) < 0.6) this.brakeHoldT = (this.brakeHoldT || 0) + dt;
     else if (!brake || v.u > 1) this.brakeHoldT = 0;
     v.wantReverse = (this.brakeHoldT || 0) > 0.55 && v.u < 0.6;
-    v.handbrake = approach(v.handbrake, k.has('Space') ? 1 : 0, dt * (k.has('Space') ? 14 : 12));
+    const hand = held('handbrake');
+    v.handbrake = approach(v.handbrake, hand ? 1 : 0, dt * (hand ? 14 : 12));
 
     // Positive steering is a turn to the LEFT, because positive body-x is the
     // car's left. So A asks for +1 and D for -1.
@@ -387,14 +486,14 @@ class Game {
   }
 
   onLap(car, lap, time) {
-    if (lap > RACE.laps) return;
+    if (lap > this.race.laps) return;
     if (time < this.fastestLap.time && time > 5) {
       this.fastestLap = { time, car };
       if (car.isPlayer) this.hud.flashLap(`FASTEST LAP · ${lapTime(time)}`, 3);
     }
     if (!car.isPlayer) return;
     // Same off-by-one as the board had: `lap` is already the lap now beginning.
-    if (lap === RACE.laps) this.hud.message('FINAL LAP', '', 2.4);
+    if (lap === this.race.laps) this.hud.message('FINAL LAP', '', 2.4);
     else this.hud.message(`LAP ${lap}`, lapTime(time) === '--:--.---' ? '' : lapTime(time), 1.8);
   }
 
@@ -420,7 +519,7 @@ class Game {
   // else about the car changes, because there is one set of physics.
   // Start goes here first: who is driving, then which car.
   openName() {
-    if (this.started || this.picking) return;
+    if (this.phase !== PHASE.ATTRACT) return;
     const box = document.getElementById('name');
     box.classList.add('open');
     const input = document.getElementById('name-in');
@@ -431,8 +530,8 @@ class Game {
   }
 
   openSelect() {
-    if (this.started || this.picking) return;
-    this._endAttract();
+    if (this.phase === PHASE.RACING || this.phase === PHASE.SELECT) return;
+    this._leaveAttract();
     this.picking = true;
     document.getElementById('menu').style.display = 'none';
     document.getElementById('select').classList.add('open');
@@ -472,14 +571,24 @@ class Game {
   }
 
   begin() {
-    if (this.started) return;
-    if (this.picking) {
+    if (this.phase === PHASE.RACING) return;
+    if (this.phase === PHASE.SELECT) {
       this.setPlayerCar(this.select.chosen);
       this.select.hide();
       document.getElementById('select').classList.remove('open');
-      this.picking = false;
     }
-    this.started = true;
+    // Always, whichever way we got here. Attract lends the player's car an AI
+    // driver and forces its gearbox to automatic; starting a race without
+    // giving those back leaves you as a passenger.
+    if (this.mode === MODE.CAMPAIGN && this.campaign) {
+      this._leaveAttract();
+      this.keys.clear();
+      document.getElementById('menu').style.display = 'none';
+      this.beginStage();
+      return;
+    }
+    this._leaveAttract();
+    this.phase = PHASE.RACING;
     // Whatever was held down to get here is not a driving input.
     this.keys.clear();
     document.getElementById('menu').style.display = 'none';
@@ -501,11 +610,15 @@ class Game {
 
   update(dt) {
     this.time += dt;
-    if (this.picking) {
+    if (this.phase === PHASE.SELECT) {
       this.select.update(dt, this.camera.aspect);
       return;
     }
-    if (!this.started) {
+    if (this.phase === PHASE.CUTSCENE) {
+      this._cutsceneTick(dt);
+      return;
+    }
+    if (this.phase === PHASE.ATTRACT) {
       // The title screen is a cutscene, not a still.
       //
       // The field is already built and the AI already knows how to drive, so
@@ -521,6 +634,13 @@ class Game {
     const before = this.race.state;
     const lights = this.race.lights;
 
+    // Slow motion is a change to how much TIME passes, not a change to the
+    // step: the step stays at 1/120 so the physics is identical, and what
+    // shrinks is how many of them a frame is worth. A simulation that runs a
+    // different step in slow motion is a different simulation.
+    if (this._slowmoT) this._slowmoT = Math.max(0, this._slowmoT - dt);
+    dt *= this.timeScale;
+
     this._drivePlayer(dt);
 
     // Fixed-step physics: a car simulation that changes behaviour with the
@@ -535,7 +655,10 @@ class Game {
     this.race.sync(this.accumulator / FIXED);
 
     if (this.race.lights !== lights && this.race.state === 'countdown') this.audio.light();
-    if (before !== 'finished' && this.race.state === 'finished') this.hud.results(this.race);
+    if (before !== 'finished' && this.race.state === 'finished') {
+      if (this.mode === MODE.CAMPAIGN) this.endStage();
+      else this.hud.results(this.race);
+    }
 
     this.track.update(this.time, dt);
     this._trackFx(dt);
@@ -549,10 +672,14 @@ class Game {
 
     const near = this._nearestRival();
     this.audio.update(dt, this.race.player, near.car, near.dist);
+    this.audio.siren(this._nearestSiren());
 
     // Once the leader has taken the flag, give everyone else a few seconds and
     // then show the result whether or not the tail-enders are home.
-    if (this.raceEnded && this.race.state === 'racing') {
+    // ...but only in a race. In a duel there are no tail-enders, so a win
+    // would otherwise sit on the track for twelve seconds before anything
+    // happened.
+    if (this.raceEnded && this.race.state === 'racing' && this.mode === MODE.RACE) {
       this._endTimer = (this._endTimer || 0) + dt;
       if (this._endTimer > 12) {
         this.race.state = 'finished';
@@ -596,8 +723,314 @@ class Game {
     this.chase.cinematic(dt, this._star, this.time);
   }
 
+  _settingsTabs() {
+    const tabs = [...document.querySelectorAll('#settings .tab')];
+    const panes = [...document.querySelectorAll('#settings .pane')];
+    for (const t of tabs) {
+      t.addEventListener('click', () => {
+        for (const o of tabs) o.classList.toggle('on', o === t);
+        for (const p of panes) p.classList.toggle('on', p.id === `tab-${t.dataset.tab}`);
+      });
+    }
+  }
+
+  // The keybind editor.
+  //
+  // Click a key, press a new one. The listening state is a class on the button
+  // rather than a modal, because a modal over a settings panel over a title
+  // screen is three layers deep for something that lasts one keystroke.
+  //
+  // The capture listener is the load-bearing part: it runs BEFORE the game's
+  // own key handler and stops the event there, so binding the throttle to R
+  // does not also restart the race on the way past.
+  _bindPanel() {
+    const host = document.getElementById('binds');
+    if (!host) return;
+    let listening = null;                       // { id, slot, el }
+
+    const draw = () => {
+      host.innerHTML = '';
+      for (const a of ACTIONS) {
+        const name = document.createElement('div');
+        name.className = 'act';
+        name.textContent = a.name;
+        host.appendChild(name);
+        const set = document.createElement('div');
+        set.className = 'set';
+        const codes = codesFor(a.id);
+        codes.forEach((code, slot) => {
+          const b = document.createElement('button');
+          b.className = 'key';
+          b.textContent = label(code);
+          b.addEventListener('click', () => {
+            if (listening) listening.el.classList.remove('listening');
+            listening = { id: a.id, slot, el: b };
+            b.classList.add('listening');
+            b.textContent = 'PRESS…';
+          });
+          set.appendChild(b);
+        });
+        host.appendChild(set);
+      }
+    };
+
+    window.addEventListener('keydown', (e) => {
+      if (!listening) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.code !== 'Escape') rebind(listening.id, listening.slot, e.code);
+      listening.el.classList.remove('listening');
+      listening = null;
+      draw();
+    }, true);                                   // capture: before the game sees it
+
+    document.getElementById('binds-reset').addEventListener('click', () => {
+      resetBinds();
+      draw();
+    });
+    draw();
+  }
+
+  // The cheat panel: a box to type a code into, and the codes listed under it.
+  _cheatPanel() {
+    const panel = document.getElementById('cheats');
+    const input = document.getElementById('cheat-in');
+    const said = document.getElementById('cheat-said');
+    if (!panel) return;
+    const open = () => {
+      if (this.phase !== PHASE.ATTRACT) return;
+      panel.classList.add('open');
+      said.textContent = '';
+      input.value = '';
+      input.focus();
+      this.audio.unlock();
+    };
+    const close = () => { panel.classList.remove('open'); input.blur(); };
+    document.getElementById('cheats-btn').addEventListener('click', open);
+    document.getElementById('cheats-close').addEventListener('click', close);
+    input.addEventListener('keydown', (e) => {
+      e.stopPropagation();                       // not a driving input
+      if (e.code === 'Escape') { close(); return; }
+      if (e.code !== 'Enter') return;
+      const hit = findCheat(input.value);
+      if (!hit) { said.textContent = 'NOTHING HAPPENS'; input.select(); return; }
+      close();
+      this.jumpToStage(hit.stage);
+    });
+  }
+
+  // Straight into a stage, skipping the menus in front of it.
+  //
+  // Through the same entry point the campaign uses, with whatever car and name
+  // were last chosen filled in — a cheat that reached a state the game cannot
+  // otherwise reach would be a way of finding bugs that are not there.
+  async jumpToStage(id) {
+    const i = STAGES.findIndex((s) => s.id === id);
+    if (i < 0 || this.phase === PHASE.RACING) return;
+    this.mode = MODE.CAMPAIGN;
+    this.campaign = new Campaign(this);
+    this.campaign.index = i;
+    this.playerLivery = this.playerLivery || SELECTABLE[0];
+    this.playerName = this.playerName || 'PLAYER';
+    this._leaveAttract();
+    this.keys.clear();
+    document.getElementById('menu').style.display = 'none';
+    this.hud.show();
+    this.audio.unlock();
+    await this.beginStage();
+  }
+
+  // Step through the scripts in order, one per press.
+  debugCutscene(name) {
+    const names = Object.keys(SCRIPTS);
+    const at = name ? names.indexOf(name) : ((this._debugCut ?? -1) + 1) % names.length;
+    if (at < 0) return null;
+    this._debugCut = at;
+    const pick = names[at];
+    const cars = this.race.cars;
+    this.hud.flashLap(`CUTSCENE · ${pick}`, 1.4);
+    this.playCutscene(pick, { player: this.race.player, rival: cars.find((c) => !c.isPlayer) },
+      () => { this.phase = PHASE.ATTRACT; this._attracting = false; });
+    return pick;
+  }
+
+  // Play a scripted scene. The world keeps running behind it.
+  playCutscene(name, cast, onDone) {
+    this._leaveAttract();
+    // The cars idle on the brakes while the scene runs — `race.update` holds
+    // every car when the state is not 'racing', which is exactly the staged,
+    // waiting look a wager scene wants.
+    this.race.state = 'grid';
+    this.race.countdown = RACE.countdown;
+    // No dashboard over a cutscene. A rev counter and a lap board on top of
+    // two people talking is the single fastest way to make a scene look like
+    // a paused race rather than a scene.
+    this.hud.hide();
+    this.phase = PHASE.CUTSCENE;
+    this.cut = new Cutscene(this, SCRIPTS[name], cast, () => {
+      this.cut = null;
+      onDone();
+    });
+  }
+
+  // --- campaign flow
+
+  startCampaign() {
+    if (this.phase === PHASE.RACING) return;
+    this.mode = MODE.CAMPAIGN;
+    this.campaign = new Campaign(this);
+    this.openName();
+  }
+
+  // Called once the player has a name and a car: put the stage's circuit in
+  // the world, set its field up, and play the scene in front of it.
+  //
+  // Async, because a stage can be on a different layout and building a city is
+  // a second or two — which the loading screen has to be up for, or the game
+  // simply stops responding for two seconds with a race on screen.
+  async beginStage() {
+    const c = this.campaign;
+    c.car = this.playerLivery;
+    const want = LAYOUTS[c.stage.layout] || LAYOUTS.folsom;
+    if (this.track.layout !== want) {
+      const load = document.getElementById('loading');
+      const label = document.getElementById('load-what');
+      const ring = document.getElementById('load-ring');
+      if (load) { load.style.display = ''; load.classList.remove('done'); }
+      await this.buildTrack(want, async (what, at) => {
+        if (label) label.textContent = what.toUpperCase();
+        if (ring) ring.style.setProperty('--at', String(at));
+        await new Promise((r) => requestAnimationFrame(() => r()));
+      });
+      if (load) {
+        load.classList.add('done');
+        setTimeout(() => { load.style.display = 'none'; }, 500);
+      }
+    }
+    this.race.buildField(c.field(this.track));
+    const cast = {
+      player: this.race.player,
+      rival: this.race.cars.find((x) => !x.isPlayer),
+    };
+    this.hud.show();
+    // The opening scene plays once. Watching the wager three times over is the
+    // fastest way to make somebody stop retrying.
+    //
+    // The same scene whichever way you arrived. It used to be found two
+    // different ways — declared for stage one, borrowed from the last stage's
+    // ending for the others — and the borrowed one played on a different track
+    // with a different cast depending on whether you had won your way there or
+    // typed a code.
+    const intro = c.attempts === 0 ? c.introScene() : null;
+    if (intro) {
+      this.playCutscene(intro, cast, () => this._greenLight());
+    } else {
+      this._greenLight();
+    }
+  }
+
+  // Time, slowed and let go.
+  //
+  // A pursuit stage opens with everybody already at a hundred and fifty, which
+  // is not something to be dropped into cold: a second and a half of slow
+  // motion is enough to see where the road goes and where the police are
+  // before any of it matters. It scales the whole fixed step, so the physics,
+  // the AI and the audio all slow together — anything less and it is a video
+  // effect over a game running at full speed.
+  get timeScale() {
+    if (!this._slowmoT) return 1;
+    const k = clamp(1 - this._slowmoT / SLOWMO_TIME, 0, 1);
+    return lerp(SLOWMO_MIN, 1, k * k);
+  }
+
+  _greenLight() {
+    this.race.gridUp();
+    this.fastestLap = { time: Infinity, car: null };
+    this.raceEnded = false;
+    this._endTimer = 0;
+    this.hud.hideResults();
+    this.hud.show();
+    this.chase.started = false;
+    this.keys.clear();
+    // A rolling start gets the slow-motion opening; a standing one has five
+    // seconds of red lights to do the same job.
+    this._slowmoT = this.race.formation === 'pursuit' ? SLOWMO_TIME : 0;
+    this.phase = PHASE.RACING;
+  }
+
+  // The stage is over. Which scene depends on whether you took it.
+  endStage() {
+    const c = this.campaign;
+    if (!c) return;
+    const won = c.won_(this.race);
+    const cast = {
+      player: this.race.player,
+      rival: this.race.cars.find((x) => !x.isPlayer),
+    };
+    if (won && c.wagered) c.won.push(c.wagered);
+    this.playCutscene(won ? c.stage.onWin : c.stage.onLose, cast, () => {
+      if (won && c.advance()) {
+        this.beginStage();
+        return;
+      }
+      if (won) {
+        // The campaign is over. Back to the title screen, which means back to
+        // the circuit the title screen is a shot of — leaving the run layout
+        // up would put the attract camera on a road with no race on it.
+        this.endCampaign();
+        return;
+      }
+      c.attempts++;
+      this.beginStage();
+    });
+  }
+
+  // Metres to the closest car with a light bar on it, or null if none of them
+  // are out. Straight-line, not distance round the lap: what the player is
+  // listening for is how close the thing behind them is, and once it is
+  // alongside, the gap round the lap says nothing about that at all.
+  _nearestSiren() {
+    let best = null;
+    const p = this.race.player;
+    if (!p) return null;
+    for (const car of this.race.cars) {
+      if (car === p || !car.model || !car.model.userData.beacons) continue;
+      const d = dist2D(p.vehicle.x, p.vehicle.z, car.vehicle.x, car.vehicle.z);
+      if (best === null || d < best) best = d;
+    }
+    return best;
+  }
+
+  async endCampaign() {
+    this.mode = MODE.RACE;
+    this.campaign = null;
+    if (this.track.layout !== LAYOUTS.folsom) await this.buildTrack(LAYOUTS.folsom);
+    this.race.buildField(defaultField());
+    this.phase = PHASE.ATTRACT;
+    document.getElementById('menu').style.display = '';
+    this.hud.hideResults();
+  }
+
+  // The world keeps running behind a cutscene: the cars idle, the lamps and
+  // the beacons keep moving, the city is still there. Same body as the attract
+  // loop minus the camera, which the Cutscene owns.
+  _cutsceneTick(dt) {
+    if (!this.cut) { this.phase = PHASE.ATTRACT; return; }
+    this.accumulator = Math.min(this.accumulator + dt, 0.25);
+    while (this.accumulator >= FIXED) {
+      this.race.update(FIXED);
+      this.accumulator -= FIXED;
+    }
+    this.race.sync(this.accumulator / FIXED);
+    this.track.update(this.time, dt);
+    this._placeLamps();
+    this.fx.update(dt);
+    this.hud.tickText(dt);
+    this.cut.update(dt);
+  }
+
   // Put the field back the way it was before the attract loop ran on it.
-  _endAttract() {
+  _leaveAttract() {
     if (!this._attracting) return;
     this._attracting = false;
     for (const c of this.race.cars) c.model.visible = true;
@@ -656,11 +1089,31 @@ class Game {
   }
 
   render(dt = 0) {
-    if (this.picking) {
+    if (this.phase === PHASE.SELECT) {
       this.post.render(this.select.scene, this.select.camera, dt);
       return;
     }
+    this.skyFollow(this.camera);
     this.post.render(this.scene, this.camera, dt);
+  }
+
+  // The sky goes where the camera goes.
+  //
+  // It was a sphere of fixed radius sitting at the origin, which is fine for a
+  // circuit two kilometres across and wrong the moment a stage is bigger than
+  // the dome: on an eleven-kilometre bridge you drive out through the side of
+  // it somewhere around the first tower, and the stars end up bunched behind
+  // you in a patch of sky. Centred on the viewer it cannot be outrun, whatever
+  // the map measures — which is what a skybox is.
+  //
+  // A method rather than two lines in `render`, because anything else that
+  // points a camera at this scene has to do it too. The frame dumps place
+  // their own cameras kilometres from the last rendered one, and without this
+  // they photograph the OUTSIDE of the dome: a black dome sitting on the
+  // horizon with the stars in front of it.
+  skyFollow(camera) {
+    if (this.sky) this.sky.position.copy(camera.position);
+    if (this.stars) this.stars.position.copy(camera.position);
   }
 }
 

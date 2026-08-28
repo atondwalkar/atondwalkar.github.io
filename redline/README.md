@@ -618,6 +618,14 @@ properly black. Plus a vignette and a little grain, which also breaks up the
 banding a dark gradient would otherwise show. It is the look every other game
 had for about six years. It is not subtle and it is not meant to be.
 
+It is also on a switch — **PISS FILTER** in the settings, on by default. It sat
+there for a while labelled COLOUR GRADE, which is what it is and not what it
+looks like, so nobody ever found it; a setting nobody can find is a setting
+that does not exist. The smoke test reads the pixels either side of the toggle
+rather than trusting the uniform: turning it on takes about 18 of 255 of blue
+out of the middle of the frame, and if a change to the shader ever stops it
+doing that, the check fails whether or not the switch still moves.
+
 The shape is described as a radius at each of seventy-two angles around a loop.
 Where that radius follows `d / cos(θ − θ₀)` the points lie on a chord, which is
 how the waterfront straight and the boulevard back up the hill are made — and
@@ -682,6 +690,46 @@ physics is actually running, rather than at an assumed sixty frames a second.
 | Tab | the full order |
 | R | restart the race |
 | M | mute |
+
+The list above is the default. Every one of them is rebindable — **SETTINGS →
+CONTROLS**, click a key, press the new one — and the bindings are saved in the
+browser, so they survive a reload.
+
+Every key the game reads goes through one table (`src/keybinds.js`), which is
+the only reason a settings screen can move them: they used to be `case`
+statements on literals, read in one function for the pedals and another for the
+gearbox, and a rebinding panel laid over that would have moved the label on the
+button and nothing else. The smoke test proves the difference the only way it
+can be proved — it rebinds the throttle, then drives the car with the old key
+and the new one, and checks which one moves it.
+
+A key can only do one job: binding it to something takes it off whatever held
+it, because two actions sharing a key means one of them silently stops working
+and the one that stops is whichever comes later in a list nobody can see.
+Escape, Enter and the browser's own keys are refused.
+
+## Cheats
+
+Three codes, one per campaign stage, typed into the CHEATS box on the title
+screen. Case, spaces and punctuation are thrown away, because nobody types a
+cheat code carefully — `golden gate`, `Golden-Gate` and `GOLDENGATE` all work.
+
+| | |
+|---|---|
+| `FOLSOMANDSIXTH` | stage one — the duel with KESTREL, three laps, pink slips |
+| `GOLDENGATE` | stage two — CROSSTOWN, the run across the city to the on-ramp |
+| `SIXLANESOUT` | stage three — the bridge, six lanes and eleven kilometres |
+
+Nothing lists them in the game. A panel that tells you the codes is a level
+select with extra steps, and it hands a player who opened it out of curiosity
+the name of every stage there is.
+
+There are no codes for the cutscenes. A cutscene is thirty seconds of the stage
+in front of it, so a code that plays one is a code that spoils one — and the
+stage codes reach every scene anyway, in the place the scene is meant to be
+seen. The one thing that is checked about them is what they point AT: a code
+naming a stage that has since been renamed does nothing when typed, and nothing
+when typed is indistinguishable from the cheat not being wired up.
 
 ## Testing
 

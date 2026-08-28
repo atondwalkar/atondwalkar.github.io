@@ -489,7 +489,11 @@ export class Vehicle {
 
   // Shove the car by a world-space impulse applied at a point offset from the
   // centre of mass, which is what gives a nudge in the door its yaw.
-  applyImpulse(ix, iz, offsetX = 0, offsetZ = 0) {
+  // `yawScale` scales the rotation an off-centre hit imparts, leaving the
+  // linear part alone. A barrier scrape and a door rub want very different
+  // amounts: the wall is immovable and should spin you, another car is not and
+  // should not. Defaults to 1, so the one existing caller is unchanged.
+  applyImpulse(ix, iz, offsetX = 0, offsetZ = 0, yawScale = 1) {
     const s = this.spec;
     const c = Math.cos(this.yaw), sn = Math.sin(this.yaw);
     // World impulse into body axes.
@@ -497,7 +501,7 @@ export class Vehicle {
     const bz = ix * sn + iz * c;
     this.v += bx / s.mass;
     this.u += bz / s.mass;
-    this.yawRate += (offsetZ * bx - offsetX * bz) * CONTACT.yawKick / this.izz;
+    this.yawRate += (offsetZ * bx - offsetX * bz) * CONTACT.yawKick * yawScale / this.izz;
     this.lastImpact = Math.hypot(bx, bz) / s.mass;
   }
 }

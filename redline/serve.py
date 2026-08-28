@@ -52,7 +52,12 @@ class Handler(SimpleHTTPRequestHandler):
         body = self.rfile.read(length)
         os.makedirs('.test', exist_ok=True)
         if parts.path == '/__result':
-            with open(os.path.join('.test', 'result.txt'), 'wb') as f:
+            # Appended, not overwritten. The page posts its report when the run
+            # ends and then posts again from the frame dump — a failure inside
+            # it, or the extra lines the dump measures. Truncating on every
+            # POST meant the last one silently replaced the whole report, which
+            # looks exactly like the run never finished.
+            with open(os.path.join('.test', 'result.txt'), 'ab') as f:
                 f.write(body)
         elif parts.path.startswith('/__frame/'):
             name = re.sub(r'[^a-z0-9_-]', '', parts.path[len('/__frame/'):].lower())

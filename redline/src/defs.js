@@ -125,6 +125,78 @@ export const CONTACT = {
   yawKick: 1.5,             // rad/s^2 per metre of off-centre impact
 };
 
+// The rival you race for pink slips.
+//
+// Not simply a high skill number. Skill moves five things at once and tops out
+// at about 0.93 of the physical limit; this is a driver with a character:
+// plans on more deceleration than anyone else (so brakes visibly later), uses
+// more of the corner, will not move over, and throws the car at the tight ones
+// on the handbrake.
+export const RIVAL = {
+  name: 'KESTREL',
+  skill: 0.99,
+  opts: {
+    brakeG: 1.44,          // against the 1.41 g the car actually stops at
+    cornerMargin: 0.96,    // where the field uses 0.90
+    aggression: 0.98,
+    block: 0.85,
+    drift: 0.45,          // some corners, not every corner
+  },
+};
+
+// Car-to-car contact.
+//
+// A car is two discs, at the axles, not an oriented box. An OBB needs a
+// contact manifold and is where stability at 120 Hz goes to die; two discs
+// give the same silhouette for this purpose and reduce to the same maths the
+// barrier resolver already uses — project out the overlap, cancel the closing
+// speed, scrub the rest.
+// The police.
+//
+// Not a faster car — the same physics package as everything else, because
+// there is one — but a driver with no interest in a racing line. Full
+// aggression and full blocking, and the `chase` flag that makes it steer at
+// the car it is following rather than at the road.
+export const POLICE = {
+  name: 'UNIT',
+  // As quick as the quickest thing in the field. Slower than the car it is
+  // chasing is not a pursuit, it is an escort — and at 0.93 with a 0.93 corner
+  // margin it stalled at seventeen metres and stayed there, close enough to
+  // look like it was trying and never close enough to touch anybody.
+  skill: 0.97,
+  livery: { name: 'PD', body: 0xf2f4f6, trim: 0x16191f, num: 0, shape: 'muscle', police: true },
+  opts: {
+    brakeG: 1.44, cornerMargin: 0.98, aggression: 1.0, block: 0.9, drift: 0,
+    chase: 1,
+  },
+};
+
+// Traffic: ordinary cars, in ordinary colours.
+//
+// Muted and a little drab on purpose. The field's liveries are chosen to be
+// told apart at two hundred metres; these are chosen NOT to be — a bridge full
+// of racing colours reads as more competitors, and the whole point of them is
+// that they are not in the race.
+export const TRAFFIC = [
+  { name: '', body: 0xb8bcc0, trim: 0x2b3038, num: 0, shape: 'muscle' },
+  { name: '', body: 0x38424e, trim: 0x1a1f26, num: 0, shape: 'gt' },
+  { name: '', body: 0x8f9aa2, trim: 0x2a3038, num: 0, shape: 'muscle' },
+  { name: '', body: 0x6d5a48, trim: 0x2a231c, num: 0, shape: 'gt' },
+  { name: '', body: 0x2f4a3c, trim: 0x18241d, num: 0, shape: 'muscle' },
+  { name: '', body: 0xd8d4cc, trim: 0x33383e, num: 0, shape: 'gt' },
+];
+
+export const HULL = {
+  radius: 1.05,             // metres, per disc
+  fore: 1.35, aft: -1.35,   // where the discs sit, in body coordinates
+  restitution: 0.16,        // how much closing speed comes back
+  friction: 0.55,           // tangential scrub, as a fraction of the normal impulse
+  yawScale: 0.55,           // a door rub should not spin you the way a wall does
+  slop: 0.02,               // penetration tolerated before it is corrected
+  correction: 0.65,         // fraction of the remaining overlap fixed per step
+  maxDeltaV: 9,             // m/s, the cap that stops two overlapping cars launching
+};
+
 // Sixteen liveries, so you can tell who just went past.
 // Sixteen liveries, so you can tell who just went past — and four body shapes
 // across them, so the grid is a field of cars rather than one car in sixteen

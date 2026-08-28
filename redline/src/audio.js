@@ -208,5 +208,52 @@ export class AudioFX {
     }
   }
 
+  // The siren.
+  //
+  // A continuous two-tone wail rather than a sample, and one voice however
+  // many cars there are: three sirens playing the same waveform out of phase
+  // is a chord, not a pursuit, and three playing IN phase is one siren three
+  // times too loud. What sells it is proximity, so the gain is driven by how
+  // close the nearest of them has got — which is the number the player is
+  // actually listening for.
+  //
+  // `near` is metres to the closest pursuer, or null for none.
+  siren(near) {
+    if (!this.ctx) return;
+    if (near === null || near === undefined) {
+      if (this.sirenGain) this.sirenGain.gain.value = 0;
+      return;
+    }
+    if (!this.sirenGain) {
+      this.sirenGain = this.ctx.createGain();
+      this.sirenGain.gain.value = 0;
+      const shape = this.ctx.createBiquadFilter();
+      shape.type = 'bandpass';
+      shape.frequency.value = 900;
+      shape.Q.value = 0.9;
+      this.sirenGain.connect(shape);
+      shape.connect(this.master);
+      this.sirenOsc = this.ctx.createOscillator();
+      this.sirenOsc.type = 'sawtooth';
+      this.sirenOsc.frequency.value = 700;
+      // The wail: a slow triangle on the pitch, about half a hertz, which is
+      // the American two-tone rather than the European hi-lo.
+      const lfo = this.ctx.createOscillator();
+      lfo.type = 'triangle';
+      lfo.frequency.value = 0.55;
+      const depth = this.ctx.createGain();
+      depth.gain.value = 260;
+      lfo.connect(depth);
+      depth.connect(this.sirenOsc.frequency);
+      this.sirenOsc.connect(this.sirenGain);
+      this.sirenOsc.start();
+      lfo.start();
+    }
+    // Audible from a long way back and loud on your bumper, rolled off rather
+    // than switched on so it grows as they arrive.
+    const k = clamp(1 - near / 160, 0, 1);
+    this.sirenGain.gain.value = 0.030 * k * k;
+  }
+
   setListener(x, z, yaw) { this.lx = x; this.lz = z; this.lyaw = yaw; }
 }

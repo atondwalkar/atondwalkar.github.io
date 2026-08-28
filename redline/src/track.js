@@ -13,7 +13,7 @@
 // that a constant radius would produce.
 
 import * as THREE from 'three';
-import { MeshBuilder, G, VC_MATERIAL, VC_UNLIT, poolMaterial } from './meshkit.js';
+import { MeshBuilder, G, VC_MATERIAL, VC_MATERIAL_DS, VC_UNLIT, poolMaterial } from './meshkit.js';
 import { clamp, lerp, rand, pick } from './utils.js';
 
 export const TRACK_NAME = 'SAN FRANCISCO STREET CIRCUIT';
@@ -63,45 +63,330 @@ const JUNCTION_FLAT = 6;
 const JUNCTION_REACH = 20;
 const JUNCTION_OWNS = 18;           // the junction lays its own surface within this
 const JUNCTION_HALF = 12;           // and this is how wide the junction is
-const JUNCTION_TAPER = 14;          // held to here, then narrowed to meet the road
+const JUNCTION_TAPER = 14;
 
-// The lap, as (column, row) on that grid. It is rectilinear apart from one
+// How far the ground field blends the road's own height across, and the cell
+// size of the index that makes that blend cheap — the two are the same number
+// on purpose, so the 3x3 block around a point covers exactly the radius.
+const GROUND_R = 40;
+
+// The freeway ramp: how the deck climbs and how far it reaches.
+const RAMP = { segments: 14, seg: 22, rise: 0.075, bend: 0.055, width: 11 };
+
+// How far into an open route the start line goes: the grid is laid out in the
+// ninety metres before it, and a route has no road before its first metre.
+const GRID_RUNUP = 130;
+
+// Sea level, for the layouts whose road is over water.
+const SEA_Y = -6;
+
+// The colour of open water at night.
+//
+// Nearly black in the troughs, a cold sheen on the crests where the sky is on
+// the face of them, and a glint where the short chop catches. `lit` is how
+// much light there is falling on it — the bridge and the city are the only
+// things out here throwing any.
+//
+// One function, used by the bay around a city and by the sea under a bridge,
+// because they are the same water and were two different flat colours.
+function waterColour(x, z, lit) {
+  const h = swell(x, z);
+  const crest = clamp((h + 1.9) / 3.8, 0, 1);
+  const chop = clamp(
+    (Math.sin(x * 0.041 - z * 0.029) + Math.sin(z * 0.052 + x * 0.017)) * 0.5 + 0.5, 0, 1);
+  const l = 0.048 + crest * crest * 0.075 + Math.pow(chop, 5) * 0.10 + lit * lit * 0.05;
+  return [l * 0.72 + lit * lit * 0.035, l * 0.92, l * 1.35 + 0.018];
+}
+
+// The swell. Four wavelengths at four angles, because one is a corrugated
+// roof and two is a grid — what stops it reading as either is that no two of
+// them line up. Read by the water's geometry and by its colour, so the crests
+// are where the light is.
+function swell(x, z) {
+  // Four wavelengths, from a kilometre and a half down to seventy metres.
+  //
+  // The long ones alone are invisible from a bridge: one crest fills the whole
+  // view and the water reads as a tilted sheet. What makes it look like water
+  // from the deck is the short chop on top, and the short chop is the reason
+  // the mesh under it has to be fine enough to carry it.
+  return Math.sin(x * 0.0042 + z * 0.0011) * 1.5
+    + Math.sin(x * 0.0009 - z * 0.0051) * 1.1
+    + Math.sin((x + z) * 0.0135) * 0.45
+    + Math.sin(x * 0.041 - z * 0.029) * 0.20
+    + Math.sin(z * 0.052 + x * 0.017) * 0.14;
+}
+
+// The bridge, as the ramp needs to know it: how long the deck is and how high.
+// Both are read off the numbers the bridge is actually built from below.
+const BRIDGE_DECK = 340 * 2.4;
+const BRIDGE_DECK_Y = 34;
+
+// The layouts.
+//
+// A layout is the two things that make one circuit different from another —
+// where the junctions are, and how high the road is at each point of the lap —
+// and nothing else. Everything downstream of them (the fillets, the side
+// streets, the blockades, the city, the scenery) is derived, so a new stage is
+// a table of numbers rather than a second copy of this file.
+//
+// `loop` is (column, row) on the street grid. It is rectilinear apart from the
 // diagonal avenue across the top of the hill, which is the one thing a real
 // grid city always has cutting across it.
-const LOOP = [
-  [0, 0], [5, 0], [5, 2], [8, 2], [8, 5], [6, 7],
-  [2, 7], [2, 9], [-3, 9], [-3, 5], [-1, 3], [-1, 0],
-];
-
-// The hill, as height against fraction of a lap.
 //
-// Against DISTANCE, not against any angle or index: grade is rise per metre
-// travelled, so anything else makes the same rise into a different slope
-// depending on how long the street it falls on happens to be.
-const ELEVATION = [
-  [0.00, 0.8], [0.10, 1.0], [0.24, 12], [0.40, 26], [0.52, 30],
-  [0.62, 28], [0.74, 15], [0.88, 4], [0.96, 1.2],
-];
+// `elevation` is height against FRACTION OF A LAP, not against any angle or
+// index: grade is rise per metre travelled, so anything else makes the same
+// rise into a different slope depending on how long the street it falls on
+// happens to be.
+export const LAYOUTS = {
+  folsom: {
+    id: 'folsom',
+    name: TRACK_NAME,
+    loop: [
+      [0, 0], [5, 0], [5, 2], [8, 2], [8, 5], [6, 7],
+      [2, 7], [2, 9], [-3, 9], [-3, 5], [-1, 3], [-1, 0],
+    ],
+    elevation: [
+      [0.00, 0.8], [0.10, 1.0], [0.24, 12], [0.40, 26], [0.52, 30],
+      [0.62, 28], [0.74, 15], [0.88, 4], [0.96, 1.2],
+    ],
+  },
+
+  // Stage two: an open route across the whole city to the Golden Gate on-ramp.
+  //
+  // Not a lap. It starts down on the eastern waterfront, winds west and north
+  // through eighteen junctions, climbs over the hill and comes out on the
+  // headland with the bridge dead ahead — and it never crosses itself, so the
+  // road in front of you is always road you have not driven.
+  //
+  // It was a closed loop driven four fifths of the way round, which is the
+  // cheap way to get a long route out of code that assumes a lap. It reads as
+  // one, too: the road bends back toward where it started, and the ramp has to
+  // stand wherever the loop happens to pass rather than where the bridge is.
+  run: {
+    id: 'run',
+    // Named for what it is — the length of the city, east to west — rather
+    // than for what it ends at. It shared a name with the bridge stage, which
+    // made two entirely different stages read as the same one everywhere the
+    // name is shown.
+    name: 'CROSSTOWN',
+    closed: false,
+    loop: [
+      [9, -6], [2, -6], [2, -2], [6, -2], [6, 2], [1, 2],
+      [1, 6], [5, 6], [5, 10], [-1, 10], [-1, 5], [-5, 5],
+      [-5, 1], [-9, 1], [-9, 6], [-6, 6], [-6, 10], [-11, 10],
+    ],
+    // Slid east of where its own bounding box would centre it, so the far end
+    // comes out the right distance from the bridge for the on-ramp to climb.
+    // The bridge is fixed scenery in world coordinates; the city is the thing
+    // that can move.
+    offset: { x: 250, z: -30 },
+    // A bigger world than the circuit needs. The route is a kilometre across
+    // and the ground plane has to reach past the far side of it, or the city
+    // ends in mid-air a block after the last junction.
+    world: 2600,
+    // Moved and turned to face the route's exit, so the on-ramp climbs onto
+    // the deck rather than alongside it.
+    //
+    // Placed so the deck's near end lands about three hundred and eighty
+    // metres past where the road runs out. That number is the on-ramp: any
+    // closer and it is a wall, any further and it is a flat grey strip you
+    // cannot tell from the street — which is what it was at seven hundred,
+    // climbing four metres over the whole of it. At this distance it climbs
+    // twenty-four, which reads as a ramp from the road, and the near tower
+    // stands a couple of hundred metres beyond the top of it.
+    bridge: { x: -1078, z: 330, ang: 0 },
+    // Down at the water, up over the hill, and down again to the approach.
+    // Not all the way down: the deck is thirty-four metres up and a ramp that
+    // has to find all of that from sea level is a wall.
+    elevation: [
+      [0.00, 1.5], [0.08, 3], [0.18, 18], [0.30, 34], [0.42, 46],
+      [0.52, 40], [0.62, 20], [0.72, 14], [0.86, 12], [1.00, 10],
+    ],
+  },
+
+  // Stage three: the bridge itself.
+  //
+  // Six lanes, two miles of it, a hundred metres over the water. Nearly
+  // straight — a bridge is — with one shallow kink at mid-span so it is not a
+  // ruler, and a deck that arcs the way a suspended one does.
+  //
+  // `deck` turns off everything a street has and turns on everything a bridge
+  // has: no blocks, no side streets, no blockades, no pavements full of
+  // furniture; towers, cables, hangers, railings and open water instead.
+  bridge: {
+    id: 'bridge',
+    name: 'THE GOLDEN GATE',
+    closed: false,
+    deck: true,
+    width: 21.6,                 // six lanes at 3.6 m
+    lane: 3.6,                   // and marked as six
+    // Eleven kilometres of it. Long enough that the far end is over the
+    // horizon from the near one, which is the point: a bridge you can see the
+    // end of from the start is a bridge you are already across.
+    world: 12000,
+    // You can see a long way over water at night, and everything worth seeing
+    // out here is a light. Far enough that both towers are in view from
+    // mid-span; close enough that the far end of the deck still fades out
+    // rather than ending in mid-air.
+    fog: { near: 200, far: 3400, colour: 0x121826 },
+    loop: [
+      [-105, 0], [-70, 0.5], [-35, 0.9], [0, 1.0],
+      [35, 0.9], [70, 0.5], [105, 0],
+    ],
+    // The deck rises to mid-span and falls away again, which is the shape a
+    // suspended span actually takes.
+    elevation: [
+      [0.00, 34], [0.14, 40], [0.30, 44], [0.50, 46],
+      [0.70, 44], [0.86, 40], [1.00, 34],
+    ],
+  },
+};
+
+// Give a built track back.
+//
+// Materials are the trap. Most of the geometry in here is drawn with the three
+// vertex-coloured materials out of meshkit, and those are module singletons
+// shared with the cars — disposing one while tearing a track down leaves every
+// car in the game drawn with a disposed program. So the shared ones are named
+// and skipped, and only materials this track made for itself are released.
+const SHARED_MATERIALS = new Set([VC_MATERIAL, VC_MATERIAL_DS, VC_UNLIT]);
+
+export function disposeTrack(scene, track) {
+  if (!track || !track.group) return;
+  scene.remove(track.group);
+  track.group.traverse((o) => {
+    if (o.geometry) o.geometry.dispose();
+    const m = o.material;
+    if (!m) return;
+    for (const one of Array.isArray(m) ? m : [m]) {
+      if (!SHARED_MATERIALS.has(one)) one.dispose();
+    }
+  });
+  track.group = null;
+}
 
 export class Track {
-  constructor() {
+  constructor(layout = LAYOUTS.folsom) {
+    this.layout = layout;
+    // Closed unless the layout says otherwise.
+    //
+    // Everything here was written for a lap: the centreline wraps, distance
+    // along the road is modulo its length, the racing line relaxes round a
+    // ring and the speed profile makes two circular passes over it. An open
+    // route is the same code with the wrap replaced by a clamp — which is what
+    // `_w` is — plus a handful of places where the first and last samples have
+    // no neighbour and the loop has to stop one short instead of coming round.
+    this.closed = layout.closed !== false;
     // Centred on the origin. The ground plane, the fog, the sky dome and the
     // landmarks across the bay are all built around 0,0, and a grid written
     // from a corner is not — so move the grid rather than every one of them.
-    const raw = LOOP.map(([c, r]) => ({ x: c * PITCH_X, z: r * PITCH_Z }));
+    const raw = layout.loop.map(([c, r]) => ({ x: c * PITCH_X, z: r * PITCH_Z }));
     const cx = (Math.min(...raw.map((j) => j.x)) + Math.max(...raw.map((j) => j.x))) / 2;
     const cz = (Math.min(...raw.map((j) => j.z)) + Math.max(...raw.map((j) => j.z))) / 2;
-    this.junctions = raw.map((j) => ({ x: j.x - cx, z: j.z - cz }));
+    const off = layout.offset || { x: 0, z: 0 };
+    this.junctions = raw.map((j) => ({ x: j.x - cx + off.x, z: j.z - cz + off.z }));
+    // Read by the results panel, which used to sniff `constructor.name` and
+    // compare it against a circuit name that no longer matched anything.
+    this.name = layout.name;
     this.origin = { cx, cz };            // so the blocks can be laid on the same grid
     this._sample();
     this._buildRacingLine();
     this._buildSpeedProfile();
     this._grid();
     this._hash();
+    this._groundIndex();
     // After the spatial hash, not before: laying out the side streets asks
     // locate() where the circuit is, and locate() cannot answer until the hash
     // it searches exists.
-    this._sideStreets();
+    // A bridge has no side streets, and therefore none of what `_sideStreets`
+    // sets up on its way: the junction boxes the road surfacing lays its plus
+    // shapes from, and the lists everything downstream iterates. Empty rather
+    // than absent, so nothing has to ask whether they exist.
+    if (!layout.deck) this._sideStreets();
+    else { this.streets = []; this.stubs = []; this.boxes = []; }
+    // The ramp's footprint, worked out before anything is built so the city
+    // can be told to leave room for it. Buildings go up first and the ramp
+    // last, and a deck that climbs over the rooftops looks exactly as wrong
+    // going THROUGH one as you would expect.
+    this.rampPlan = (layout.ramp || (!this.closed && !layout.deck)) ? this._rampPlan() : null;
+  }
+
+  // Where the deck goes.
+  //
+  // Two shapes for two kinds of stage. On a lap the route ends partway round,
+  // so the ramp peels off the side of the street and climbs away over the
+  // rooftops — it is a place to arrive at, and it stops in mid-air because
+  // nothing past the finish is ever seen from the road.
+  //
+  // On a route it is an ON-RAMP: it starts where the road runs out, turns onto
+  // the bearing of the bridge, and climbs until it meets the deck. Which means
+  // its length is not a constant — it is however far the bridge is, and its
+  // grade is however much height that leaves to find.
+  _rampPlan() {
+    const open = !this.closed;
+    const at = open ? this.length : this.layout.ramp * this.length;
+    const p = this.atDistance(at);
+    const segs = [];
+
+    let n = RAMP.segments, seg = RAMP.seg, rise = RAMP.rise, bend = RAMP.bend;
+    let turn = 0;
+    if (open) {
+      // Aim at the near end of the deck, and work out what it takes to get up
+      // to it. `ang` is the deck's own bearing, so its near end is the centre
+      // stepped back along it toward the city.
+      const B = this.layout.bridge || { x: -560, z: 330, ang: 0.7 };
+      const bdx = Math.cos(B.ang), bdz = Math.sin(B.ang);
+      const half = BRIDGE_DECK / 2;
+      const e1 = { x: B.x + bdx * half, z: B.z + bdz * half };
+      const e2 = { x: B.x - bdx * half, z: B.z - bdz * half };
+      const near = (e1.x - p.x) ** 2 + (e1.z - p.z) ** 2 < (e2.x - p.x) ** 2 + (e2.z - p.z) ** 2
+        ? e1 : e2;
+      const dx = near.x - p.x, dz = near.z - p.z;
+      const dist = Math.hypot(dx, dz);
+      // Everything but the last twenty metres, so the deck stops short of the
+      // bridge rather than inside its end.
+      const reach = Math.max(60, dist - 20);
+      n = Math.max(6, Math.round(reach / RAMP.seg));
+      seg = reach / n;
+      rise = (BRIDGE_DECK_Y - p.y) / reach;
+      // The whole turn onto the bearing, spread over the first third of it.
+      const want = Math.atan2(dx, dz);
+      const have = Math.atan2(p.dirX, p.dirZ);
+      let d = want - have;
+      while (d > Math.PI) d -= Math.PI * 2;
+      while (d < -Math.PI) d += Math.PI * 2;
+      turn = d;
+      bend = 0;
+    }
+
+    let cx = p.x, cz = p.z, cy = p.y + 0.15, ang = 0;
+    for (let i = 0; i < n; i++) {
+      if (open) {
+        // Eased onto the bearing over the first third, then dead straight at
+        // the bridge for the rest of the climb.
+        const k = clamp((i + 0.5) / (n / 3), 0, 1);
+        ang = turn * k * k * (3 - 2 * k) / 1;
+      } else {
+        ang += bend;
+      }
+      const dx = p.dirX * Math.cos(ang) + p.nx * Math.sin(ang);
+      const dz = p.dirZ * Math.cos(ang) + p.nz * Math.sin(ang);
+      segs.push({
+        x: cx + dx * seg * 0.5,
+        z: cz + dz * seg * 0.5,
+        y: cy + rise * seg * 0.5,
+        dx, dz, yaw: Math.atan2(dx, dz), i,
+      });
+      cx += dx * seg; cz += dz * seg; cy += rise * seg;
+    }
+    return { at, x: p.x, y: p.y, z: p.z, segs, seg, rise, open };
+  }
+
+  // An index into an array of N, wrapped on a lap and clamped on a route.
+  // The one place the difference between the two lives.
+  _w(i, N) {
+    if (this.closed) return ((i % N) + N) % N;
+    return i < 0 ? 0 : (i >= N ? N - 1 : i);
   }
 
   // ---------------------------------------------------------- geometry
@@ -121,8 +406,14 @@ export class Track {
     const n = J.length;
     const out = [];
     this.corners = [];
-    for (let i = 0; i < n; i++) {
-      const a = J[(i - 1 + n) % n], b = J[i], c = J[(i + 1) % n];
+    // On a route the two end junctions have nothing on one side of them to
+    // turn from or into, so they are kept as they are and everything between
+    // is filleted exactly as on a lap.
+    if (!this.closed) out.push({ x: J[0].x, z: J[0].z });
+    const lo = this.closed ? 0 : 1;
+    const hi = this.closed ? n : n - 1;
+    for (let i = lo; i < hi; i++) {
+      const a = J[this._w(i - 1, n)], b = J[i], c = J[this._w(i + 1, n)];
       const v1x = b.x - a.x, v1z = b.z - a.z;
       const v2x = c.x - b.x, v2z = c.z - b.z;
       const l1 = Math.hypot(v1x, v1z) || 1, l2 = Math.hypot(v2x, v2z) || 1;
@@ -155,17 +446,23 @@ export class Track {
       out.push({ x: ex, z: ez });
       this.corners.push({ x: b.x, z: b.z, turn, r, u1x, u1z, u2x, u2z });
     }
+    if (!this.closed) out.push({ x: J[n - 1].x, z: J[n - 1].z });
 
     // Subdivide the straights, so the fine polyline is dense enough for the
     // arc-length resampling that follows to land where it means to.
     const dense = [];
-    for (let i = 0; i < out.length; i++) {
-      const a = out[i], b = out[(i + 1) % out.length];
+    const segs = out.length - (this.closed ? 0 : 1);
+    for (let i = 0; i < segs; i++) {
+      const a = out[i], b = out[this._w(i + 1, out.length)];
       const d = Math.hypot(b.x - a.x, b.z - a.z);
       const k = Math.max(1, Math.round(d / 1.2));
       for (let j = 0; j < k; j++) {
         dense.push({ x: lerp(a.x, b.x, j / k), z: lerp(a.z, b.z, j / k), y: 0, width: 0 });
       }
+    }
+    if (!this.closed) {
+      const e = out[out.length - 1];
+      dense.push({ x: e.x, z: e.z, y: 0, width: 0 });
     }
 
     // Width: the plain street, opening out at every junction.
@@ -174,8 +471,11 @@ export class Track {
     // own surface, and only then tapered back. A width that starts narrowing
     // immediately would leave the road narrower than the plus arm it has to
     // meet, and the two would not line up at the seam.
+    const baseWidth = this.layout.width || DEFAULT_WIDTH;
     for (const q of dense) {
-      let w = DEFAULT_WIDTH;
+      let w = baseWidth;
+      // A bridge has no junctions to open out at.
+      if (this.layout.deck) { q.width = w; continue; }
       // At the CORNERS, not at every grid junction. Three of the twelve points
       // in the lap are collinear — the road runs straight through them — and
       // widening there put an unexplained bulge in the middle of a straight,
@@ -192,17 +492,22 @@ export class Track {
     // Height, by fraction of the lap. Needs the lap length, so measure first.
     let total = 0;
     for (let i = 0; i < dense.length; i++) {
-      const a = dense[i], b = dense[(i + 1) % dense.length];
+      const a = dense[i], b = dense[this._w(i + 1, dense.length)];
       a.d = Math.hypot(b.x - a.x, b.z - a.z);
       a.at = total;
       total += a.d;
     }
     for (const q of dense) {
       const f = q.at / total;
-      let y = ELEVATION[0][1];
-      for (let k = 0; k < ELEVATION.length; k++) {
-        const [f0, y0] = ELEVATION[k];
-        const [f1, y1] = k + 1 < ELEVATION.length ? ELEVATION[k + 1] : [1, ELEVATION[0][1]];
+      const E = this.layout.elevation;
+      let y = E[0][1];
+      for (let k = 0; k < E.length; k++) {
+        const [f0, y0] = E[k];
+        // Past the last control point a lap comes back round to its first
+        // height, because it has to meet itself. A route does not: it ends
+        // where it ends, and pulling it back down to its starting height would
+        // put the on-ramp underwater.
+        const [f1, y1] = k + 1 < E.length ? E[k + 1] : [1, this.closed ? E[0][1] : E[E.length - 1][1]];
         if (f >= f0 && f <= f1) { y = lerp(y0, y1, (f - f0) / (f1 - f0 || 1)); break; }
       }
       q.y = y;
@@ -211,8 +516,8 @@ export class Track {
     // between the elevation control points are not creases.
     for (let pass = 0; pass < 30; pass++) {
       const next = dense.map((q, i) => {
-        const a = dense[(i - 1 + dense.length) % dense.length];
-        const b = dense[(i + 1) % dense.length];
+        const a = dense[this._w(i - 1, dense.length)];
+        const b = dense[this._w(i + 1, dense.length)];
         return (a.y + b.y + q.y * 2) / 4;
       });
       for (let i = 0; i < dense.length; i++) dense[i].y = next[i];
@@ -229,7 +534,7 @@ export class Track {
     // Arc length along the fine polyline.
     let total = 0;
     for (let i = 0; i < fine.length; i++) {
-      const a = fine[i], b = fine[(i + 1) % fine.length];
+      const a = fine[i], b = fine[this._w(i + 1, fine.length)];
       a.seg = Math.hypot(b.x - a.x, b.z - a.z);
       a.s = total;
       total += a.seg;
@@ -243,7 +548,7 @@ export class Track {
     for (let i = 0; i < count; i++) {
       const target = i * this.step;
       while (fi < fine.length - 1 && fine[fi].s + fine[fi].seg < target) { fi++; acc = fine[fi].s; }
-      const a = fine[fi], b = fine[(fi + 1) % fine.length];
+      const a = fine[fi], b = fine[this._w(fi + 1, fine.length)];
       const t = a.seg > 1e-6 ? (target - a.s) / a.seg : 0;
       this.samples.push({
         i,
@@ -263,9 +568,9 @@ export class Track {
       // one sample means something different at every sampling step, and the
       // kerbs and the speed profile both read it.
       const K = Math.max(1, Math.round(2.5 / this.step));
-      const p0 = this.samples[(i - K + N) % N];
+      const p0 = this.samples[this._w(i - K, N)];
       const p1 = this.samples[i];
-      const p2 = this.samples[(i + K) % N];
+      const p2 = this.samples[this._w(i + K, N)];
       const dx = p2.x - p0.x, dz = p2.z - p0.z;
       const len = Math.hypot(dx, dz) || 1;
       p1.dirX = dx / len;
@@ -322,9 +627,9 @@ export class Track {
     // height never shifts — the hill is redistributed, not flattened away.
     for (let pass = 0; pass < 400; pass++) {
       let worst = 0;
-      for (let i = 0; i < N; i++) {
-        const a2 = this.samples[i], b2 = this.samples[(i + 1) % N];
-        const lim = Math.min(cap[i], cap[(i + 1) % N]);
+      for (let i = 0; i < N - (this.closed ? 0 : 1); i++) {
+        const a2 = this.samples[i], b2 = this.samples[this._w(i + 1, N)];
+        const lim = Math.min(cap[i], cap[this._w(i + 1, N)]);
         const g = (b2.y - a2.y) / this.step;
         const over = Math.abs(g) - lim;
         if (over <= 0) continue;
@@ -339,9 +644,9 @@ export class Track {
     // again.
     for (let i = 0; i < N; i++) {
       const K = Math.max(1, Math.round(2.5 / this.step));
-      const p0 = this.samples[(i - K + N) % N];
+      const p0 = this.samples[this._w(i - K, N)];
       const p1 = this.samples[i];
-      const p2 = this.samples[(i + K) % N];
+      const p2 = this.samples[this._w(i + K, N)];
       const a = Math.hypot(p1.x - p0.x, p1.z - p0.z);
       const b = Math.hypot(p2.x - p1.x, p2.z - p1.z);
       p1.grade = (p2.y - p0.y) / (a + b || 1);
@@ -356,7 +661,7 @@ export class Track {
     // and the timing line drawn through a junction. Rotating the sample array
     // moves all of it at once, because everything downstream is expressed in
     // terms of the index.
-    {
+    if (this.closed) {
       const straight = this.samples.map((p) => (p.curvature < 0.0025 ? 1 : 0));
       let bestAt = 0, bestLen = 0, run = 0, runAt = 0;
       for (let k = 0; k < N * 2; k++) {
@@ -382,13 +687,14 @@ export class Track {
     }
   }
 
-  at(index) { return this.samples[((index % this.samples.length) + this.samples.length) % this.samples.length]; }
+  at(index) { return this.samples[this._w(index, this.samples.length)]; }
 
-  // The sample nearest a distance along the lap, wrapping round.
+  // The sample nearest a distance along the road — wrapping round on a lap,
+  // and held at the two ends on a route, where there is nothing beyond them.
   atDistance(s) {
     const n = this.samples.length;
-    const i = Math.round((((s % this.length) + this.length) % this.length) / this.step);
-    return this.samples[i % n];
+    const d = this.closed ? ((s % this.length) + this.length) % this.length : clamp(s, 0, this.length);
+    return this.samples[this._w(Math.round(d / this.step), n)];
   }
 
   // ------------------------------------------------------- racing line
@@ -410,8 +716,8 @@ export class Track {
     const W = Math.max(2, Math.round(12 / this.step));
     for (let pass = 0; pass < Math.round(600 * (2.5 / this.step)); pass++) {
       for (let i = 0; i < N; i++) {
-        const a = this.samples[(i - W + N) % N], b = this.samples[i], c = this.samples[(i + W) % N];
-        const oa = off[(i - W + N) % N], oc = off[(i + W) % N];
+        const a = this.samples[this._w(i - W, N)], b = this.samples[i], c = this.samples[this._w(i + W, N)];
+        const oa = off[this._w(i - W, N)], oc = off[this._w(i + W, N)];
         // Where the midpoint of the neighbours lands, in this sample's normal.
         const mx = (a.x + oa * a.nx + c.x + oc * c.nx) / 2;
         const mz = (a.z + oa * a.nz + c.z + oc * c.nz) / 2;
@@ -439,7 +745,7 @@ export class Track {
     // reports a straight as a corner.
     for (let pass = 0; pass < Math.round(14 * (2.5 / this.step)); pass++) {
       const sm = this.line.map((p, i) => (
-        this.line[(i - 1 + N) % N].offset + p.offset * 2 + this.line[(i + 1) % N].offset) / 4);
+        this.line[this._w(i - 1, N)].offset + p.offset * 2 + this.line[this._w(i + 1, N)].offset) / 4);
       for (let i = 0; i < N; i++) {
         const b = this.samples[i];
         this.line[i].offset = sm[i];
@@ -449,7 +755,7 @@ export class Track {
     }
     for (let i = 0; i < N; i++) {
       const C = Math.max(2, Math.round(15 / this.step));
-      const p0 = this.line[(i - C + N) % N], p1 = this.line[i], p2 = this.line[(i + C) % N];
+      const p0 = this.line[this._w(i - C, N)], p1 = this.line[i], p2 = this.line[this._w(i + C, N)];
       const a = Math.hypot(p1.x - p0.x, p1.z - p0.z);
       const b = Math.hypot(p2.x - p1.x, p2.z - p1.z);
       const c = Math.hypot(p2.x - p0.x, p2.z - p0.z);
@@ -468,15 +774,20 @@ export class Track {
       const r = this.line[i].curvature > 1e-5 ? 1 / this.line[i].curvature : 1e6;
       v[i] = Math.min(vMax, Math.sqrt(latG * 9.81 * r));
     }
+    // The two passes stop one short of the ends on a route. There is nothing
+    // past the last sample to brake for — it is a ramp onto a bridge — and
+    // nothing before the first to have accelerated from.
+    const lo = this.closed ? 0 : 1;
+    const hi = this.closed ? N : N - 1;
     for (let pass = 0; pass < 3; pass++) {
-      for (let k = N - 1; k >= 0; k--) {
-        const i = k, j = (i + 1) % N;
+      for (let k = hi - 1; k >= 0; k--) {
+        const i = k, j = this._w(i + 1, N);
         const d = this.step;
         const cap = Math.sqrt(v[j] * v[j] + 2 * brakeG * 9.81 * d);
         if (v[i] > cap) v[i] = cap;
       }
-      for (let k = 0; k < N; k++) {
-        const i = k, j = (i - 1 + N) % N;
+      for (let k = lo; k < N; k++) {
+        const i = k, j = this._w(i - 1, N);
         const d = this.step;
         const cap = Math.sqrt(v[j] * v[j] + 2 * accelG * 9.81 * d);
         if (v[i] > cap) v[i] = cap;
@@ -544,7 +855,9 @@ export class Track {
     return {
       sample: p,
       index: p.i,
-      s: (p.s + along + this.length) % this.length,
+      s: this.closed
+        ? (p.s + along + this.length) % this.length
+        : clamp(p.s + along, 0, this.length),
       lateral,
       width: p.width,
       onTrack: Math.abs(lateral) <= p.width / 2,
@@ -557,11 +870,17 @@ export class Track {
 
   _grid() {
     // Eight rows of two, staggered, stacked up behind the line.
+    //
+    // On a lap the line is at s = 0 and the grid is in the ninety metres
+    // before it, which is the end of the sample array. A route has no road
+    // before its start, so the line moves forward instead — far enough in that
+    // the whole grid fits on the road ahead of the first metre of it.
+    const line = this.closed ? this.length : GRID_RUNUP;
     this.gridSlots = [];
     for (let i = 0; i < 16; i++) {
       const row = Math.floor(i / 2);
       const side = i % 2 === 0 ? 1 : -1;
-      const s = (this.length - 26) - row * 8.5;
+      const s = (line - 26) - row * 8.5;
       const p = this.atDistance(s);
       const off = side * 3.4;
       this.gridSlots.push({
@@ -572,7 +891,7 @@ export class Track {
         s,
       });
     }
-    const start = this.atDistance(0);
+    const start = this.atDistance(this.closed ? 0 : line);
     this.startLine = { x: start.x, z: start.z, dirX: start.dirX, dirZ: start.dirZ, nx: start.nx, nz: start.nz };
   }
 
@@ -597,7 +916,18 @@ export class Track {
     // landscape with its own three metres of undulation puts the grass above
     // the track in places, which leaves the barriers and the trackside looking
     // like they are floating over a field.
-    const groundGeo = new THREE.PlaneGeometry(1800, 1800, 220, 220);
+    const WORLD = this.layout.world || 1800;
+    // Segments scale with the world, so a bigger map is not a coarser one —
+    // eight metres a quad either way, which is what the road's own kerbs are
+    // built to. Except over water, which is flat: an eleven-kilometre bay at
+    // eight metres a quad is two million vertices of dead level blue.
+    // Over water the field is a formula rather than a search, so a finer mesh
+    // costs almost nothing — and it has to be finer than the swell it carries
+    // or the swell is invisible. Forty-eight segments over twelve kilometres
+    // is a quarter-kilometre a quad, which is a flat sheet however it is
+    // coloured: a blank canvas with a bridge on it.
+    const SEG = this.layout.deck ? 420 : Math.round(220 * (WORLD / 1800));
+    const groundGeo = new THREE.PlaneGeometry(WORLD, WORLD, SEG, SEG);
     groundGeo.rotateX(-Math.PI / 2);
     {
       const pos = groundGeo.attributes.position;
@@ -607,23 +937,53 @@ export class Track {
         // The city floor: it stays with the circuit near the road and then
         // keeps climbing away from it, because the hills here do not stop at
         // the kerb. Beyond the far edge it drops away to the bay.
-        let bestD = Infinity;
-        for (const p of this.samples) {
-          const d = (p.x - x) * (p.x - x) + (p.z - z) * (p.z - z);
-          if (d < bestD) bestD = d;
-        }
-        const dist = Math.sqrt(bestD);
-        const bay = clamp((dist - 340) / 200, 0, 1);
+        //
+        // Through the index, not by sweeping the samples: this loop runs for
+        // every one of forty-eight thousand vertices, and doing it the direct
+        // way here cost as much again as the `groundAt` below — which needs
+        // the same number and gets it the same cheap way.
+        const dist = Math.sqrt(this._nearestSample(x, z).d2);
+        const bay = this.layout.deck ? 1 : clamp((dist - 340) / 200, 0, 1);
+        // Height first, then colour: the deck branch below returns early, and
+        // with the height set after it the water came out perfectly flat and
+        // beautifully shaded, which is a lit sheet of paper.
         pos.setY(i, this.groundAt(x, z));
+        if (this.layout.deck) {
+          const w = waterColour(x, z, clamp(1 - dist / 420, 0, 1));
+          col[i * 3] = w[0]; col[i * 3 + 1] = w[1]; col[i * 3 + 2] = w[2];
+          continue;
+        }
         // Blocks of city, read as a grid of paving and rooftops, going blue
         // where the streets run out and the water starts.
         const block = (Math.floor(x / 34) + Math.floor(z / 34)) % 2 ? 0.06 : 0;
         const n = Math.sin(x * 0.021 + z * 0.013) * Math.cos(z * 0.017 - x * 0.011) * 0.5 + 0.5;
         const g = 0.30 + n * 0.10 + block;
+        // ...but only where there IS city. Past a hundred metres or so from
+        // any road there are no more buildings, and the paving grid carried on
+        // regardless: a pale grey plain stretching to the waterline, which
+        // from the on-ramp — where the headland is deliberately cleared so the
+        // bridge can be seen — is several hundred metres of blank canvas.
+        //
+        // Out there it is headland: scrub and rock, dark, with the same noise
+        // breaking it up so it is not a flat colour either.
+        const wild = clamp((dist - 95) / 150, 0, 1);
+        const scrub = 0.055 + n * 0.045;
+        // The bay was a flat blue — one colour over everything past the
+        // shoreline, which from anywhere with a view is a blank canvas with a
+        // city sitting on it. It is the same water as the sea under the
+        // bridge, so it gets the same treatment: swell, chop and a sheen that
+        // picks up the city behind it.
         const w = bay;
-        col[i * 3] = (g * 0.98) * (1 - w) + 0.13 * w;
-        col[i * 3 + 1] = (g * 0.96) * (1 - w) + 0.24 * w;
-        col[i * 3 + 2] = (g * 0.92) * (1 - w) + 0.34 * w;
+        const sea = waterColour(x, z, clamp(1 - (dist - 340) / 500, 0, 1));
+        // Paving near the roads, scrub away from them, water past the shore.
+        const land = [
+          lerp(g * 0.98, scrub * 1.05, wild),
+          lerp(g * 0.96, scrub * 1.30, wild),
+          lerp(g * 0.92, scrub * 0.80, wild),
+        ];
+        col[i * 3] = land[0] * (1 - w) + sea[0] * w;
+        col[i * 3 + 1] = land[1] * (1 - w) + sea[1] * w;
+        col[i * 3 + 2] = land[2] * (1 - w) + sea[2] * w;
       }
       groundGeo.setAttribute('color', new THREE.BufferAttribute(col, 3));
       groundGeo.computeVertexNormals();
@@ -673,21 +1033,40 @@ export class Track {
       quad(p, q, [a, a * 1.02, a * 1.05], -hw0, hw0, -hw1, hw1, 0.02);
 
       // Edge line, solid white, close in to the curb.
+      // (On a six-lane deck the same pass runs; what changes is how many
+      // dashed lines fit between the edges, which falls out of the width.)
       quad(p, q, [0.78, 0.78, 0.75], -hw0 + 0.18, -hw0 + 0.34, -hw1 + 0.18, -hw1 + 0.34, 0.03);
       quad(p, q, [0.78, 0.78, 0.75], hw0 - 0.34, hw0 - 0.18, hw1 - 0.34, hw1 - 0.18, 0.03);
 
       // The double yellow down the centre: two lines with a gap, which is what
       // tells you at a glance which way the traffic on each side is going.
-      const YEL = [0.76, 0.60, 0.13];
-      quad(p, q, YEL, -0.30, -0.16, -0.30, -0.16, 0.031);
-      quad(p, q, YEL, 0.16, 0.30, 0.16, 0.30, 0.031);
+      //
+      // Not on the bridge. All six lanes there run the same way — the traffic
+      // on it is going where you are going — and a double yellow down the
+      // middle of a one-way roadway says the opposite of what is true, which
+      // matters on the one stage where which lane is free is the whole game.
+      if (this.layout.deck) {
+        quad(p, q, [0.74, 0.74, 0.72], -0.09, 0.09, -0.09, 0.09, 0.031);
+      } else {
+        const YEL = [0.76, 0.60, 0.13];
+        quad(p, q, YEL, -0.30, -0.16, -0.30, -0.16, 0.031);
+        quad(p, q, YEL, 0.16, 0.30, 0.16, 0.30, 0.031);
+      }
 
-      // Dashed white lane lines, wherever the road is wide enough for more
-      // than one lane each way. Three metres of paint, six of gap.
-      if (hw0 > LANE * 1.6 && i % 9 < 3) {
-        for (const sd of [-1, 1]) {
-          quad(p, q, [0.74, 0.74, 0.72], sd * LANE - 0.07, sd * LANE + 0.07,
-            sd * LANE - 0.07, sd * LANE + 0.07, 0.030);
+      // Dashed white lane lines, one at every lane boundary that fits. Three
+      // metres of paint, six of gap.
+      //
+      // Every boundary, not just the first: a six-lane bridge deck marked as a
+      // two-lane street is eleven metres of unbroken asphalt either side of the
+      // centre, and nothing about it tells you where the lanes are — which on
+      // the one stage with traffic in it is the only information that matters.
+      const lane = this.layout.lane || LANE;
+      if (i % 9 < 3) {
+        for (let k = 1; k * lane < hw0 - 0.6; k++) {
+          for (const sd of [-1, 1]) {
+            quad(p, q, [0.74, 0.74, 0.72], sd * k * lane - 0.07, sd * k * lane + 0.07,
+              sd * k * lane - 0.07, sd * k * lane + 0.07, 0.030);
+          }
         }
       }
 
@@ -701,7 +1080,10 @@ export class Track {
     // A crossing is the single thing that most says "street" rather than
     // "circuit", so they go in wherever the road is straight enough to have a
     // junction — which is where the blocks meet, and nowhere near an apex.
-    for (let i = 0; i < N; i += 47) {
+    // ...but there are no junctions on a bridge, and a zebra crossing across
+    // six lanes a hundred metres over the water is the single most obviously
+    // wrong thing that can be painted on one.
+    for (let i = 0; !this.layout.deck && i < N; i += 47) {
       const p = this.samples[i];
       if (p.curvature > 0.004) continue;         // not in the middle of a bend
       if (this.inJunction(p.x, p.z)) continue;   // the junction lays its own
@@ -787,7 +1169,7 @@ export class Track {
       const bands = 8;
       const at = (d) => {
         const x = t.x + t.ux * d, z = t.z + t.uz * d;
-        return { x, z, nx, nz, y: this.locate(x, z).y };
+        return { x, z, nx, nz, y: this.streetY(t, d) };
       };
       const clear = (d, m) => {
         const cx = t.x + t.ux * d + nx * m, cz = t.z + t.uz * d + nz * m;
@@ -997,7 +1379,7 @@ export class Track {
       const steps = Math.max(4, Math.round(span / 2.4));
       const at = (d) => {
         const x = t.x + t.ux * d, z = t.z + t.uz * d;
-        return { x, z, nx, nz, y: this.locate(x, z).y };
+        return { x, z, nx, nz, y: this.streetY(t, d) };
       };
       for (let k = 0; k < steps; k++) {
         const A = at(t.from + span * (k / steps));
@@ -1026,8 +1408,77 @@ export class Track {
     this._buildBarriers(group);
     yield 'the blockades';
     yield* this._buildScenery(group);
+    if (this.rampPlan) { this._buildRamp(group); yield 'the ramp'; }
     this.group = group;
     return group;
+  }
+
+  // The freeway ramp a run ends at.
+  //
+  // A deck that leaves the street at the finish, climbs away over the roofs
+  // and stops in mid-air, on pillars, with a sign over the road in front of
+  // it. Stopping in mid-air is deliberate: the stage ends the moment you reach
+  // it, so nothing past that point is ever seen from anywhere but the sky, and
+  // a kilometre of freeway built to be driven off the end of is a kilometre of
+  // freeway nobody drives.
+  //
+  // It is scenery, not road. The wall the car stops at is a lateral distance
+  // from the CIRCUIT and nothing here changes it, so the ramp cannot be driven
+  // up — it is the thing you arrive at, which is the whole of what the stage
+  // asks for.
+  _buildRamp(group) {
+    const plan = this.rampPlan;
+    const b = new MeshBuilder();
+    const W = RAMP.width;
+    const pitch = -Math.atan(plan.rise);
+    const LEN = plan.seg;
+
+    for (const g of plan.segs) {
+      b.add(G.box(W, 0.9, LEN), 0x4b5058, { x: g.x, y: g.y, z: g.z, ry: g.yaw, rx: pitch });
+      // Parapets down both edges. The offset is across the deck, which is the
+      // segment's direction turned a quarter turn — not the street's.
+      for (const side of [-1, 1]) {
+        b.add(G.box(0.5, 1.1, LEN), 0xd8d4c8, {
+          x: g.x + (-g.dz * side) * (W / 2 - 0.25),
+          y: g.y + 0.9,
+          z: g.z + (g.dx * side) * (W / 2 - 0.25),
+          ry: g.yaw, rx: pitch,
+        });
+      }
+      // A pillar under every other one, standing on whatever the ground does
+      // there rather than on a guess at it.
+      if (g.i % 2 === 1) {
+        const ground = this.groundAt(g.x, g.z);
+        const h = Math.max(1, g.y - 0.45 - ground);
+        b.add(G.box(2.2, h, 2.2), 0xb9b4a6, { x: g.x, y: ground + h / 2, z: g.z, ry: g.yaw });
+        b.add(G.box(3.4, 0.7, 3.4), 0xa9a496, { x: g.x, y: ground + 0.35, z: g.z, ry: g.yaw });
+      }
+    }
+
+    // A gantry across the street ahead of it, with a sign slung between the
+    // legs. Set back so a car arriving at speed sees the sign against the deck
+    // rather than through it.
+    const g0 = this.atDistance(plan.at - (plan.open ? 90 : 46));
+    const gy = g0.y;
+    const half = (g0.width || DEFAULT_WIDTH) / 2 + 2.4;
+    for (const side of [-1, 1]) {
+      b.add(G.box(0.7, 7.2, 0.7), 0x6f7580,
+        { x: g0.x + g0.nx * side * half, y: gy + 3.6, z: g0.z + g0.nz * side * half });
+    }
+    const yaw = Math.atan2(g0.dirX, g0.dirZ);
+    b.add(G.box(half * 2, 0.5, 0.5), 0x6f7580, { x: g0.x, y: gy + 7.1, z: g0.z, ry: yaw });
+    group.add(b.build());
+
+    // The sign panel, lit. Green with white bands, which at night is one of
+    // the few things in a city genuinely brighter than the street around it —
+    // unlit and above one, so the bloom chain finds it.
+    const sign = new MeshBuilder();
+    sign.add(G.box(7.0, 2.4, 0.16), 0x1c6b3a, { x: g0.x, y: gy + 5.6, z: g0.z, ry: yaw });
+    sign.add(G.box(6.2, 0.34, 0.22), 0xf4f6f8, { x: g0.x, y: gy + 6.3, z: g0.z, ry: yaw });
+    sign.add(G.box(2.6, 0.5, 0.22), 0xf4f6f8, { x: g0.x, y: gy + 5.2, z: g0.z, ry: yaw });
+    group.add(sign.build(VC_UNLIT));
+
+    this.ramp = { x: plan.x, y: plan.y, z: plan.z, at: plan.at };
   }
 
   _buildBarriers(group) {
@@ -1046,10 +1497,25 @@ export class Track {
     // something that is. `barrierOffset` still places the scenery; `wall` is
     // where the car stops, and it is set to the frontage the buildings are
     // built to.
-    this.barrierOffset = 5.6;
-    this.wall = this.barrierOffset + 3.9;
+    // On a bridge the thing that stops you is the railing, which is at the
+    // edge of the deck — not a building line ten metres past a pavement that
+    // is not there. Drive at it and you bounce off it; there is nothing on the
+    // other side but a hundred metres of air.
+    this.barrierOffset = this.layout.deck ? 0.5 : 5.6;
+    this.wall = this.layout.deck ? 1.2 : this.barrierOffset + 3.9;
     this.props = [];
     this.breakables = [];
+
+    // None of what follows belongs on a bridge.
+    //
+    // What follows is street works: cones across the mouth of a closed side
+    // street, a piece of plant with a beacon on it, and an amber arrow board
+    // at every corner telling you which way the road bends. A bridge has no
+    // side streets to close, and its corners are one-degree kinks in a deck
+    // that goes one way — so what it got was a row of construction signs
+    // standing out in the bay beside it, pointing at nothing.
+    if (this.layout.deck) return;
+
     const b = new MeshBuilder();
 
     // --- the blockades that close the side streets.
@@ -1402,41 +1868,207 @@ export class Track {
   // The height of the city floor at a point. The ground mesh and everything
   // standing on it have to agree about this, so they both come here — a
   // building placed against its own idea of the ground floats or sinks.
-  groundAt(x, z) {
-    // A weighted blend of every sample within forty metres, not the nearest
-    // one. Nearest-sample gives a field that jumps wherever the closest bit of
-    // track changes — and where the circuit doubles back, the stretch nearest
-    // one patch of ground is twenty metres higher than the stretch nearest the
-    // patch beside it, so the ground tears and pushes up through the road.
-    // The weight falls smoothly to zero at the edge, so the field is
-    // continuous everywhere.
-    const R2 = 1600;
-    let wsum = 0, ysum = 0, bestD = Infinity, bestY = 0;
+  // The smooth half of the ground field.
+  //
+  // A weighted blend of every sample within forty metres plus the hills, with
+  // no reference to the NEAREST sample — so it is continuous everywhere, which
+  // `groundAt` is deliberately not: close to the road that follows
+  // `locate().y`, and `locate` jumps wherever the nearest piece of circuit
+  // changes from one leg of the lap to another. That is right for the ground
+  // beside the road and wrong for anything laid across the city, which is why
+  // the side streets take their height from here.
+  smoothGroundAt(x, z) {
+    // Inverse-square weighted over EVERY sample, with no cutoff.
+    //
+    // `groundAt` blends only what is within forty metres and falls back to the
+    // nearest sample's height when nothing is — and that fallback is the
+    // discontinuity all over again, just moved further out. It does not show
+    // in the terrain, where the hills dominate at that range, but a side
+    // street a hundred and thirty metres from the circuit lives entirely in
+    // the fallback, and a twenty-six metre jump in it survives forty passes of
+    // smoothing as a two-metre step in the road.
+    //
+    // Weighting every sample by 1/(d² + k) has no cutoff to fall off, so it is
+    // continuous everywhere by construction. It costs the same: one pass over
+    // the samples either way.
+    let wsum = 0, ysum = 0;
     for (const p of this.samples) {
       const d = (p.x - x) * (p.x - x) + (p.z - z) * (p.z - z);
-      if (d < bestD) { bestD = d; bestY = p.y; }
-      if (d > R2) continue;
-      const w = (R2 - d) / R2;
-      wsum += w * w;
-      ysum += p.y * w * w;
+      const w = 1 / (d + 900);          // k = 30 m, so nearby samples dominate
+      wsum += w;
+      ysum += p.y * w;
     }
-    const near = wsum > 0 ? ysum / wsum : bestY;
-    const dist = Math.sqrt(bestD);
+    const near = ysum / wsum;
+    const dist = Math.sqrt(this._nearestSample(x, z).d2);
     const fall = clamp((dist - 22) / 300, 0, 1);
     const hill = Math.sin(x * 0.0052) * Math.cos(z * 0.0061) * 26 + Math.sin(z * 0.0091) * 11;
     const bay = clamp((dist - 340) / 200, 0, 1);
-    const wide = (near - 1.1) + hill * fall * fall * (1 - bay) - bay * (near + 6);
-    if (dist > 34) return wide;
+    return (near - 1.1) + hill * fall * fall * (1 - bay) - bay * (near + 6);
+  }
 
-    // Close in, follow the road's own height rather than a blend of forty
-    // metres of it. On a six per cent grade a forty-metre average lags the
-    // road by more than a metre, which is more than the clearance — so the
-    // averaged ground rises through the asphalt on every slope. Blended out
-    // over the next twenty metres, and hard-capped below the road either way,
-    // so no amount of interpolation can put it back on top.
+  // A second index over the samples, coarser than the one `locate` uses.
+  //
+  // `locate` buckets at 24 m and spreads each sample over a 3x3 block, so one
+  // lookup gives everything within 24 m — which is right for finding the piece
+  // of road a car is on and not enough for the ground field, which blends over
+  // forty and needs the distance to the nearest sample out to five hundred.
+  //
+  // What this stores is the OCCUPIED cells, as a flat list with their centres.
+  // A ring search outward from the query point is the obvious structure and
+  // the wrong one here: most of the world is empty, the circuit occupies about
+  // ninety cells of it, and a point in the far corner makes a ring search walk
+  // hundreds of cells that were never going to contain anything. Ninety
+  // distances to ninety cell centres is less work than that, and it bounds the
+  // answer exactly: no sample in a cell can be nearer than its centre less the
+  // cell's half-diagonal, or further than its centre plus it.
+  _groundIndex() {
+    this.gcell = GROUND_R;
+    // Keyed by string and read back as objects. Packing (cx, cz) into one
+    // integer and unpacking it again is where this went wrong the first time:
+    // the obvious `cx * 4096 + cz` is not invertible for negative cz, and half
+    // the city is at negative z. The cell keeps its own centre instead, so
+    // nothing has to be decoded at all.
+    const by = new Map();
+    this.gcells = [];
+    for (const p of this.samples) {
+      const cx = Math.floor(p.x / this.gcell), cz = Math.floor(p.z / this.gcell);
+      const k = `${cx},${cz}`;
+      let cell = by.get(k);
+      if (!cell) {
+        cell = { x: (cx + 0.5) * this.gcell, z: (cz + 0.5) * this.gcell, list: [], y: 0 };
+        by.set(k, cell);
+        this.gcells.push(cell);
+      }
+      cell.list.push(p);
+    }
+    // Each cell's mean height, and where its samples actually sit — the
+    // centroid, not the cell's geometric centre. A cell clipped by a road
+    // running through one corner of it has all its samples in that corner, and
+    // lumping them at the middle of the square moves the terrain twenty metres
+    // sideways from the road it is supposed to follow.
+    for (const c of this.gcells) {
+      let sx = 0, sz = 0, sy = 0;
+      for (const p of c.list) { sx += p.x; sz += p.z; sy += p.y; }
+      c.x = sx / c.list.length;
+      c.z = sz / c.list.length;
+      c.y = sy / c.list.length;
+      c.n = c.list.length;
+    }
+    this._gd = new Float64Array(this.gcells.length);
+  }
+
+  // Squared distance to every occupied cell centre, kept for the two readers
+  // below so the pass is done once per query rather than once per reader.
+  // Squared, and compared squared, so the inner loop takes no square roots —
+  // this is the pass that runs for every one of fifty thousand ground
+  // vertices and ninety avoidable roots each is most of its cost.
+  _cellDistances(x, z) {
+    const cells = this.gcells, d = this._gd;
+    let best = Infinity;
+    for (let i = 0; i < cells.length; i++) {
+      const dx = cells[i].x - x, dz = cells[i].z - z;
+      const q = dx * dx + dz * dz;
+      d[i] = q;
+      if (q < best) best = q;
+    }
+    return best;
+  }
+
+  // The nearest sample to a point, exactly.
+  //
+  // The distance to it matters a long way out — the hills fade in over three
+  // hundred metres of it and the bay over two hundred more — so this cannot
+  // stop at the blend radius the way the blend does.
+  _nearestSample(x, z, bestCell = null) {
+    const cells = this.gcells, d = this._gd;
+    const bc = bestCell === null ? this._cellDistances(x, z) : bestCell;
+    // The nearest sample is at most a half-diagonal beyond the nearest cell
+    // centre, so no cell whose centre is further than that plus another
+    // half-diagonal can hold it.
+    const cut = Math.sqrt(bc) + this.gcell * Math.SQRT2;
+    const cut2 = cut * cut;
+    let best = null, bestD = Infinity;
+    for (let i = 0; i < cells.length; i++) {
+      if (d[i] > cut2) continue;
+      for (const p of cells[i].list) {
+        const q = (p.x - x) * (p.x - x) + (p.z - z) * (p.z - z);
+        if (q < bestD) { bestD = q; best = p; }
+      }
+    }
+    return { p: best || this.samples[0], d2: bestD };
+  }
+
+  // A continuous height field over the whole world.
+  //
+  // Every occupied cell, weighted by how many samples are in it and by the
+  // inverse square of its distance — so nearby road dominates, distant road
+  // contributes a little, and nothing ever switches on or off. There is no
+  // cutoff to fall off the edge of, which is the whole point: this is what
+  // gets used where the blend radius finds nothing, and a fallback with a
+  // discontinuity in it is not a fallback, it is the bug moved further out.
+  //
+  // Cells rather than samples, so it costs a pass over about a hundred of them
+  // instead of several thousand. Lumping a cell at its centroid makes the
+  // field slightly coarser than a per-sample version and exactly as smooth,
+  // and it is only ever read beyond thirty-four metres, where the road's own
+  // height has already stopped being followed.
+  _fieldAt(x, z) {
+    const cells = this.gcells;
+    let wsum = 0, ysum = 0;
+    for (let i = 0; i < cells.length; i++) {
+      const c = cells[i];
+      const dx = c.x - x, dz = c.z - z;
+      const w = c.n / (dx * dx + dz * dz + 900);      // k = 30 m
+      wsum += w;
+      ysum += c.y * w;
+    }
+    return wsum > 0 ? ysum / wsum : 0;
+  }
+
+  groundAt(x, z) {
+    // Open water, if the road is a bridge. There is no city floor under a
+    // suspended span — there is the bay, a hundred metres down.
+    if (this.layout.deck) return SEA_Y + swell(x, z);
+    // The city floor, and the one number the terrain, the pavements, the
+    // street furniture and every building in the place have to agree about.
+    //
+    // Three parts, and the whole difficulty is making the joins between them
+    // invisible. Close to the road it follows the ROAD'S own height, because a
+    // forty-metre average lags a six per cent street by more than the
+    // clearance and the ground comes up through the asphalt. Further out it
+    // follows the FIELD, which is smooth and continuous everywhere. Further
+    // out still it climbs into the hills and then falls away to the bay.
+    //
+    // It used to have a fourth part, and that part was a bug: beyond forty
+    // metres of every sample it took the height of whichever piece of road was
+    // nearest, which is a Voronoi diagram. Every boundary between two stretches
+    // was a cliff as tall as the difference between them — up to forty metres
+    // on a route that climbs that far — and since most of the city is out
+    // there, what you saw from the road was a flat pale wall standing across
+    // the end of the street. There is no nearest-sample height in here now.
+    const near = this._fieldAt(x, z);
+    const dist = Math.sqrt(this._nearestSample(x, z).d2);
+    const fall = clamp((dist - 22) / 300, 0, 1);
+    const hill = Math.sin(x * 0.0052) * Math.cos(z * 0.0061) * 26 + Math.sin(z * 0.0091) * 11;
+    const bay = clamp((dist - 340) / 200, 0, 1);
+    // Swell out over the water, fading in as the land runs out. Colouring a
+    // flat plane as if it had waves on it works until the light rakes across
+    // it, at which point it is a painting of the sea.
+    const wide = (near - 1.1) + hill * fall * fall * (1 - bay)
+      - bay * (near + 6) + bay * swell(x, z);
+
+    // Close in, follow the road rather than the field. Blended out over the
+    // twenty-two metres from the kerb, by which point the two agree anyway.
     const under = this.locate(x, z).y - 1.0;
     const w = clamp((dist - 12) / 22, 0, 1);
-    return Math.min(lerp(under, wide, w), under);
+    const blended = lerp(under, wide, w);
+
+    // And hard-capped below the road, so no amount of interpolation can put
+    // the terrain on top of it. The cap fades out too: a `min` that switches
+    // off at a fixed distance is a step of exactly the size it was suppressing,
+    // which is what put a four-metre wall in a ring around every street.
+    const capW = clamp((dist - 16) / 18, 0, 1);
+    return lerp(Math.min(blended, under), blended, capW);
   }
 
   // The patch of light a lamp throws, as a mesh that follows the road under
@@ -1501,8 +2133,72 @@ export class Track {
     // T and the bar across the top of it differ only in their numbers, and
     // writing them as one kind means the surfacing, the pavements, the curb
     // returns and the "is this tarmac" test are each written once.
-    const street = (x, z, ux, uz, from, to, width) =>
-      this.streets.push({ x, z, ux, uz, from, to, width });
+    const street = (x, z, ux, uz, from, to, width, stem = false) =>
+      this.streets.push({ x, z, ux, uz, from, to, width, stem });
+
+    // The height of a side street, sampled and then smoothed.
+    //
+    // Taking it straight from `locate(x, z).y` — the height of the nearest
+    // point of the CIRCUIT — is fine at the junction and wrong further out:
+    // as the street runs away, the nearest circuit sample flips from one leg
+    // of the lap to another, and the height jumps with it. On a hill that is a
+    // visible step in the middle of a road, and it is visible from the racing
+    // line.
+    //
+    // So sample it, then smooth it, pinning the junction end where it has to
+    // meet the road it leaves.
+    this._streetHeights = (t) => {
+      const N = Math.max(8, Math.round((t.to - t.from) / 2.0));
+      const y = [];
+      // Shape from the terrain, datum from the road.
+      //
+      // Two things have to be true and they pull against each other: the
+      // street must MEET the junction it leaves exactly, and it must not step
+      // anywhere along its length. Taking the height straight from the circuit
+      // (`locate().y`) satisfies the first and fails the second — the nearest
+      // piece of circuit flips from one leg of the lap to another and the road
+      // jumps twenty metres with it. Taking it from the smooth field satisfies
+      // the second and fails the first, because an inverse-distance average
+      // lags the road on a gradient and arrives three metres out.
+      //
+      // So take the SHAPE from the smooth field and the DATUM from the road:
+      // anchor the whole profile so that it is exactly right at the anchor
+      // point, then follow the terrain's gradient from there. Continuous
+      // everywhere, and exact where it has to be.
+      for (let i = 0; i <= N; i++) {
+        const d = t.from + ((t.to - t.from) * i) / N;
+        y.push(this.smoothGroundAt(t.x + t.ux * d, t.z + t.uz * d));
+      }
+      // Anchored where it has to MATCH, not where it starts.
+      //
+      // A stem nominally begins ten metres back inside the junction, but the
+      // junction lays its own surface over the first eighteen — so the stem
+      // only becomes visible at the edge of that, and that edge is the only
+      // place the two have to agree. Anchoring at the nominal start instead
+      // left thirty metres for the terrain's gradient to drift from the
+      // road's, and on a hill that arrives at the seam nearly two metres out.
+      // A bar is anchored at its middle, to the end of the stem running into
+      // it, for the same reason: that is where they meet.
+      const seamD = t.from + JUNCTION_OWNS + 2;
+      const ai = t.stem
+        ? Math.round(((seamD - t.from) / (t.to - t.from)) * N)
+        : Math.round(N / 2);
+      const anchor = t.stem
+        ? this.locate(t.x + t.ux * seamD, t.z + t.uz * seamD).y
+        : (t.parent ? this.streetY(t.parent, t.parent.to) : y[ai] + 1.1);
+      const shift = anchor - y[ai];
+      for (let i = 0; i <= N; i++) y[i] += shift;
+
+      // A few passes to take the edge off, holding the anchor.
+      for (let pass = 0; pass < 12; pass++) {
+        const next = y.slice();
+        for (let i = 1; i < N; i++) next[i] = (y[i - 1] + y[i + 1] + y[i] * 2) / 4;
+        next[ai] = y[ai];
+        for (let i = 0; i <= N; i++) y[i] = next[i];
+      }
+      t.heights = y;
+      t.hN = N;
+    };
 
     let corner = null, ahead = false;
     const add = (x, z, dx, dz) => {
@@ -1538,7 +2234,7 @@ export class Track {
       const t = { x, z, ux, uz, len: reach, width: DEFAULT_WIDTH, corner, ahead };
       this.stubs.push(t);
       // The stem, started back inside the junction so the surfaces overlap.
-      street(x, z, ux, uz, -10, reach, DEFAULT_WIDTH);
+      street(x, z, ux, uz, -10, reach, DEFAULT_WIDTH, true);
       // And the bar across the top of the T.
       //
       // A cosmetic street that stops dead at a wall reads as exactly what it
@@ -1557,6 +2253,8 @@ export class Track {
       }
       if (half >= 12) {
         street(bx, bz, -uz, ux, -half, half, DEFAULT_WIDTH);
+        // The bar takes its datum from the stem that runs into it.
+        this.streets[this.streets.length - 1].parent = this.streets[this.streets.length - 2];
         t.bar = half;
       }
       return true;
@@ -1606,6 +2304,9 @@ export class Track {
       }
     }
 
+    // Stems first: a bar's datum is the end of the stem that runs into it.
+    for (const t of this.streets) if (t.stem) this._streetHeights(t);
+    for (const t of this.streets) if (!t.stem) this._streetHeights(t);
     this._junctionBoxes();
     this._junctionCorners();
   }
@@ -1786,6 +2487,14 @@ export class Track {
   // circuit — a warehouse in the middle of a crossroads is worse than one on
   // the racing line, because at least you can see that one coming.
   // The stretch of a side street the circuit's wall would otherwise cross.
+  // The smoothed height of a side street `d` metres along it.
+  streetY(t, d) {
+    if (!t.heights) return this.locate(t.x + t.ux * d, t.z + t.uz * d).y;
+    const f = clamp((d - t.from) / (t.to - t.from), 0, 1) * t.hN;
+    const i = Math.min(t.hN - 1, Math.floor(f));
+    return lerp(t.heights[i], t.heights[i + 1], f - i);
+  }
+
   inStubMouth(x, z) {
     if (!this.stubs) return false;
     for (const t of this.stubs) {
@@ -1822,6 +2531,179 @@ export class Track {
   // and it is legible from the car because the circuit climbs through all
   // three in a lap.
   *_buildScenery(group) {
+    if (this.layout.deck) {
+      yield* this._buildDeck(group);
+      return;
+    }
+    yield* this._buildCity(group);
+  }
+
+  // The bridge, as the road rather than as scenery.
+  //
+  // Everything here is hung off the route itself, so the structure follows
+  // whatever shape the layout gives it: the truss under the deck, the railings
+  // at its edge, two towers a quarter and three quarters along, the main cables
+  // slung between them in a catenary, the hangers dropping from the cables to
+  // the deck, and a lamp every forty metres. The far bridge in the other two
+  // stages is a shape on the horizon; this one is a thing you drive on, so it
+  // is built from the inside out.
+  *_buildDeck(group) {
+    const b = new MeshBuilder();
+    const lit = new MeshBuilder();
+    const pools = new MeshBuilder();
+    this.lamps = [];
+    this.props = [];
+    const N = this.samples.length;
+    const L = this.length;
+    const ORANGE = 0xc0472a, DARK = 0x8a3a22, STEEL = 0x6f7580;
+
+    // --- the truss under the deck, and the deck's own edge beams.
+    // Every sixth sample, not every third. The truss is one box per segment
+    // per side and the deck is now eleven kilometres long; at the old spacing
+    // that alone was thirty thousand boxes.
+    const TRUSS = 6;
+    for (let i = 0; i < N - 1; i += TRUSS) {
+      const p = this.samples[i], q = this.samples[Math.min(i + TRUSS, N - 1)];
+      const len = Math.max(1, Math.hypot(q.x - p.x, q.z - p.z));
+      const mx = (p.x + q.x) / 2, mz = (p.z + q.z) / 2, my = (p.y + q.y) / 2;
+      const yaw = Math.atan2(p.dirX, p.dirZ);
+      const hw = p.width / 2;
+      b.add(G.box(hw * 2 + 2.4, 2.8, len + 0.2), DARK, { x: mx, y: my - 2.2, z: mz, ry: yaw });
+      b.add(G.box(hw * 2 + 3.2, 1.1, len + 0.2), ORANGE, { x: mx, y: my - 0.7, z: mz, ry: yaw });
+      // Railings: a low wall and a rail above it, both sides.
+      for (const sd of [-1, 1]) {
+        const ox = p.nx * sd * (hw + 0.6), oz = p.nz * sd * (hw + 0.6);
+        b.add(G.box(0.36, 1.05, len + 0.2), ORANGE, { x: mx + ox, y: my + 0.52, z: mz + oz, ry: yaw });
+        b.add(G.box(0.5, 0.16, len + 0.2), 0x8f4a30, { x: mx + ox, y: my + 1.12, z: mz + oz, ry: yaw });
+      }
+    }
+    yield 'the deck';
+
+    // --- the towers, and the cables between them.
+    const TOWER_AT = [0.25, 0.75];
+    const TOWER_H = 118;
+    const towers = TOWER_AT.map((f) => {
+      const p = this.atDistance(f * L);
+      const yaw = Math.atan2(p.dirX, p.dirZ);
+      const hw = p.width / 2;
+      for (const sd of [-1, 1]) {
+        const x = p.x + p.nx * sd * (hw + 3.2), z = p.z + p.nz * sd * (hw + 3.2);
+        // A leg that steps in as it rises, which is most of the outline.
+        b.add(G.box(7.5, TOWER_H, 7.5), ORANGE, { x, y: p.y - 4 + TOWER_H / 2, z, ry: yaw });
+        b.add(G.box(6.2, 18, 6.2), ORANGE, { x, y: p.y + TOWER_H - 12, z, ry: yaw });
+        b.add(G.box(5.0, 12, 5.0), ORANGE, { x, y: p.y + TOWER_H + 2, z, ry: yaw });
+        // Floodlit from below, which is what picks a tower out of a night sky.
+        for (let k = 0; k < 5; k++) {
+          lit.add(G.box(4.0, 1.0, 4.0), 0xffa858, { x, y: p.y + 12 + k * 21, z, ry: yaw });
+        }
+        // The aircraft beacon on top.
+        lit.add(G.sphere(1.5, 10, 8), 0xff3a2a, { x, y: p.y + TOWER_H + 9, z });
+      }
+      // Cross-braces between the two legs, which is what makes it a portal
+      // rather than two posts.
+      for (const h of [0.30, 0.62, 0.92]) {
+        b.add(G.box(hw * 2 + 8, 3.4, 3.0), ORANGE,
+          { x: p.x, y: p.y + TOWER_H * h, z: p.z, ry: yaw });
+      }
+      return { p, top: p.y + TOWER_H, hw };
+    });
+    yield 'the towers';
+
+    // --- the main cables and their hangers.
+    //
+    // A real catenary between the two towers, and a straight run down to deck
+    // height at each end — so the cable is highest at the towers and lowest at
+    // mid-span, which is the shape everybody knows a suspension bridge by, and
+    // the shape you get wrong by drawing it the other way up.
+    const SAG = 62;
+    const cableY = (f) => {
+      const a = TOWER_AT[0], c = TOWER_AT[1];
+      const deck = this.atDistance(clamp(f, 0, 1) * L).y;
+      if (f <= a) return lerp(deck + 3, towers[0].top - 6, f / a);
+      if (f >= c) return lerp(towers[1].top - 6, deck + 3, (f - c) / (1 - c));
+      const u = (f - a) / (c - a);                 // 0..1 between the towers
+      const sag = 4 * u * (1 - u);                 // 0 at the towers, 1 mid-span
+      return lerp(towers[0].top - 6, towers[1].top - 6, u) - SAG * sag;
+    };
+    const STEP = 26;
+    const spans = Math.max(8, Math.round(L / STEP));
+    for (const sd of [-1, 1]) {
+      let prev = null;
+      for (let k = 0; k <= spans; k++) {
+        const f = k / spans;
+        const p = this.atDistance(f * L);
+        const hw = p.width / 2;
+        const here = {
+          x: p.x + p.nx * sd * (hw + 3.2),
+          y: cableY(f),
+          z: p.z + p.nz * sd * (hw + 3.2),
+        };
+        if (prev) {
+          const dx = here.x - prev.x, dy = here.y - prev.y, dz = here.z - prev.z;
+          const len = Math.hypot(dx, dy, dz) || 1;
+          b.add(G.box(1.5, 1.5, len), ORANGE, {
+            x: (prev.x + here.x) / 2, y: (prev.y + here.y) / 2, z: (prev.z + here.z) / 2,
+            ry: Math.atan2(dx, dz), rx: -Math.asin(clamp(dy / len, -1, 1)),
+          });
+        }
+        // A hanger down to the deck, wherever the cable is above it.
+        const drop = here.y - (p.y + 1.2);
+        if (drop > 3 && f > 0.02 && f < 0.98) {
+          b.add(G.box(0.42, drop, 0.42), 0x9a4a2e,
+            { x: here.x, y: p.y + 1.2 + drop / 2, z: here.z });
+        }
+        prev = here;
+      }
+    }
+    yield 'the cables';
+
+    // --- lamps down both sides, and the pools they throw.
+    // Lamps every forty metres, MERGED rather than built one mesh each.
+    //
+    // The city's lamp standards are separate objects because you can knock
+    // them over, and ninety of those is a fair price for a street that gives
+    // way when you hit it. An eleven-kilometre deck wants two hundred and
+    // seventy of them, which is two hundred and seventy draw calls for the
+    // privilege of flattening a lamp post you are never going to hit at a
+    // hundred and eighty in the outside lane. Merged, they cost one.
+    //
+    // Spaced at a hundred and twenty first, to save exactly that, and the deck
+    // came out unlit — one pool of light every two seconds and pitch dark in
+    // between. The lighting is not decoration on this stage: it is how you see
+    // which lane is free.
+    const every = Math.max(1, Math.round(40 / this.step));
+    for (let i = every; i < N - every; i += every) {
+      const p = this.samples[i];
+      const sd = (i / every) % 2 ? 1 : -1;
+      const hw = p.width / 2;
+      const x = p.x + p.nx * sd * (hw + 1.4), z = p.z + p.nz * sd * (hw + 1.4);
+      const armY = Math.atan2(p.nx * -sd, p.nz * -sd);
+      const ox = -p.nx * sd, oz = -p.nz * sd;
+      b.add(G.cyl(0.14, 0.17, 8.4, 8), 0x9a4a2e, { x, y: p.y + 4.2, z });
+      b.add(G.box(0.16, 0.16, 2.0), 0x9a4a2e,
+        { x: x + ox * 1.0, y: p.y + 8.3, z: z + oz * 1.0, ry: armY });
+      b.add(G.box(0.5, 0.2, 0.9), 0x4a4a44, { x: x + ox * 1.8, y: p.y + 8.18, z: z + oz * 1.8 });
+      lit.add(G.box(0.44, 0.1, 0.8), 0xffe0b4, { x: x + ox * 1.8, y: p.y + 8.02, z: z + oz * 1.8 });
+      const hx = x + ox * 1.8, hz = z + oz * 1.8;
+      pools.add(this._poolGeometry(hx - p.nx * sd * 3.4, hz - p.nz * sd * 3.4, 40), 0xb08048, {});
+      this.lamps.push({ x: hx, y: p.y + 8.0, z: hz });
+    }
+
+    group.add(b.build());
+    group.add(lit.build(VC_UNLIT));
+    const pool = new THREE.Mesh(pools.build().geometry, poolMaterial());
+    pool.renderOrder = 3;
+    group.add(pool);
+    yield 'the lights';
+    // No landmarks. They are placed at fixed world coordinates a few hundred
+    // metres out — a downtown cluster, the hills, and a Golden Gate Bridge —
+    // all of which is correct scenery for a city and wrong for a stage that IS
+    // the bridge: a second one across the horizon, and a wall of towers
+    // standing in the water directly behind this one. What belongs behind a
+    // bridge at night is the bay and the sky.
+  }
+
+  *_buildCity(group) {
     const b = new MeshBuilder();
     this.lamps = [];
     // Two more meshes: the things that are lit from inside, and the pools they
@@ -1897,6 +2779,27 @@ export class Track {
         lots.get(key).push(b);
       }
     };
+    // The ramp is built last and the city first, so its footprint is claimed
+    // here, before a single building goes up. A deck climbing away over the
+    // rooftops looks exactly as wrong going THROUGH one as you would expect,
+    // and the pillars under it have to stand on the ground rather than in
+    // somebody's third floor.
+    if (this.rampPlan) {
+      const P = this.rampPlan;
+      for (const g of P.segs) {
+        // On a route the ramp is the last thing you see, and the bridge is
+        // behind it. Nineteen metres of clearance leaves a street of blocks
+        // standing between the two, and the payoff for three and a half
+        // kilometres is a tower glimpsed down an alley. So the headland is
+        // cleared right out — a hundred and eighty metres either side, tapered
+        // in over the first few segments so the city does not simply stop at a
+        // straight edge.
+        const wide = P.open
+          ? lerp(RAMP.width + 30, 180, clamp(g.i / 5, 0, 1))
+          : RAMP.width + 8;
+        claim({ x: g.x, z: g.z, ry: g.yaw, w: wide, d: P.seg + 6 });
+      }
+    }
     // Place it if it fits, and say whether it did.
     // Takes the STREET's yaw, the same as building() does, and turns it the
     // quarter that building() turns it by so the box it tests is the box that
@@ -2393,7 +3296,8 @@ export class Track {
     // builder, so it survives the tone mapping and blooms.
     const BRIDGE = 0xc0472a;
     {
-      const bx = -560, bz = 330, ang = 0.7;
+      const B = this.layout.bridge || { x: -560, z: 330, ang: 0.7 };
+      const bx = B.x, bz = B.z, ang = B.ang;
       const span = 340, deckY = 34, towerY = 118;
       const dirX = Math.cos(ang), dirZ = Math.sin(ang);
       const half = span * 0.5;
@@ -2594,9 +3498,16 @@ export class Track {
     return picked;
   }
 
-  // How far apart two points are along the lap, signed, taking the short way.
+  // How far apart two points are along the road, signed.
+  //
+  // On a lap that means the short way round, because a car ten metres behind
+  // you is also a lap-minus-ten in front of you and only one of those is the
+  // useful reading. On a route there is no way round: the difference IS the
+  // answer, and taking the short way would report a car a mile back as being
+  // just ahead the moment the route got longer than twice the gap.
   gap(sA, sB) {
     let d = sA - sB;
+    if (!this.closed) return d;
     while (d > this.length / 2) d -= this.length;
     while (d < -this.length / 2) d += this.length;
     return d;

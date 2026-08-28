@@ -16,6 +16,65 @@ const RIGS = {
   COCKPIT: { back: 0.35, up: 1.02, ahead: 12, fov: 68, stiff: 30, roll: 0.75 },
 };
 
+// A subject's own frame. Every shot is expressed in it — `ahead` down the
+// car's nose, `left` across it, `up` from the road — which is what pins the
+// car in the same place on screen while the city streams past behind it.
+export function cameraFrame(car) {
+  const v = car.vehicle;
+  const y = car.loc ? car.loc.y : 0;
+  const fx = Math.sin(v.yaw), fz = Math.cos(v.yaw);
+  const lx = Math.cos(v.yaw), lz = -Math.sin(v.yaw);
+  return {
+    x: v.x, y, z: v.z, yaw: v.yaw,
+    p: (ahead, left, up) => [v.x + fx * ahead + lx * left, y + up, v.z + fz * ahead + lz * left],
+  };
+}
+
+// The shot list.
+//
+// Every distance is from the car's CENTRE, and a car is two metres wide and
+// four and a half long. Four metres to the side is one metre off its flank,
+// which fills the frame with a door — the first cut of the title sequence put
+// the camera inside the bodywork exactly that way.
+//
+// `k` runs 0..1 through the shot, so a shot can move. `g` is the second
+// actor's frame, for two-shots.
+export const SHOTS = {
+  // --- the title reel
+  lowRear:    (f, k) => ({ from: f.p(-(10.5 - k * 2.4), 1.6, 1.0), at: f.p(5, 0, 0.85), fov: 40 }),
+  trackPast:  (f, k) => ({ from: f.p(7 - k * 14, 8.2, 1.05),       at: f.p(0, 0, 0.70), fov: 40 }),
+  headOn:     (f, k) => ({ from: f.p(12 + k * 6, -3.4, 1.7),       at: f.p(0, 0, 0.75), fov: 38 }),
+  wheelArch:  (f)    => ({ from: f.p(1.2, 2.5, 0.95),              at: f.p(26, 3, 1.7), fov: 48 }),
+  highWide:   (f)    => ({ from: f.p(-14, -6.5, 6.2),              at: f.p(10, 0, 1.0), fov: 42 }),
+
+  // --- for scripted scenes
+  // Close on the nose, easing in. Far enough out to hold the whole car.
+  closeFront: (f, k) => ({ from: f.p(7.6 - k * 0.9, 1.4, 1.15),    at: f.p(0, 0, 1.0),  fov: 44 }),
+  // Over the shoulder at the other car, which is what a stand-off looks like.
+  twoShot: (f, k, g) => {
+    if (!g) return { from: f.p(8.5, 3.2, 1.5), at: f.p(0, 0, 1.0), fov: 42 };
+    const mx = (f.x + g.x) / 2, mz = (f.z + g.z) / 2, my = (f.y + g.y) / 2;
+    // Perpendicular to the line between them, so both are in frame.
+    let dx = g.x - f.x, dz = g.z - f.z;
+    const d = Math.hypot(dx, dz) || 1;
+    dx /= d; dz /= d;
+    const out = Math.max(9, d * 0.95) + k * 1.2;
+    return { from: [mx - dz * out, my + 2.0, mz + dx * out], at: [mx, my + 0.9, mz], fov: 40 };
+  },
+  // A slow arc, for a beat that wants to breathe. Absorbs the old orbit().
+  orbit: (f, k) => {
+    const a = k * 1.5;
+    const r = 12.5;
+    return {
+      from: [f.x + Math.sin(a) * r, f.y + 3.6, f.z + Math.cos(a) * r],
+      at: [f.x, f.y + 0.75, f.z], fov: 38,
+    };
+  },
+};
+
+const ATTRACT_REEL = ['lowRear', 'trackPast', 'headOn', 'wheelArch', 'highWide'];
+const ATTRACT_SHOT = 4.6;
+
 export class ChaseCamera {
   constructor(camera) {
     this.camera = camera;
@@ -96,84 +155,37 @@ export class ChaseCamera {
     }
   }
 
-  // The title-screen cutscene: a close shot of a car on the street, cutting
-  // between angles every few seconds.
+  // Play one named shot from SHOTS. `k` is 0..1 through it; `id` changes on a
+  // cut. `second` is the other actor in a two-shot.
   //
-  // Cuts rather than one long move, because a single continuous shot of a car
-  // going round a lap is a lap, not a title sequence. Each shot is anchored to
-  // the car's own frame so it holds the car in the same place on screen while
-  // the city goes past behind it, which is the whole trick.
-  cinematic(dt, car, t) {
-    const v = car.vehicle;
-    const y = car.loc ? car.loc.y : 0;
-    const SHOT = 4.6;
-    const n = Math.floor(t / SHOT) % 5;
-    const k = (t % SHOT) / SHOT;                 // 0..1 through this shot
-    const fx = Math.sin(v.yaw), fz = Math.cos(v.yaw);
-    const lx = Math.cos(v.yaw), lz = -Math.sin(v.yaw);
-    let from, at, fov = 34;
+  // The cut/ease mechanism is the whole trick and is unchanged: hard-copy
+  // pos/look on the frame the id changes, lerp every other frame.
+  playShot(dt, name, subject, k, id, second = null) {
+    const shot = SHOTS[name] || SHOTS.lowRear;
+    const s = shot(cameraFrame(subject), clamp(k, 0, 1), second ? cameraFrame(second) : null);
 
-    // Every distance here is from the car's CENTRE, and the car is about two
-    // metres wide and four and a half long. Four metres to the side is one
-    // metre off its flank, which fills the frame with a door — the first cut
-    // of this put the camera inside the bodywork. These are all set to leave
-    // the whole car in shot with the street behind it.
-    if (n === 0) {
-      // Low and behind, drifting in over the shot.
-      const back = 10.5 - k * 2.4;
-      from = [v.x - fx * back + lx * 1.6, y + 1.0, v.z - fz * back + lz * 1.6];
-      at = [v.x + fx * 5, y + 0.85, v.z + fz * 5];
-      fov = 40;
-    } else if (n === 1) {
-      // Side on, low, tracking past as the car goes by.
-      const along = 7 - k * 14;
-      from = [v.x + lx * 8.2 + fx * along, y + 1.05, v.z + lz * 8.2 + fz * along];
-      at = [v.x, y + 0.7, v.z];
-      fov = 40;
-    } else if (n === 2) {
-      // Ahead of it, looking back, falling away as the car closes.
-      const lead = 12 + k * 6;
-      from = [v.x + fx * lead - lx * 3.4, y + 1.7, v.z + fz * lead - lz * 3.4];
-      at = [v.x, y + 0.75, v.z];
-      fov = 38;
-    } else if (n === 3) {
-      // Just outside the front wheel, looking down the street with the nose of
-      // the car in the corner of frame.
-      from = [v.x + lx * 2.5 + fx * 1.2, y + 0.95, v.z + lz * 2.5 + fz * 1.2];
-      at = [v.x + fx * 26 + lx * 3, y + 1.7, v.z + fz * 26 + lz * 3];
-      fov = 48;
-    } else {
-      // High and behind, showing the street rather than the car.
-      from = [v.x - fx * 14 - lx * 6.5, y + 6.2, v.z - fz * 14 - lz * 6.5];
-      at = [v.x + fx * 10, y + 1.0, v.z + fz * 10];
-      fov = 42;
-    }
-
-    // Snap on a cut, ease within a shot.
-    if (this._shot !== n) { this._shot = n; this.started = false; }
-    const want = new THREE.Vector3(from[0], from[1], from[2]);
-    const look = new THREE.Vector3(at[0], at[1], at[2]);
+    if (this._shot !== id) { this._shot = id; this.started = false; }
+    const want = new THREE.Vector3(s.from[0], s.from[1], s.from[2]);
+    const look = new THREE.Vector3(s.at[0], s.at[1], s.at[2]);
     if (!this.started) { this.pos.copy(want); this.look.copy(look); this.started = true; }
     this.pos.lerp(want, clamp(9 * dt, 0, 1));
     this.look.lerp(look, clamp(11 * dt, 0, 1));
     this.camera.position.copy(this.pos);
     this.camera.up.set(0, 1, 0);
     this.camera.lookAt(this.look);
+    const fov = s.fov;
     if (Math.abs(this.camera.fov - fov) > 0.05) {
       this.camera.fov = lerp(this.camera.fov, fov, clamp(dt * 5, 0, 1));
       this.camera.updateProjectionMatrix();
     }
   }
 
-  // A slow orbit of the grid before the lights, and of the winner afterwards.
-  orbit(dt, car, t) {
-    const v = car.vehicle;
-    const y = car.loc ? car.loc.y : 0;
-    const r = 12 + Math.sin(t * 0.3) * 2;
-    this.camera.position.set(v.x + Math.sin(t * 0.35) * r, y + 4.2, v.z + Math.cos(t * 0.35) * r);
-    this.camera.up.set(0, 1, 0);
-    this.camera.lookAt(v.x, y + 0.7, v.z);
-    this.started = false;
-    void dt;
+  // The title screen: five shots of one car, cutting every few seconds.
+  //
+  // Cuts rather than one long move, because a continuous shot of a car going
+  // round a lap is a lap, not a title sequence.
+  cinematic(dt, car, t) {
+    const n = Math.floor(t / ATTRACT_SHOT) % ATTRACT_REEL.length;
+    this.playShot(dt, ATTRACT_REEL[n], car, (t % ATTRACT_SHOT) / ATTRACT_SHOT, n);
   }
 }

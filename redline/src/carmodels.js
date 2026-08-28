@@ -183,7 +183,6 @@ export const usingExternalModel = () => !!template;
 
 export function buildCar(livery) {
   if (template) return cloneTemplate(livery);
-  if (template) return cloneTemplate(livery);
   const root = new THREE.Group();
   const b = new MeshBuilder();
   const body = livery.body;
@@ -435,6 +434,33 @@ export function buildCar(livery) {
   shadow.rotation.x = -Math.PI / 2;
   shadow.position.y = 0.025;
   root.add(shadow);
+
+  // --- a light bar, for the cars that are not in the race.
+  //
+  // Two halves that alternate rather than one bar that pulses: a police car
+  // reads as a police car from the colours swapping side to side, and a single
+  // flashing block reads as a warning triangle. Unlit and above one, so the
+  // bloom chain picks them out of a night street the way it picks out a
+  // window — which is most of what makes them visible at two hundred metres.
+  if (livery.police) {
+    const beacons = [];
+    for (const [sx, col] of [[-1, 0xff2a1e], [1, 0x2a6bff]]) {
+      const lens = new THREE.Mesh(
+        new THREE.BoxGeometry(0.42, 0.13, 0.20),
+        new THREE.MeshBasicMaterial({ color: col }),
+      );
+      lens.position.set(sx * 0.24, st.roof + 0.30, st.cabZ - 0.10);
+      root.add(lens);
+      beacons.push(lens);
+    }
+    const bar = new THREE.Mesh(
+      new THREE.BoxGeometry(1.06, 0.10, 0.24),
+      new THREE.MeshLambertMaterial({ color: 0x16191f }),
+    );
+    bar.position.set(0, st.roof + 0.22, st.cabZ - 0.10);
+    root.add(bar);
+    root.userData.beacons = beacons;
+  }
 
   root.userData.wheels = wheels;
   root.userData.shell = shell;

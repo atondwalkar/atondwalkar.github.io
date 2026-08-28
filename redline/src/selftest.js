@@ -12,10 +12,18 @@
 
 import * as THREE from 'three';
 import { Vehicle } from './vehicle.js';
-import { Driver } from './ai.js';
-import { Track } from './track.js';
-import { CAR, RACE, AI, SELECTABLE } from './defs.js';
-import { clamp, lapTime, dist2D } from './utils.js';
+import { buildCar } from './carmodels.js';
+import { Driver, Cruiser, BRAKE_G } from './ai.js';
+import { Race, defaultField } from './race.js';
+import { Track, LAYOUTS, disposeTrack } from './track.js';
+import { CAR, RACE, AI, RIVAL, POLICE, SELECTABLE } from './defs.js';
+import { clamp, lerp, lapTime, dist2D, angleDiff } from './utils.js';
+import { SHOTS, cameraFrame } from './camera.js';
+import { Cutscene, SCRIPTS } from './cutscene.js';
+import { PORTRAITS, portraitFor } from './portraits.js';
+import { Campaign, STAGES, laneCentres, trafficCount } from './campaign.js';
+import { CHEATS, findCheat, normalise, unresolved } from './cheats.js';
+import { ACTIONS, actionFor, codesFor, isBound, rebind, resetBinds, label } from './keybinds.js';
 
 const FIXED = 1 / 120;
 
@@ -94,6 +102,1394 @@ function checkBraking() {
 // No neutral. The array is [R, 1..6]: shifting down from first must stay in
 // first rather than dropping into reverse, and there must be no ratio of zero
 // anywhere in it.
+// The AI's per-driver knobs must default to exactly the module constants they
+// replaced.
+//
+// `brakeG` and `cornerMargin` used to be a module const and an `AI` field read
+// inline in drive(); they are per-driver now so a rival can brake later. That
+// refactor is only safe if a DEFAULT driver computes bit-identical numbers —
+// and the lap-time checks cannot prove it, because every driver rolls random
+// brake and throttle noise and a 1% mistake chance, so their times move by a
+// tenth between runs regardless. This proves it directly.
+function checkDriverDefaults(track) {
+  const car = { vehicle: new Vehicle(CAR) };
+  const d = new Driver(car, track, 0.9);
+  const same = [];
+  for (const [v, dist] of [[10, 0], [30, 50], [60, 190], [0, 12]]) {
+    same.push(d.reach(v, dist) === Driver.reach(v, dist));
+  }
+  const allSame = same.every(Boolean);
+  const margin = d.cornerMargin === AI.cornerMargin;
+  const brake = d.brakeG === BRAKE_G;
+  // And a driver given a harder brakeG really does plan later.
+  const hard = new Driver(car, track, 0.9, { brakeG: 1.44 });
+  const later = hard.reach(30, 100) > d.reach(30, 100);
+
+  const ok = allSame && margin && brake && later;
+  return `${ok ? 'a default driver is the old driver exactly' : 'WRONG'} — ` +
+    `reach matches the static form at ${same.filter(Boolean).length}/4 points, ` +
+    `cornerMargin ${margin ? 'is' : 'IS NOT'} AI.cornerMargin, ` +
+    `brakeG ${brake ? 'is' : 'IS NOT'} ${BRAKE_G}, ` +
+    `a 1.44 g planner ${later ? 'carries more speed' : 'DOES NOT'}`;
+}
+
+// Every shot in the camera's shot list must produce a usable frame.
+//
+// The shots are pure functions of the subject's frame, so they can be checked
+// without rendering anything — and the one failure that matters is cheap to
+// test for: a camera inside the bodywork. The title sequence shipped that bug
+// once, because every distance is measured from the car's CENTRE and a car is
+// two metres wide.
+function checkShots(track) {
+  const fake = {
+    vehicle: { x: 40, z: -25, yaw: 0.7 },
+    loc: { y: 3 },
+  };
+  const other = { vehicle: { x: 46, z: -21, yaw: 0.7 }, loc: { y: 3 } };
+  const bad = [];
+  let closest = Infinity, worst = '';
+  for (const [name, shot] of Object.entries(SHOTS)) {
+    for (const k of [0, 0.5, 1]) {
+      const s = shot(cameraFrame(fake), k, cameraFrame(other));
+      const nums = [...s.from, ...s.at, s.fov];
+      if (nums.some((n) => !Number.isFinite(n))) { bad.push(`${name} is not a number`); continue; }
+      if (s.fov < 20 || s.fov > 80) bad.push(`${name} has a ${s.fov} degree lens`);
+      const span = dist2D(s.from[0], s.from[2], s.at[0], s.at[2]);
+      if (span < 0.5) bad.push(`${name} looks at its own position`);
+      // How close the camera passes to the car it is filming.
+      const d = Math.hypot(s.from[0] - fake.vehicle.x, s.from[2] - fake.vehicle.z);
+      if (d < closest) { closest = d; worst = name; }
+    }
+  }
+  if (closest < 1.8) bad.push(`${worst} puts the camera ${closest.toFixed(1)} m from the car`);
+  const ok = bad.length === 0;
+  return `${ok ? 'every shot frames the car' : `WRONG — ${bad[0]}`} — ` +
+    `${Object.keys(SHOTS).length} shots, closest approach ${closest.toFixed(1)} m (${worst})`;
+}
+
+// Stage two's road: three and a half kilometres of city, end to end, from the
+// eastern waterfront to the Golden Gate on-ramp.
+//
+// Checked as geometry only — sampled, lined and gridded, but not built — which
+// is cheap, and which is where every one of these can go wrong. The one that
+// matters most is the self-approach: a route this long folded into the same
+// square of city has plenty of opportunity to run beside itself, and where it
+// does, one stretch's blockades and buildings land on another's road.
+function checkRunLayout() {
+  const bad = [];
+  const t = new Track(LAYOUTS.run);
+  const stage = STAGES.find((q) => q.layout === 'run');
+
+  if (!(t.length > 3000 && t.length < 4800)) bad.push(`it came out ${t.length.toFixed(0)} m`);
+
+  // How close it comes to itself, ignoring what is near along the road.
+  let closest = Infinity, where = null;
+  const skip = 110;
+  for (let i = 0; i < t.samples.length; i += 2) {
+    for (let j = i + 2; j < t.samples.length; j += 2) {
+      const along = (t.closed ? Math.min(j - i, t.samples.length - (j - i)) : j - i) * t.step;
+      if (along < skip) continue;
+      const a = t.samples[i], b = t.samples[j];
+      const d = dist2D(a.x, a.z, b.x, b.z);
+      if (d < closest) { closest = d; where = a; }
+    }
+  }
+  if (closest < 36) {
+    bad.push(`it runs ${closest.toFixed(0)} m from itself at ${where.x.toFixed(0)}, ${where.z.toFixed(0)}`);
+  }
+
+  // It has to fit inside the world. The ground plane is 1800 m square about
+  // the origin, and beyond about 550 m from the road the terrain drops into
+  // the bay — so a circuit wider than that drives off the edge of the city.
+  // Inside the world the ground plane covers, with room for the buildings
+  // that stand beyond the last junction.
+  const world = (LAYOUTS.run.world || 1800) / 2;
+  const span = t.samples.reduce((m, q) => Math.max(m, Math.abs(q.x), Math.abs(q.z)), 0);
+  if (span > world - 180) bad.push(`it reaches ${span.toFixed(0)} m of a ${world.toFixed(0)} m world`);
+
+  // The hill, and how steep it gets. Fifty metres of climb is the point of
+  // this one; twenty per cent would be a wall.
+  const hi = Math.max(...t.samples.map((q) => q.y));
+  const lo = Math.min(...t.samples.map((q) => q.y));
+  const grade = Math.max(...t.samples.map((q) => Math.abs(q.grade)));
+  if (hi - lo < 25) bad.push(`the hill is only ${(hi - lo).toFixed(0)} m tall`);
+  if (grade > 0.18) bad.push(`it hits a ${(grade * 100).toFixed(0)}% grade`);
+
+  // And the ramp: where the stage ends has to be somewhere you can arrive at
+  // speed, not the middle of a junction.
+  const at = stage.routeFraction * t.length;
+  const end = t.atDistance(at - 1);
+  const near = t.corners.reduce((m, c) => Math.min(m, dist2D(c.x, c.z, end.x, end.z)), Infinity);
+  if (near < 30) bad.push(`the ramp is ${near.toFixed(0)} m from a junction`);
+  const bend = Math.max(...[-60, -40, -20, -1].map((d) => t.locate(
+    t.atDistance(at + d).x, t.atDistance(at + d).z).sample.curvature));
+  if (bend > 0.01) bad.push(`the ramp is on a ${(1 / bend).toFixed(0)} m radius bend`);
+
+  // The ramp is built at the layout's fraction and the stage finishes at the
+  // stage's, and they are written in two different files. If they drift, the
+  // run ends in the middle of a block and the ramp stands somewhere nobody
+  // gets to — a failure that looks like nothing at all until you play it.
+  if (t.closed) bad.push('the run is still a lap');
+  if (stage.routeFraction !== 1) bad.push(`the run stops ${stage.routeFraction} of the way along`);
+  if (!t.rampPlan) bad.push('the layout has no ramp planned');
+  else {
+    const last = t.rampPlan.segs[t.rampPlan.segs.length - 1];
+    // How much it climbs is not the measure on a route — it climbs however
+    // much is left between the headland and the deck, and the road was
+    // deliberately routed to arrive most of the way up. What matters is that
+    // it ARRIVES, which the two checks below ask directly.
+    // And it has to leave the road rather than run down the middle of it.
+    // It has to arrive AT THE BRIDGE: at deck height, and at the deck's end.
+    const B = LAYOUTS.run.bridge;
+    const half = 340 * 2.4 / 2;
+    const ends = [
+      { x: B.x + Math.cos(B.ang) * half, z: B.z + Math.sin(B.ang) * half },
+      { x: B.x - Math.cos(B.ang) * half, z: B.z - Math.sin(B.ang) * half },
+    ];
+    const reach = Math.min(...ends.map((e) => dist2D(e.x, e.z, last.x, last.z)));
+    if (reach > 40) bad.push(`the on-ramp stops ${reach.toFixed(0)} m short of the deck`);
+    if (Math.abs(last.y - 34) > 3) bad.push(`the on-ramp tops out at ${last.y.toFixed(0)} m, not 34`);
+    if (Math.abs(t.rampPlan.rise) > 0.12) {
+      bad.push(`the on-ramp climbs at ${(t.rampPlan.rise * 100).toFixed(0)}%`);
+    }
+  }
+
+  const ok = bad.length === 0;
+  return `${ok ? 'an open road across the whole city' : `WRONG — ${bad[0]}`} — ` +
+    `${(t.length / 1000).toFixed(2)} km over ${t.junctions.length} junctions, ` +
+    `${(hi - lo).toFixed(0)} m of hill at up to ${(grade * 100).toFixed(0)}%, ` +
+    `${closest.toFixed(0)} m at its closest to itself, reaching ${span.toFixed(0)} m out; ` +
+    `the on-ramp starts ${(at / 1000).toFixed(2)} km in, ${near.toFixed(0)} m clear of a junction`;
+}
+
+// Stage three: the bridge, as a road rather than as scenery.
+//
+// The thing that can go wrong here is that `deck` is a switch which turns off
+// most of what a Track knows how to build — the city, the side streets, the
+// blockades, the pavements — and turns on a set of things nothing else uses.
+// Half-applied, what you get is a bridge with a blockade on it, or a six-lane
+// road with a building line ten metres out over the water.
+function checkBridge(game) {
+  const bad = [];
+  const scene0 = game.scene;
+  const t = new Track(LAYOUTS.bridge);
+  const stage = STAGES.find((q) => q.layout === 'bridge');
+
+  if (t.closed) bad.push('the bridge is a lap');
+  if (!(t.length > 8000 && t.length < 14000)) bad.push(`it is ${t.length.toFixed(0)} m long`);
+
+  // Six lanes, all the way. A junction bulge on a bridge is a bridge that gets
+  // wider in the middle for no reason anybody can see.
+  const widths = t.samples.map((p) => p.width);
+  const wMin = Math.min(...widths), wMax = Math.max(...widths);
+  if (Math.abs(wMax - wMin) > 0.01) bad.push(`its width varies from ${wMin.toFixed(1)} to ${wMax.toFixed(1)} m`);
+  const lanes = Math.round(wMax / 3.6);
+  if (lanes !== 6) bad.push(`it is ${lanes} lanes wide, not 6`);
+
+  // Nothing a street has.
+  if (t.streets.length || t.stubs.length) bad.push(`${t.stubs.length} side streets on a bridge`);
+  if (t.rampPlan) bad.push('an on-ramp onto a bridge that is already the road');
+  // No street works. A bridge with cones and amber arrow boards down it is a
+  // bridge with roadworks nobody put there — and the boards went up at every
+  // corner, which on a deck means every one-degree kink in it.
+  const built = [];
+  for (const _ of t.build(scene0)) { /* built so the props are laid */ }
+  const kinds = {};
+  for (const p of t.props || []) kinds[p.kind] = (kinds[p.kind] || 0) + 1;
+  for (const k of ['cone', 'sign', 'street']) {
+    if (kinds[k]) bad.push(`${kinds[k]} ${k} props on a bridge`);
+  }
+  const lamps = (t.lamps || []).length;
+  const breakables = (t.breakables || []).length;
+  if (breakables) bad.push(`${breakables} things to knock over on a bridge`);
+  disposeTrack(scene0, t);
+  void built;
+
+  // The railing is the wall, and it is at the edge of the deck rather than ten
+  // metres past a pavement that does not exist.
+  if (t.wall > 2.5) bad.push(`you stop ${t.wall.toFixed(1)} m past the kerb, over the water`);
+
+  // It is over water everywhere, and the water is well below it.
+  const low = Math.min(...t.samples.map((p) => p.y));
+  const under = t.groundAt(t.samples[0].x, t.samples[0].z);
+  if (low - under < 25) bad.push(`the deck is only ${(low - under).toFixed(0)} m above the water`);
+  // The bay is level, and it is not a sheet.
+  //
+  // "Flat" was the old check, and flat is what was wrong with it: a single
+  // height and a single colour over twelve kilometres reads as a blank canvas
+  // with a bridge standing on it. What is wanted is water — level on average,
+  // moving under you, and nowhere near the deck.
+  let lo2 = Infinity, hi2 = -Infinity, sum = 0, n = 0;
+  for (let x = -3000; x <= 3000; x += 220) {
+    for (let z = -1200; z <= 1200; z += 220) {
+      const y = t.groundAt(x, z);
+      lo2 = Math.min(lo2, y); hi2 = Math.max(hi2, y); sum += y; n++;
+    }
+  }
+  const mean = sum / n, range = hi2 - lo2;
+  // Against the swell's own range, not a fixed tolerance: `under` is one
+  // sample of moving water, so it is a couple of metres off the mean by
+  // construction and comparing it to a flat number fails a correct sea.
+  if (Math.abs(mean - under) > range) {
+    bad.push(`the bay averages ${mean.toFixed(1)} m but reads ${under.toFixed(1)} under the deck`);
+  }
+  if (range < 1.5) bad.push(`the bay is a sheet — ${range.toFixed(1)} m from trough to crest`);
+  if (range > 12) bad.push(`the bay has ${range.toFixed(0)} m waves in it`);
+
+  // The deck arcs. A suspended span is highest at mid-span, not at its ends.
+  const mid = t.atDistance(t.length / 2).y;
+  const end = t.atDistance(t.length - 4).y;
+  if (mid - end < 4) bad.push(`mid-span is only ${(mid - end).toFixed(1)} m above the ends`);
+
+  // And the traffic: enough of it to matter, spread across the lanes, and
+  // slower than anybody racing.
+  const c = new Campaign({ playerName: 'X' });
+  c.index = STAGES.indexOf(stage);
+  c.car = SELECTABLE[0];
+  const f = c.field(t);
+  const traffic = f.cars.filter((q) => q.traffic);
+  const lanesUsed = new Set(traffic.map((q) => q.lane));
+  const want = trafficCount(stage, t);
+  if (traffic.length !== want) bad.push(`${traffic.length} cars of traffic, not ${want}`);
+  // Density is the thing the stage asks for, so density is what is checked.
+  // A count is a number that stops being right the moment the road changes
+  // length, and this road changed length by a factor of five.
+  const spacing = t.length / Math.max(1, traffic.length);
+  if (spacing > 200) bad.push(`one car of traffic every ${spacing.toFixed(0)} m is an empty bridge`);
+  // Every lane, and in the MIDDLE of it. They were at 0 and ±3.6 and ±7.2 —
+  // the painted lines on a six-lane deck rather than the lanes between them.
+  if (lanesUsed.size < lanes) bad.push(`the traffic uses ${lanesUsed.size} of ${lanes} lanes`);
+  const centres = laneCentres(t);
+  for (const q of traffic) {
+    if (!centres.some((c) => Math.abs(c - q.lane) < 0.01)) {
+      bad.push(`a car at ${q.lane} m is not in the middle of a lane`);
+    }
+  }
+  for (const q of traffic) {
+    if (Math.abs(q.lane) > wMax / 2 - 1.5) bad.push(`a lane at ${q.lane} m is off the deck`);
+    if (!(q.speed > 6 && q.speed < 26)) bad.push(`traffic doing ${(q.speed * 3.6).toFixed(0)} km/h`);
+  }
+  if (f.cars.filter((q) => q.opts && q.opts.chase > 0).length !== stage.police) {
+    bad.push('the police did not follow you onto the bridge');
+  }
+
+  // And the traffic drives: holds its lane, holds its speed, and is slow
+  // enough to be an obstacle rather than a rival. A Cruiser that wanders out
+  // of its lane is a car that ends up in the railing on its own, and a bridge
+  // with nine cars parked against the parapet is not traffic.
+  {
+    const spec = traffic[0];
+    const car = { vehicle: new Vehicle(CAR), loc: null };
+    const p0 = t.atDistance(200);
+    car.vehicle.reset(p0.x + p0.nx * spec.lane, p0.z + p0.nz * spec.lane,
+      Math.atan2(p0.dirX, p0.dirZ));
+    car.vehicle.autoShift = true;
+    car.vehicle.surfaceGrip = 1;
+    car.vehicle.setSpeed(spec.speed);
+    car.loc = t.locate(car.vehicle.x, car.vehicle.z);
+    const cr = new Cruiser(car, t, spec.lane, spec.speed);
+    let drift = 0, fastest = 0, slowest = 999;
+    for (let i = 0; i < Math.round(40 / FIXED); i++) {
+      cr.drive(FIXED);
+      car.vehicle.update(FIXED, 2);
+      drift = Math.max(drift, Math.abs(car.loc.lateral - spec.lane));
+      fastest = Math.max(fastest, car.vehicle.speedKmh);
+      slowest = Math.min(slowest, car.vehicle.speedKmh);
+    }
+    if (drift > 1.2) bad.push(`traffic wandered ${drift.toFixed(1)} m out of its lane`);
+    if (fastest > spec.speed * 3.6 + 12) bad.push(`traffic got up to ${fastest.toFixed(0)} km/h`);
+    if (slowest < spec.speed * 3.6 - 14) bad.push(`traffic dropped to ${slowest.toFixed(0)} km/h`);
+    bad.laneDrift = drift;
+    if (car.loc.s < 300) bad.push('traffic did not go anywhere');
+  }
+
+  // Can it be crossed in the time allowed, and is the time allowed worth
+  // having? An eleven-kilometre bridge behind a two-minute clock is a stage
+  // nobody finishes; the same bridge behind a ten-minute one has no clock.
+  const runner = { vehicle: new Vehicle(CAR), isPlayer: false, loc: null };
+  {
+    const p0 = t.atDistance(4);
+    runner.vehicle.reset(p0.x, p0.z, Math.atan2(p0.dirX, p0.dirZ));
+    runner.vehicle.autoShift = true;
+    runner.vehicle.setSpeed(30);
+    runner.loc = t.locate(runner.vehicle.x, runner.vehicle.z);
+  }
+  const d = new Driver(runner, t, 0.95);
+  runner.driver = d;
+  let crossed = 0, off = 0, time = 0;
+  const solo = [runner];
+  for (let i = 0; i < Math.round(500 / FIXED); i++) {
+    d.drive(FIXED, solo);
+    runner.vehicle.update(FIXED, 2);
+    runner.loc = t.locate(runner.vehicle.x, runner.vehicle.z, runner.loc.index);
+    const over = Math.abs(runner.loc.lateral) - runner.loc.width / 2;
+    runner.vehicle.surfaceGrip = over <= 0 ? 1 : over < 1.6 ? 0.92 : 0.55;
+    if (over > 2.0) off += FIXED;
+    time += FIXED;
+    if (runner.loc.s >= t.length - 6) { crossed = time; break; }
+  }
+  if (!crossed) bad.push(`nobody crossed it in ${time.toFixed(0)}s`);
+  if (off > 3) bad.push(`${off.toFixed(1)}s off the deck crossing it`);
+  if (crossed && crossed > stage.limit) {
+    bad.push(`crossing takes ${crossed.toFixed(0)}s against a ${stage.limit}s clock`);
+  }
+  if (crossed && stage.limit > crossed * 1.8) {
+    bad.push(`${stage.limit}s is generous for a ${crossed.toFixed(0)}s crossing`);
+  }
+
+  // What ninety-odd cars cost per step.
+  //
+  // Density is only worth having if the frame it is drawn in arrives on time.
+  // Three things scale with the count and only one of them is obvious: the
+  // physics, the driving, and the contact resolver — which compares every car
+  // with every other one, so ninety-five cars is four and a half thousand
+  // pairs a step rather than the hundred and twenty a sixteen-car race does.
+  let stepMs = 0;
+  {
+    const all = f.cars.map((spec, i) => {
+      const p2 = t.atDistance(200 + i * 60);
+      const lat = spec.lane || 0;
+      const car = { vehicle: new Vehicle(CAR), loc: null, traffic: !!spec.traffic };
+      car.vehicle.reset(p2.x + p2.nx * lat, p2.z + p2.nz * lat, Math.atan2(p2.dirX, p2.dirZ));
+      car.vehicle.autoShift = true;
+      car.vehicle.surfaceGrip = 1;
+      car.vehicle.setSpeed(spec.speed || 40);
+      car.loc = t.locate(car.vehicle.x, car.vehicle.z);
+      car.driver = spec.traffic
+        ? new Cruiser(car, t, lat, spec.speed || 14)
+        : new Driver(car, t, 0.9, spec.opts || {});
+      return car;
+    });
+    for (const c of all) if (c.driver instanceof Driver && c.driver.opts.chase > 0) c.driver.quarry = all[0];
+    const bench = { contact: true, cars: all, track: t, game: { onImpact() {} } };
+    bench._resolvePair = game.race._resolvePair.bind(bench);
+    bench._carContact = game.race._carContact.bind(bench);
+    const steps = Math.round(2 / FIXED);
+    const t0 = performance.now();
+    for (let i = 0; i < steps; i++) {
+      for (const c of all) {
+        c.driver.drive(FIXED, all);
+        c.vehicle.update(FIXED, 2);
+        c.loc = t.locate(c.vehicle.x, c.vehicle.z, c.loc.index);
+      }
+      bench._carContact();
+    }
+    stepMs = (performance.now() - t0) / steps;
+  }
+  // Two milliseconds a step is a quarter of a 120 Hz budget and an eighth of a
+  // frame at sixty. Past that the traffic is what the player notices about the
+  // frame rate rather than about the bridge.
+  if (stepMs > 2.0) bad.push(`${f.cars.length} cars cost ${stepMs.toFixed(2)} ms a step`);
+
+  const ok = bad.length === 0;
+  return `${ok ? 'six lanes over open water, with traffic on it' : `WRONG — ${bad[0]}`} — ` +
+    `${(t.length / 1000).toFixed(2)} km of ${lanes}-lane deck arcing ` +
+    `${(mid - end).toFixed(1)} m to mid-span, ${(low - under).toFixed(0)} m over the bay, ` +
+    `${traffic.length} cars of traffic, one every ${spacing.toFixed(0)} m, in all ${lanesUsed.size} lanes at ` +
+    `${Math.round(Math.min(...traffic.map((q) => q.speed)) * 3.6)}–` +
+    `${Math.round(Math.max(...traffic.map((q) => q.speed)) * 3.6)} km/h, ` +
+    `${stage.police} units still behind you, ${lamps} lamps and no street works; ` +
+    `${f.cars.length} cars cost ` +
+    `${stepMs.toFixed(2)} ms a step; a clean lap of it takes ` +
+    `${crossed ? crossed.toFixed(0) : '--'}s of a ${stage.limit}s clock`;
+}
+
+// Swapping the circuit under a running game.
+//
+// A stage is a layout, so everything about a second stage rests on this
+// working: build a different track, take the old one down, and leave nothing
+// behind that still points at it. The two things that do point at it are the
+// drivers — each carries the sample index it found its car on last frame, and
+// a stale one sends `locate` looking at a piece of road that no longer exists
+// — and the HUD's cached map path.
+//
+// It builds a second track for real rather than mocking one, because what is
+// being checked is whether a real one comes out different and comes down
+// clean. The materials are the trap: the road, the kerbs and the buildings are
+// all drawn with the vertex-coloured singletons out of meshkit, which the cars
+// share, so disposing them here would take every car in the game with it.
+function checkTrackSwap(game) {
+  const bad = [];
+  const other = {
+    id: 'test-loop',
+    name: 'TEST LOOP',
+    loop: [[0, 0], [4, 0], [4, 4], [0, 4]],
+    elevation: [[0.00, 1], [0.50, 9], [0.75, 5]],
+  };
+
+  const t = new Track(other);
+  if (t.name !== 'TEST LOOP') bad.push(`the layout's name did not reach the track`);
+  if (Math.abs(t.length - game.track.length) < 50) {
+    bad.push(`a different layout gave the same length (${t.length.toFixed(0)} m)`);
+  }
+  if (t.gridSlots.length !== game.track.gridSlots.length) bad.push('a short grid');
+  // The elevation table is by lap fraction, so the hill has to land where the
+  // table puts it. Where, not how high: the profile is relaxed after it is
+  // sampled — that is what stops the inside of a tight corner climbing faster
+  // than its centreline — so a sharp peak in the table comes out rounded off,
+  // and asserting the literal number would be asserting that the relaxation
+  // does not happen.
+  // Measured from the FIRST JUNCTION, which is where the elevation table's
+  // fraction is measured from — not from the start line, which sits partway
+  // down the opening straight so the cars have room to get moving. The two
+  // are a hundred and thirty metres apart on a lap this short, which is a
+  // sixth of it, and reading the table against the wrong origin makes a hill
+  // that is exactly where it was asked for look a sixth of a lap early.
+  const peak = t.samples.reduce((b, q) => (q.y > b.y ? q : b), t.samples[0]);
+  const originS = t.locate(t.junctions[0].x, t.junctions[0].z).s;
+  const at = ((peak.s - originS + t.length) % t.length) / t.length;
+  const low = Math.min(...t.samples.map((q) => q.y));
+  if (Math.abs(at - 0.5) > 0.08) bad.push(`the hill peaks ${(at * 100).toFixed(0)}% round, not 50%`);
+  if (peak.y - low < 4) bad.push(`the hill is only ${(peak.y - low).toFixed(1)} m tall`);
+
+  // Built, then taken down: the group leaves the scene and its geometry is
+  // released, but the shared materials survive.
+  const before = game.scene.children.length;
+  for (const _ of t.build(game.scene)) { /* built in one go, off the clock */ }
+  if (game.scene.children.length !== before + 1) bad.push('building added no group');
+  let disposed = 0;
+  const shared = [];
+  t.group.traverse((o) => {
+    if (o.material && !Array.isArray(o.material)) shared.push(o.material);
+  });
+  for (const m of shared) m.userData.__seen = true;
+  disposeTrack(game.scene, t);
+  if (game.scene.children.length !== before) bad.push('taking it down left the group in the scene');
+  if (t.group) bad.push('the track still holds its group');
+  // The car material is one of the shared ones and must still be usable.
+  const carMat = game.race.player.model.children.find((o) => o.material)?.material;
+  if (carMat && carMat.version === undefined) bad.push('the cars lost their material');
+  void disposed;
+
+  // And a real swap on the live game: the drivers must forget where they were.
+  const drivers = game.race.cars.filter((q) => q.driver);
+  for (const q of drivers) q.driver.hint = 99999;
+  const kept = game.race.track;
+  game.race.setTrack(game.track);
+  const stale = drivers.filter((q) => q.driver.hint !== -1).length;
+  if (stale) bad.push(`${stale} drivers kept a stale sample index`);
+  if (game.race.track !== game.track) bad.push('the race kept the old track');
+  if (drivers.some((q) => q.driver.track !== game.track)) bad.push('a driver kept the old track');
+  void kept;
+
+  const ok = bad.length === 0;
+  return `${ok ? 'a layout is all a stage is' : `WRONG — ${bad[0]}`} — ` +
+    `a four-corner test loop came out ${(t.length / 1000).toFixed(3)} km against ` +
+    `${(game.track.length / 1000).toFixed(3)}, built and released ${shared.length} meshes, ` +
+    `${drivers.length} drivers forgot where they were, its hill peaks ` +
+    `${(at * 100).toFixed(0)}% round at ${peak.y.toFixed(1)} m over a ${low.toFixed(1)} m low`;
+}
+
+// The two things that keep a chase stage alive to the end of it.
+//
+// Both are cheats, in the sense that neither is what the simulation would do
+// left alone, and both exist because what the simulation does alone is worse:
+// traffic parked in a wall across the finish, and police four hundred metres
+// back with nothing between you and the end of the road.
+function checkChaseRules(game) {
+  const bad = [];
+  const t = new Track(LAYOUTS.bridge);
+  const stage = STAGES.find((q) => q.layout === 'bridge');
+  const camp = new Campaign({ playerName: 'X' });
+  camp.index = STAGES.indexOf(stage);
+  camp.car = SELECTABLE[0];
+  const f = camp.field(t);
+
+  // A stand-in Race: the real one, pointed at this track, with a field small
+  // enough to reason about.
+  const race = Object.create(Object.getPrototypeOf(game.race));
+  Object.assign(race, {
+    game, track: t, cars: [], route: t.length, limit: null, contact: false,
+    state: 'racing', time: 0, leash: stage.leash, trafficCount: 0, laps: 1,
+    formation: 'pursuit', endOnFirst: false, results: [],
+  });
+  const put = (at, opts) => {
+    const p = t.atDistance(at);
+    const car = {
+      vehicle: new Vehicle(CAR), loc: null, model: null, contactT: 0,
+      isPlayer: !!opts.player, pursuer: !!opts.pursuer, traffic: !!opts.traffic,
+      livery: SELECTABLE[0], lap: 0, lastS: at, progress: at, finished: false,
+      syncModel() {}, position: 1,
+    };
+    car.vehicle.reset(p.x, p.z, Math.atan2(p.dirX, p.dirZ));
+    car.vehicle.setSpeed(opts.speed ?? 40);
+    car.loc = t.locate(car.vehicle.x, car.vehicle.z);
+    if (opts.pursuer) car.driver = { opts: { station: opts.station || 0, chase: 1 }, hint: 0 };
+    race.cars.push(car);
+    return car;
+  };
+
+  // --- traffic at the end of the road leaves it, and so does traffic a long
+  // way behind: the second is what pays for the cars being added ahead.
+  const player = put(t.length - 900, { player: true, speed: 50 });
+  race.player = player;
+  const stuck = [];
+  for (let i = 0; i < 5; i++) stuck.push(put(t.length - 30 - i * 8, { traffic: true, speed: 14 }));
+  const dropped = put(player.loc.s - 600, { traffic: true, speed: 14 });
+  // A keeper: ahead of the player and nowhere near the end. Putting it in the
+  // middle of the road was wrong — that is four kilometres BEHIND the car on
+  // this setup, and traffic that far back is correctly taken away too.
+  const mid = put(player.loc.s + 300, { traffic: true, speed: 14 });
+  race.trafficCount = 7;
+  const before = race.cars.length;
+  race._despawn();
+  const after = race.cars.length;
+  if (after !== before - 6) bad.push(`${before - after} of 6 cars were despawned, not 6`);
+  if (race.cars.includes(dropped)) bad.push('traffic six hundred metres behind was kept');
+  if (!race.cars.includes(mid)) bad.push('traffic in the middle of the road was despawned too');
+  if (stuck.some((c) => race.cars.includes(c))) bad.push('a car is still parked on the finish');
+  // And nothing left behind pointing at a car that is gone.
+  if (race.cars.some((c) => c.gone)) bad.push('a despawned car is still in the field');
+
+  // --- and it keeps topping up ahead as the car goes.
+  //
+  // The layout is laid once and every car of it drives forward at forty to
+  // seventy while the player does a hundred and eighty. Left alone the road
+  // drains: the first kilometre — where the stage starts — is empty by the
+  // time anybody looks at it, and the last one is a wall. So the window ahead
+  // is refilled, and refilling it is only correct if it neither runs out nor
+  // puts a car on top of another one.
+  let thin = 0, stacked = 0, made = 0;
+  {
+    race.trafficSpecs = f.cars.filter((q) => q.traffic).slice(0, 6);
+    race.trafficEvery = stage.trafficEvery;
+    const before2 = race.cars.length;
+    // Back to the start, and drive it.
+    const start = t.atDistance(200);
+    player.vehicle.reset(start.x, start.z, Math.atan2(start.dirX, start.dirZ));
+    player.loc = t.locate(player.vehicle.x, player.vehicle.z);
+    // Sampled every kilometre rather than every quarter of one: each top-up
+    // builds real cars with real geometry, and thirty-seven sample points at
+    // twelve frames each was thirteen hundred car models — which is not a
+    // slower test, it is a test that never finishes.
+    for (let d = 200; d < t.length - 1200; d += 1000) {
+      const at = t.atDistance(d);
+      player.vehicle.reset(at.x, at.z, Math.atan2(at.dirX, at.dirZ));
+      player.loc = t.locate(player.vehicle.x, player.vehicle.z);
+      for (const c of race.cars) if (c.traffic) c.loc = t.locate(c.vehicle.x, c.vehicle.z);
+      race._despawn();
+      for (let k = 0; k < 8; k++) race._topUpTraffic();
+      const ahead = race.cars.filter((c) => c.traffic && c.loc
+        && c.loc.s > d + 40 && c.loc.s < d + 1500);
+      // Two thirds of what the spacing asks for, allowing for the far edge
+      // running into the end of the bridge.
+      if (ahead.length < (1460 / stage.trafficEvery) * 0.62) thin++;
+      for (let a = 0; a < ahead.length; a++) {
+        for (let b2 = a + 1; b2 < ahead.length; b2++) {
+          if (Math.abs(ahead[a].loc.s - ahead[b2].loc.s) < 12
+            && Math.abs(ahead[a].loc.lateral - ahead[b2].loc.lateral) < 2.2) stacked++;
+        }
+      }
+    }
+    made = race.cars.length - before2;
+    // Everything this made goes back: it is a real scene and these are real
+    // meshes, and a check that leaves a hundred cars in it changes every frame
+    // dumped afterwards.
+    for (const c of race.cars) {
+      if (!c.model) continue;
+      game.scene.remove(c.model);
+      c.model.traverse((o) => { if (o.geometry) o.geometry.dispose(); });
+    }
+  }
+  if (thin > 2) bad.push(`the road ahead ran thin at ${thin} of the points sampled`);
+  if (stacked) bad.push(`${stacked} pairs of traffic stacked in the same lane`);
+  if (made <= 0) bad.push('no traffic was ever added ahead of the car');
+
+  // --- fresh units cutting in ahead.
+  let cutIn = 0, aheadOf = 0, nearest = Infinity;
+  {
+    race.intercept = stage.intercept;
+    race.cars = race.cars.filter((c) => c.isPlayer);
+    const at0 = t.atDistance(2000);
+    player.vehicle.reset(at0.x, at0.z, Math.atan2(at0.dirX, at0.dirZ));
+    player.vehicle.setSpeed(50);
+    player.loc = t.locate(player.vehicle.x, player.vehicle.z);
+    for (let i = 0; i < 40; i++) race._intercept(stage.intercept.every);
+    const units = race.cars.filter((c) => c.pursuer);
+    cutIn = units.length;
+    for (const u of units) {
+      const g = t.gap(u.loc.s, player.loc.s);
+      if (g > 0) aheadOf++;
+      nearest = Math.min(nearest, g);
+      if (Math.abs(u.loc.lateral) > t.samples[0].width / 2) bad.push('a unit cut in off the road');
+      if (!u.driver || u.driver.quarry !== player) bad.push('a unit cut in with nobody to chase');
+      if (Math.abs(u.vehicle.u) < 10) bad.push('a unit cut in from a standstill');
+    }
+    if (cutIn === 0) bad.push('nothing ever cut in ahead');
+    if (cutIn > stage.intercept.max) bad.push(`${cutIn} units at once, past the cap of ${stage.intercept.max}`);
+    if (aheadOf !== cutIn) bad.push(`${cutIn - aheadOf} of the units cut in BEHIND the player`);
+    // And never on top of the car.
+    if (nearest < 200) bad.push(`one appeared ${nearest.toFixed(0)} m in front of the bonnet`);
+    for (const c of race.cars) {
+      if (!c.model) continue;
+      game.scene.remove(c.model);
+      c.model.traverse((o) => { if (o.geometry) o.geometry.dispose(); });
+    }
+    race.cars = race.cars.filter((c) => c.isPlayer);
+    race.intercept = null;
+  }
+
+  // --- a unit that has got in front turns across the road.
+  let swing = 0;
+  {
+    const t2 = t;
+    let swingMax = 0; void swingMax;
+    const blocker = { vehicle: new Vehicle(CAR), loc: null, name: '' };
+    const q = { vehicle: new Vehicle(CAR), loc: null, name: '' };
+    const put2 = (car, at, speed) => {
+      const p2 = t2.atDistance(at);
+      car.vehicle.reset(p2.x, p2.z, Math.atan2(p2.dirX, p2.dirZ));
+      car.vehicle.autoShift = true;
+      car.vehicle.surfaceGrip = 1;
+      car.vehicle.setSpeed(speed);
+      car.loc = t2.locate(car.vehicle.x, car.vehicle.z);
+    };
+    put2(q, 3000, 30);
+    put2(blocker, 3018, 14);            // eighteen metres in front, going slowly
+    const d = new Driver(blocker, t2, POLICE.skill, { ...POLICE.opts, station: 0 });
+    blocker.driver = d;
+    d.quarry = q;
+    // The quarry has to be DRIVEN. Left standing, the blocker simply pulls
+    // away from it, the gap grows past the range the block works in, and the
+    // check measures a car driving off down an empty road.
+    const qd = new Cruiser(q, t2, 0, 30);
+    q.driver = qd;
+    const yaw0 = blocker.vehicle.yaw;
+    for (let i = 0; i < Math.round(1.4 / FIXED); i++) {
+      qd.drive(FIXED, [q, blocker]);
+      q.vehicle.update(FIXED, 2);
+      q.loc = t2.locate(q.vehicle.x, q.vehicle.z, q.loc.index);
+      d.drive(FIXED, [q, blocker]);
+      blocker.vehicle.update(FIXED, 2);
+      blocker.loc = t2.locate(blocker.vehicle.x, blocker.vehicle.z, blocker.loc.index);
+      swing = Math.max(swing, Math.abs(angleDiff(
+        blocker.vehicle.yaw,
+        Math.atan2(t2.atDistance(blocker.loc.s).dirX, t2.atDistance(blocker.loc.s).dirZ))) * 57.3);
+    }
+    // The furthest it got off the road's direction over the whole manoeuvre,
+    // not where it happened to be pointing at the end: a block is a swing, and
+    // a car that has swung across and started to straighten is still a car
+    // that blocked you.
+    if (swing < 15) bad.push(`a unit in front turned only ${swing.toFixed(0)}° across the road`);
+    if (swing > 110) bad.push(`a unit in front spun ${swing.toFixed(0)}°`);
+  }
+
+  // --- the leash.
+  //
+  // The player has been picked up and put down repeatedly above, and `reset`
+  // zeroes the velocity — so its speed is set again here rather than assumed.
+  // Without it the leash was matching a stationary car and the check was
+  // measuring its own setup.
+  player.vehicle.setSpeed(50);
+  const unit = put(player.loc.s - stage.leash - 120, { pursuer: true, station: 1, speed: 12 });
+  const wasGap = t.gap(player.loc.s, unit.loc.s);
+  race._leash();
+  const nowGap = t.gap(player.loc.s, unit.loc.s);
+  const speed = Math.abs(unit.vehicle.u);
+  if (nowGap >= wasGap) bad.push(`the leash left it ${nowGap.toFixed(0)} m back`);
+  if (nowGap <= 0) bad.push(`the leash put it ${(-nowGap).toFixed(0)} m AHEAD of the player`);
+  if (nowGap > 260) bad.push(`the leash brought it to ${nowGap.toFixed(0)} m, which is still lost`);
+  if (Math.abs(speed - Math.abs(player.vehicle.u)) > 4) {
+    bad.push(`it came back doing ${(speed * 3.6).toFixed(0)} against the player's ${(player.vehicle.u * 3.6).toFixed(0)}`);
+  }
+  if (Math.abs(unit.loc.lateral) > t.samples[0].width / 2) bad.push('the leash put it off the road');
+
+  // A unit that has NOT fallen off the back is left alone. A leash that fires
+  // on a unit already on your bumper is a unit that teleports every few
+  // seconds, in view, which is the one thing this must never do.
+  const close = put(player.loc.s - 40, { pursuer: true, station: 2, speed: 50 });
+  const closeAt = close.loc.s;
+  race._leash();
+  if (Math.abs(close.loc.s - closeAt) > 1) bad.push('the leash moved a unit that was right behind');
+
+  // Every stage that uses it fires from further back than it returns to, and
+  // from far enough back to mean "lost" rather than "dropped a car length".
+  //
+  // The first version of this check asked for the threshold to be beyond the
+  // fog, on the theory that the move must not be seen. That is the wrong
+  // constraint and it failed a correct setting: a unit is only ever leashed
+  // while it is BEHIND the player, and behind is the half of the world nobody
+  // is looking at. What actually matters is that it fires rarely and never
+  // lands in front.
+  for (const st of STAGES) {
+    if (!st.leash) continue;
+    if (st.leash < 250) bad.push(`${st.id}'s leash fires at ${st.leash} m, which is not lost`);
+    if (st.leash < nowGap * 1.6) {
+      bad.push(`${st.id} leashes at ${st.leash} m and returns to ${nowGap.toFixed(0)}, so it will chatter`);
+    }
+  }
+
+  // --- a pursuit starts rolling, in slow motion.
+  let openSpeed = 0, slow0 = 0, slow1 = 0;
+  {
+    race.formation = 'pursuit';
+    race.cars = [player];
+    for (let u = 0; u < 3; u++) {
+      const c = put(0, { pursuer: true, station: u, speed: 0 });
+      c.driver = { opts: { station: u, chase: 1 }, hint: 0 };
+    }
+    race.trafficSpecs = [];
+    race.trafficEvery = 0;
+    race.gridUp();
+    openSpeed = Math.min(...race.cars.map((c) => Math.abs(c.vehicle.u)));
+    if (race.state !== 'racing') bad.push(`a pursuit opened in state ${race.state}`);
+    if (race.countdown) bad.push('a pursuit counted down');
+    if (openSpeed < 30) bad.push(`everyone opened at ${(openSpeed * 3.6).toFixed(0)} km/h`);
+
+    // And time is slowed at the off, then let go.
+    const wasT = game._slowmoT;
+    game._slowmoT = 1.6;
+    slow0 = game.timeScale;
+    game._slowmoT = 0;
+    slow1 = game.timeScale;
+    game._slowmoT = wasT;
+    if (!(slow0 > 0.15 && slow0 < 0.55)) bad.push(`the opening runs at ${slow0.toFixed(2)} speed`);
+    if (Math.abs(slow1 - 1) > 1e-6) bad.push(`time never returns to normal (${slow1.toFixed(2)})`);
+    for (const c of race.cars) {
+      if (!c.model) continue;
+      game.scene.remove(c.model);
+      c.model.traverse((o) => { if (o.geometry) o.geometry.dispose(); });
+    }
+  }
+
+  const ok = bad.length === 0;
+  return `${ok ? 'traffic leaves, and the police come back' : `WRONG — ${bad[0]}`} — ` +
+    `5 cars cleared off the finish and one dropped from behind, ` +
+    `while the one ahead stayed; ` +
+    `${made} cars were added ahead over ${(t.length / 1000).toFixed(0)} km with none stacked; ` +
+    `${cutIn} units cut in ahead, nearest at ${nearest.toFixed(0)} m, and one in front ` +
+    `turned ${swing.toFixed(0)}° across the road; ` +
+    `it opens rolling at ${(openSpeed * 3.6).toFixed(0)} km/h through ` +
+    `${slow0.toFixed(2)}x time; a unit ${wasGap.toFixed(0)} m adrift came back to ${nowGap.toFixed(0)} m at ` +
+    `${(speed * 3.6).toFixed(0)} km/h, and one already close was left alone`;
+}
+
+// The keybinds.
+//
+// The thing worth checking is not that the table can be edited — it is that
+// editing it moves the KEY. Every one of these used to be a `case` on a
+// literal inside a switch, read in one place for the pedals and another for
+// the gearbox, and a settings screen laid over that would have changed the
+// label on the button and nothing else.
+//
+// So: rebind something, and then drive the game with the new key and with the
+// old one, and see which car moves.
+function checkKeybinds(game) {
+  const bad = [];
+  resetBinds();
+
+  // Every action has at least one key, no key does two jobs, and every one of
+  // them is something the switch actually handles.
+  const seen = new Map();
+  for (const a of ACTIONS) {
+    const codes = codesFor(a.id);
+    if (!codes.length) bad.push(`${a.name} is bound to nothing`);
+    for (const c of codes) {
+      if (seen.has(c)) bad.push(`${label(c)} does both ${seen.get(c)} and ${a.name}`);
+      seen.set(c, a.name);
+      if (actionFor(c) !== a.id) bad.push(`${label(c)} does not resolve to ${a.name}`);
+    }
+  }
+
+  // Rebind the throttle and drive it. The old key must go dead and the new one
+  // must work — a rebind that only adds is a rebind that leaves two throttles.
+  const car = game.race.player;
+  const v = car.vehicle;
+  const kept = { started: game.phase, keys: [...game.keys], throttle: v.throttle };
+  const pedal = (code) => {
+    game.keys.clear();
+    v.throttle = 0;
+    game.keys.add(code);
+    for (let i = 0; i < 30; i++) game._drivePlayer(1 / 60);
+    return v.throttle;
+  };
+  let before = 0, oldKey = 0, newKey = 0;
+  try {
+    game.phase = 'racing';
+    game.race.state = 'racing';
+    car.finished = false;
+    before = pedal('KeyW');
+    rebind('throttle', 0, 'KeyT');
+    oldKey = pedal('KeyW');
+    newKey = pedal('KeyT');
+  } finally {
+    resetBinds();
+    game.keys.clear();
+    for (const c of kept.keys) game.keys.add(c);
+    v.throttle = kept.throttle;
+    game.phase = kept.started;
+  }
+  if (before < 0.5) bad.push('the default throttle key does nothing');
+  if (newKey < 0.5) bad.push(`the rebound key gave ${newKey.toFixed(2)} throttle`);
+  if (oldKey > 0.05) bad.push(`the old key still gives ${oldKey.toFixed(2)} throttle`);
+  if (!isBound('throttle', 'KeyW')) bad.push('resetting did not put the throttle back');
+
+  // A key taken from one action leaves the other one.
+  rebind('camera', 0, 'KeyR');
+  const stolen = isBound('restart', 'KeyR');
+  resetBinds();
+  if (stolen) bad.push('a key bound to two actions at once');
+
+  // And the panel is laid out in columns rather than one long list.
+  // Measured with the panel OPEN. A hidden grid has no resolved track sizes,
+  // so `getComputedStyle` reports whatever the layout engine last had — which
+  // is not the same number and would have failed a correct layout.
+  const panel = document.getElementById('settings');
+  const pane = document.getElementById('tab-controls');
+  const wasOpen = panel.classList.contains('open');
+  const wasOn = pane.classList.contains('on');
+  panel.classList.add('open');
+  pane.classList.add('on');
+  const host = document.getElementById('binds');
+  const cols = host
+    ? getComputedStyle(host).gridTemplateColumns.trim().split(/\s+/).filter(Boolean).length
+    : 0;
+  if (!wasOpen) panel.classList.remove('open');
+  if (!wasOn) pane.classList.remove('on');
+  if (cols < 4) bad.push(`the binds are laid out in ${cols} columns`);
+  const tabs = document.querySelectorAll('#settings .tab').length;
+  if (tabs < 2) bad.push(`${tabs} tabs in the settings`);
+
+  const ok = bad.length === 0;
+  return `${ok ? 'rebinding moves the key, not the label' : `WRONG — ${bad[0]}`} — ` +
+    `${ACTIONS.length} actions over ${seen.size} keys in ${tabs} tabs and ${cols} columns; ` +
+    `moved the throttle to T and W went from ${before.toFixed(2)} to ${oldKey.toFixed(2)} ` +
+    `while T gave ${newKey.toFixed(2)}`;
+}
+
+// The settings that change what you see.
+//
+// A toggle in a menu is worth exactly what it does to the image, so that is
+// what gets measured: render the scene with the filter on and again with it
+// off, and compare the pixels. Anything less — that the uniform changed, that
+// the listener fired — passes just as happily when the shader has stopped
+// reading the uniform at all.
+function checkSettings(game) {
+  const bad = [];
+  const el = (id) => document.getElementById(id);
+  const grade = el('set-grade');
+  if (!grade) return 'WRONG — there is no filter switch in the settings';
+
+  // The label has to say what it does. It was COLOUR GRADE, which is the
+  // correct technical name and no help at all to somebody looking for the
+  // yellow wash — and a setting nobody can find is a setting nobody has.
+  const label = grade.parentElement.textContent.replace(/ON|OFF/g, '').trim();
+  if (/^COLOUR GRADE$/i.test(label)) bad.push('the filter is labelled by what it is, not what it looks like');
+  if (!label) bad.push('the filter switch has no label');
+
+  const values = [...grade.options].map((o) => Number(o.value));
+  if (!values.includes(0)) bad.push('there is no OFF');
+  const on = Math.max(...values);
+  if (!(on > 0)) bad.push('there is no ON');
+
+  const c = game.renderer.domElement;
+  const gl = game.renderer.getContext();
+  const px = new Uint8Array(4 * 64 * 64);
+  const shot = (g) => {
+    game.post.composite.uniforms.grade.value = g;
+    game.post.render(game.scene, game.camera);
+    gl.readPixels(Math.floor(c.width / 2) - 32, Math.floor(c.height / 2) - 32,
+      64, 64, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    let r = 0, gg = 0, b = 0;
+    for (let i = 0; i < px.length; i += 4) { r += px[i]; gg += px[i + 1]; b += px[i + 2]; }
+    const n = px.length / 4;
+    return { r: r / n, g: gg / n, b: b / n };
+  };
+  const was = game.post.composite.uniforms.grade.value;
+  const lit = shot(on);
+  const plain = shot(0);
+  game.post.composite.uniforms.grade.value = was;
+
+  // On, the image is pulled toward yellow: red and green up against blue. The
+  // measure is the blue deficit, because that is the whole of what the grade
+  // does to a colour — take the blue out of it.
+  const warm = (q) => (q.r + q.g) / 2 - q.b;
+  const shift = warm(lit) - warm(plain);
+  if (shift < 4) bad.push(`turning it on moved the image by ${shift.toFixed(1)} of 255`);
+
+  const ok = bad.length === 0;
+  return `${ok ? 'the filter switch changes the picture' : `WRONG — ${bad[0]}`} — ` +
+    `"${label}", on/off at ${on}/0, and turning it on takes ` +
+    `${shift.toFixed(1)} of 255 of blue out of the middle of the frame ` +
+    `(${plain.r.toFixed(0)}/${plain.g.toFixed(0)}/${plain.b.toFixed(0)} to ` +
+    `${lit.r.toFixed(0)}/${lit.g.toFixed(0)}/${lit.b.toFixed(0)})`;
+}
+
+// The ground field: is it continuous?
+//
+// This replaced a check that the indexed version agreed with the brute-force
+// one it was built from, which it did, exactly — and which said nothing about
+// whether either of them was any good. Both had a Voronoi diagram in them:
+// beyond the blend radius the height came from whichever sample was nearest,
+// so along every boundary between two stretches of road the terrain stepped by
+// the difference in their heights. On a route that climbs forty-six metres
+// that is a forty-metre cliff standing across the end of a street, and the
+// city is built on this field, so the buildings step with it.
+//
+// Continuity is the property, so continuity is what gets measured: walk a grid
+// over the whole world and look for the biggest jump between neighbours a
+// couple of metres apart.
+function checkGroundField(track) {
+  const bad = [];
+  const STEP = 2.5;
+  const world = ((track.layout.world || 1800) / 2) - 60;
+  let worst = 0, at = null, worstFar = 0, farAt = null;
+
+  for (let z = -world; z <= world; z += 26) {
+    let prev = null;
+    for (let x = -world; x <= world; x += STEP) {
+      const y = track.groundAt(x, z);
+      if (!Number.isFinite(y)) { bad.push(`the ground is not a number at ${x}, ${z}`); prev = null; continue; }
+      if (prev !== null) {
+        const jump = Math.abs(y - prev);
+        if (jump > worst) { worst = jump; at = [x, z]; }
+        // Away from the road, where the fallback lives and where the cliffs
+        // were. Close in the field follows the road's own height, which on a
+        // twelve per cent street is a real and correct step.
+        const d = Math.sqrt(track._nearestSample(x, z).d2);
+        if (d > 40 && jump > worstFar) { worstFar = jump; farAt = [x, z]; }
+      }
+      prev = y;
+    }
+  }
+
+  // Two and a half metres of ground for two and a half metres of travel is a
+  // hundred per cent slope — well past anything the terrain is asked for, and
+  // far short of the twenty-six metre steps the Voronoi fallback produced.
+  if (worstFar > 1.2) {
+    bad.push(`it steps ${worstFar.toFixed(1)} m in ${STEP} m at ${farAt[0].toFixed(0)}, ${farAt[1].toFixed(0)}`);
+  }
+
+  // And it still has to stay under the road, or the terrain comes up through
+  // the asphalt.
+  let above = -Infinity;
+  for (let i = 0; i < track.samples.length; i += 7) {
+    const p = track.samples[i];
+    for (const o of [-1, 1]) {
+      const gx = p.x + p.nx * o * (p.width / 2 - 0.5);
+      const gz = p.z + p.nz * o * (p.width / 2 - 0.5);
+      above = Math.max(above, track.groundAt(gx, gz) - p.y);
+    }
+  }
+  if (above > -0.2) bad.push(`the ground reaches ${above.toFixed(2)} m of the road surface`);
+
+  const ok = bad.length === 0;
+  return `${ok ? 'continuous, and under the road' : `WRONG — ${bad[0]}`} — ` +
+    `worst step ${(worst * 100).toFixed(0)} cm per ${STEP} m overall` +
+    (at ? ` (at ${at[0].toFixed(0)}, ${at[1].toFixed(0)})` : '') +
+    `, ${(worstFar * 100).toFixed(0)} cm of it away from the road, ` +
+    `and it sits ${(-above).toFixed(2)} m below the kerb at its highest`;
+}
+
+// Cutscenes. Every script, played through at 1/60 with a stand-in cast and a
+// chase camera that measures instead of moving.
+//
+// Three things are worth measuring and one of them is the bug the title
+// sequence shipped with: a shot that puts the camera inside the bodywork. The
+// other two are that the caption on screen is the caption the beat asked for —
+// an off-by-one in the beat index shows up nowhere else, because the wrong
+// line over the right shot still looks like a cutscene — and that a skipped
+// scene runs every `act` a watched one would have.
+function checkCutscene(game) {
+  const bad = [];
+  const t = game.track;
+  const stand = () => {
+    const v = new Vehicle(CAR);
+    v.reset(0, 0, 0);
+    return { vehicle: v, loc: { y: 0 }, prev: null, syncModel() {} };
+  };
+  const cast = { player: stand(), rival: stand() };
+
+  let closest = Infinity, worstShot = '';
+  const added = [];
+  const fake = {
+    track: t,
+    // A scene can bring cars on for itself, so the stand-in game needs
+    // somewhere to put them and somewhere to take them from again.
+    scene: { add: (o) => added.push(o), remove: (o) => { const i = added.indexOf(o); if (i >= 0) added.splice(i, 1); } },
+    playerLivery: SELECTABLE[0],
+    campaign: { wager: null, setWager(l) { this.wager = l; } },
+    chase: {
+      playShot(dt, name, subject, k, id, second) {
+        const shot = SHOTS[name];
+        if (!shot) { bad.push(`there is no shot called ${name}`); return; }
+        const s = shot(cameraFrame(subject), clamp(k, 0, 1), second ? cameraFrame(second) : null);
+        if ([...s.from, ...s.at, s.fov].some((n) => !Number.isFinite(n))) {
+          bad.push(`${name} is not a number`);
+          return;
+        }
+        const d = Math.hypot(s.from[0] - subject.vehicle.x, s.from[2] - subject.vehicle.z);
+        if (d < closest) { closest = d; worstShot = name; }
+      },
+    },
+  };
+
+  const say = document.getElementById('cine-say');
+  const DT = 1 / 60;
+  let beats = 0, drift = 0;
+  const castMissing = [];
+
+  for (const [name, script] of Object.entries(SCRIPTS)) {
+    let done = false;
+    const cut = new Cutscene(fake, script, cast, () => { done = true; });
+    const seen = new Array(script.length).fill(null);
+    const want = script.reduce((a, b) => a + b.t, 0);
+    let elapsed = 0;
+    for (let i = 0; i < Math.round((want + 1) / DT) && !done; i++) {
+      cut.update(DT);
+      elapsed += DT;
+      // Read the caption once the beat is past its half-way mark, which is
+      // after any fade and before the next cut.
+      const b = script[cut.i];
+      if (b && cut.t > b.t * 0.5 && seen[cut.i] === null && say) seen[cut.i] = say.textContent;
+      // Every role a beat names has to be in the cast BY THE TIME that beat
+      // plays — which is not the same as being there at the start, because a
+      // scene can bring its own cars on partway through. A missing one is not
+      // an error at runtime: the shot quietly falls back to the player, and
+      // the beat that was meant to be a police car sweeping past is a still
+      // of your own bonnet.
+      if (b) {
+        for (const role of [b.subject, b.at]) {
+          if (role && !cast[role] && !castMissing.includes(`${name}[${cut.i}] ${role}`)) {
+            castMissing.push(`${name}[${cut.i}] ${role}`);
+          }
+        }
+      }
+    }
+    if (!done) { bad.push(`${name} never finished`); continue; }
+    // A beat ends on the first frame past its length, so a script can overrun
+    // by up to one frame per beat and no more. Anything beyond that is a beat
+    // being held or dropped, which is what this is looking for.
+    const slack = (script.length + 1) * DT;
+    if (elapsed < want || elapsed - want > slack) {
+      bad.push(`${name} ran ${elapsed.toFixed(2)} s against ${want.toFixed(2)} scripted`);
+    }
+    drift = Math.max(drift, (elapsed - want) / script.length);
+    for (let j = 0; j < script.length; j++) {
+      if (seen[j] === null) continue;               // last beat can end on the tick
+      if (seen[j] !== (script[j].say || '')) {
+        bad.push(`${name} beat ${j} showed "${seen[j]}" not "${script[j].say || ''}"`);
+      }
+    }
+    beats += script.length;
+
+    // And the same script skipped: every act fires, in order, at once.
+    let fired = 0;
+    const wrapped = script.map((b) => ({ ...b, act: (...a) => { fired++; if (b.act) b.act(...a); } }));
+    const cut2 = new Cutscene(fake, wrapped, cast, () => {});
+    cut2.update(0.01);                              // enters beat 0, fires its act
+    cut2.skip();
+    if (fired !== script.length) {
+      bad.push(`skipping ${name} fired ${fired} of ${script.length} acts`);
+    }
+  }
+
+  if (castMissing.length) bad.push(`nobody is cast as ${castMissing[0]}`);
+
+  // Portraits. Everybody who SPEAKS has a face; narration — a line with no
+  // name against it — deliberately has none, because giving unattributed text
+  // a portrait turns the game's own voice into a character.
+  const speakers = new Set();
+  for (const script of Object.values(SCRIPTS)) {
+    for (const b of script) if (b.who) speakers.add(b.who);
+  }
+  for (const who of speakers) {
+    if (!portraitFor(who)) bad.push(`${who} speaks and has no portrait`);
+  }
+  if (portraitFor('')) bad.push('narration was given a face');
+  for (const [name, art] of Object.entries(PORTRAITS)) {
+    if (!art.startsWith('<svg') || !art.includes('</svg>')) bad.push(`${name}'s portrait is not a drawing`);
+  }
+  // And the HUD is not over the top of them.
+  if (document.getElementById('hud').style.display === 'block' && game.phase === 'cutscene') {
+    bad.push('the dashboard is drawn over the cutscene');
+  }
+
+  // Every car a scene brought on has to have been taken away again. A
+  // cutscene that leaves three police cars parked on the circuit is a bug you
+  // find two races later, wondering what they are.
+  if (added.length) bad.push(`${added.length} cars were left in the scene`);
+
+  // The wager script has to have actually staked something.
+  if (fake.campaign.wager === null) bad.push('WAGER never set a wager');
+  if (closest < 1.8) bad.push(`${worstShot} puts the camera ${closest.toFixed(1)} m from the car`);
+
+  const ok = bad.length === 0;
+  return `${ok ? 'every scene plays, cuts and skips' : `WRONG — ${bad[0]}`} — ` +
+    `${Object.keys(SCRIPTS).length} scripts, ${beats} beats all cast, ` +
+    `${speakers.size} speakers with faces, closest approach ` +
+    `${closest.toFixed(1)} m (${worstShot}), beats within ${(drift * 1000).toFixed(0)} ms of scripted`;
+}
+
+// The cheat codes.
+//
+// A cheat that names a scene or a stage which has since been renamed does
+// nothing at all when typed, and nothing at all is indistinguishable from the
+// cheat not being wired up — so what it points at is checked here rather than
+// discovered by typing it. The matching is checked too: the whole point of a
+// code you type is that it works when you type it the way you remember it,
+// which is rarely the way it is written down.
+function checkCheats() {
+  const bad = unresolved();
+  const codes = new Set();
+  for (const c of CHEATS) {
+    const n = normalise(c.code);
+    if (codes.has(n)) bad.push(`${c.code} is in the list twice`);
+    codes.add(n);
+    if (n.length < 6) bad.push(`${c.code} is short enough to type by accident`);
+    if (findCheat(c.code) !== c) bad.push(`${c.code} does not match itself`);
+  }
+  // Typed carelessly, which is the only way anybody types these.
+  const loose = ['golden gate', 'Golden-Gate', '  GOLDENGATE  ', 'goldengate'];
+  for (const q of loose) {
+    if (findCheat(q) !== CHEATS.find((c) => c.code === 'GOLDENGATE')) {
+      bad.push(`"${q}" does not reach GOLDENGATE`);
+    }
+  }
+  if (findCheat('NOTACODE')) bad.push('a code that does not exist matched something');
+  if (findCheat('')) bad.push('an empty box matched something');
+
+  // Every stage a cheat can reach has a scene that leads into it, the cheat
+  // plays it, and it is the stage's OWN scene.
+  //
+  // That last part is the one that bit: a stage without a `before` used to
+  // borrow the previous stage's ending, so the same script played on the
+  // circuit you had just won on when you won your way there and on the stage
+  // you were arriving at when you typed a code. Same script, two different
+  // films. A scene belongs to exactly one stage now, and the check is that no
+  // two stages claim the same one.
+  const claimed = new Map();
+  for (const st of STAGES) {
+    const c = new Campaign({ playerName: 'X' });
+    c.index = STAGES.indexOf(st);
+    const intro = c.introScene();
+    if (!intro) bad.push(`nothing leads into ${st.id}`);
+    else if (!SCRIPTS[intro]) bad.push(`${st.id} is led into by "${intro}", which is not a scene`);
+    else if (intro !== st.before) bad.push(`${st.id} borrows its opening from somewhere else`);
+    for (const [key, name] of [['before', intro], ['onWin', st.onWin], ['onLose', st.onLose]]) {
+      if (!name) continue;
+      const held = claimed.get(name);
+      // `onLose` is shared on purpose — being caught is being caught — so only
+      // the openings and the wins have to be unique to a stage.
+      if (key === 'onLose') continue;
+      if (held && held !== st.id) bad.push(`${name} is used by both ${held} and ${st.id}`);
+      claimed.set(name, st.id);
+    }
+  }
+
+  // One per stage and nothing else. A code that plays a cutscene is a code
+  // that spoils the stage in front of it, and the panel lists nothing, so
+  // there is no way to stumble into one either.
+  for (const st of STAGES) {
+    if (!CHEATS.some((c) => c.stage === st.id)) bad.push(`no cheat goes to ${st.id}`);
+  }
+  if (CHEATS.some((c) => c.scene || c.cutscene)) bad.push('a cheat plays a cutscene');
+  if (document.getElementById('cheat-list')) bad.push('the panel lists the codes');
+
+  const ok = bad.length === 0;
+  return `${ok ? 'one word per stage, and nothing on screen says which' : `WRONG — ${bad[0]}`} — ` +
+    `${CHEATS.length} codes for ${STAGES.length} stages, no scene codes, ` +
+    `each playing the scene that leads into it, matched however they are typed`;
+}
+
+// The campaign flow, driven end to end without a race being run.
+//
+// Everything here is a seam between two things that were written separately —
+// a stage's field, the scene in front of it, the green light behind that, and
+// what happens when you win — and every one of them is reachable in the real
+// game only by winning a three-lap race first. So it runs on a throwaway Race
+// standing in for the live one, which is then torn down: the rest of the test
+// is inspecting a race that actually happened and must get it back intact.
+function checkCampaignFlow(game) {
+  const bad = [];
+  const kept = {
+    race: game.race, phase: game.phase, mode: game.mode,
+    campaign: game.campaign, track: game.track, begin: game.beginStage,
+  };
+  const shadow = new Race(game, game.track);
+  game.race = shadow;
+  // Stage two is on a different layout, and `beginStage` builds it — a whole
+  // city, asynchronously, replacing `game.track` from under everything else in
+  // this test file. So the real one is called by hand where it is wanted and
+  // stubbed everywhere it would run on its own.
+  const realBegin = game.beginStage.bind(game);
+  let began = 0;
+  game.beginStage = () => { began++; };
+  try {
+    game.mode = 'campaign';
+    game.campaign = new Campaign(game);
+    game.playerLivery = SELECTABLE[0];
+    realBegin();
+
+    const stage = STAGES[0];
+    if (shadow.cars.length !== 2) bad.push(`the duel put ${shadow.cars.length} cars on the grid`);
+    if (shadow.laps !== stage.laps) bad.push(`${shadow.laps} laps, not ${stage.laps}`);
+    if (!shadow.contact) bad.push('the duel phases through');
+    const rival = shadow.cars.find((q) => !q.isPlayer);
+    if (!rival || !rival.driver) bad.push('the rival has no driver');
+    else if (!(rival.driver.opts.drift > 0)) bad.push('the rival does not drift');
+    if (shadow.player.driver) bad.push('the player was given a driver');
+    if (game.phase !== 'cutscene') bad.push(`the wager did not play — phase is ${game.phase}`);
+
+    // Skipping the wager has to leave a countdown running, not a dead screen.
+    if (game.cut) game.cut.skip();
+    if (game.phase !== 'racing') bad.push(`skipping the wager left phase ${game.phase}`);
+    if (shadow.state !== 'countdown') bad.push(`the green light left state ${shadow.state}`);
+    if (!game.campaign.wagered) bad.push('nothing was staked on the race');
+
+    // Losing does not mean driving the rest of the lap. The rival taking the
+    // flag settles the duel, and the stage has to stop there rather than leave
+    // the player circulating for another two minutes to lose a race that is
+    // already lost.
+    {
+      shadow.state = 'racing';
+      rival.finished = true;
+      rival.finishTime = 60;
+      shadow.player.finished = false;
+      shadow.update(1 / 60);
+      if (shadow.state !== 'finished') bad.push('the rival finishing did not end the duel');
+      if (game.campaign.won_(shadow)) bad.push('losing counted as winning');
+      rival.finished = false;
+    }
+
+    // Take it, and the police turn up.
+    shadow.state = 'racing';
+    shadow.player.finished = true;
+    shadow.player.position = 1;
+    shadow.update(1 / 60);
+    if (shadow.state !== 'finished') bad.push('the player finishing did not end the duel');
+    shadow.state = 'finished';
+    game.endStage();
+    const winScene = game.cut && game.cut.script;
+    if (game.phase !== 'cutscene') bad.push('winning played no scene');
+    else if (winScene !== SCRIPTS[stage.onWin]) bad.push(`winning played the wrong scene`);
+    if (game.campaign.won.length !== 1) bad.push('the rival kept its car');
+
+    // And out the other side, onto stage two. Only the bookkeeping is checked
+    // here: the stage after this one is on a different layout, and `beginStage`
+    // stops at the first `await` to build it — so driving it from a synchronous
+    // assertion would prove nothing except that a promise was returned.
+    const after = STAGES[0].next;
+    if (game.cut) game.cut.skip();
+    if (!game.campaign) bad.push('winning stage one ended the campaign');
+    else if (game.campaign.stage.id !== after) {
+      bad.push(`winning stage one led to ${game.campaign.stage.id}, not ${after}`);
+    }
+    if (game.campaign && game.campaign.attempts !== 0) bad.push('stage two started with attempts on it');
+    if (began !== 1) bad.push(`winning stage one started ${began} stages, not 1`);
+
+    // Stage two's field, as data: you at the front and the police behind, and
+    // a finish line a fraction of the way round rather than a lap count.
+    const two = STAGES.find((q) => q.id === after);
+    if (two) {
+      const c2 = new Campaign(game);
+      c2.index = STAGES.indexOf(two);
+      c2.car = SELECTABLE[0];
+      const f = c2.field(game.track);
+      if (f.cars.length !== 1 + two.police) bad.push(`the run put ${f.cars.length} cars out`);
+      if (!f.cars[0].isPlayer) bad.push('the player is not at the front of a run');
+      if (f.cars.slice(1).some((q) => !q.opts || !(q.opts.chase > 0))) {
+        bad.push('a police car is not chasing anybody');
+      }
+      // And they are not in the race. A unit that can "win" the stage by
+      // driving past the ramp first is a result nobody asked for, and one
+      // that has to be waited for is a stage that never ends.
+      if (f.cars.slice(1).some((q) => !q.pursuer)) bad.push('a police car is racing you to the ramp');
+      if (f.formation !== 'pursuit') bad.push(`the run lines up as a ${f.formation}`);
+      if (f.endOnFirst) bad.push('the run ends when anybody finishes');
+      if (f.limit !== two.limit) bad.push('the run has no clock on it');
+      if (!(f.route > 0)) bad.push('the run has no finish on it');
+      if (!c2.won_({ player: { finished: true, position: 4 } })) {
+        bad.push('reaching the ramp fourth does not count as getting away');
+      }
+      if (c2.won_({ player: { finished: false, position: 1 } })) {
+        bad.push('running out of time counts as getting away');
+      }
+    }
+
+    // The retry path, which must NOT replay the wager — the fastest way to
+    // make somebody stop retrying is to make them watch it again.
+    game.mode = 'campaign';
+    game.campaign = new Campaign(game);
+    game.campaign.attempts = 1;
+    game.campaign.car = SELECTABLE[0];
+    realBegin();
+    if (game.phase !== 'racing') bad.push(`a retry played a scene (phase ${game.phase})`);
+  } catch (e) {
+    bad.push(`threw — ${e.message}`);
+  } finally {
+    for (const q of game.race.cars) game.scene.remove(q.model);
+    game.race = kept.race;
+    game.phase = kept.phase;
+    game.mode = kept.mode;
+    game.campaign = kept.campaign;
+    game.track = kept.track;
+    game.beginStage = kept.begin;
+    game.cut = null;
+  }
+
+  const ok = bad.length === 0;
+  return `${ok ? 'stage one runs start to finish' : `WRONG — ${bad[0]}`} — ` +
+    `wager, two-car grid over ${STAGES[0].laps} laps with contact, police on a win, ` +
+    `losing ends it too, and stage two is ` +
+    `${STAGES.length > 1 ? `${STAGES[1].police} police over ${(STAGES[1].routeFraction * 100).toFixed(0)}% of an open route` : 'not written yet'}`;
+}
+
+// The campaign is data, so this is a data check: every name a stage mentions
+// has to resolve to something that exists. A stage that names a script or a
+// shot that is not there does not fail until the player has won the race in
+// front of it, which is the worst possible time to find out.
+function checkCampaign() {
+  const bad = [];
+  for (const s of STAGES) {
+    for (const key of ['before', 'onWin', 'onLose']) {
+      const name = s[key];
+      if (!name) continue;
+      if (!SCRIPTS[name]) { bad.push(`${s.id}.${key} names a script "${name}" that does not exist`); continue; }
+      for (const [i, b] of SCRIPTS[name].entries()) {
+        if (!SHOTS[b.shot]) bad.push(`${name}[${i}] wants a shot called "${b.shot}"`);
+        if (!(b.t > 0)) bad.push(`${name}[${i}] is ${b.t} seconds long`);
+        // Who a beat casts is NOT checked here. A scene can bring cars on for
+        // itself — the police arriving are three cars this file has never
+        // heard of — so the list of valid roles is not knowable from the
+        // stage. `cutscene` checks it the only way it can be checked: by
+        // playing every script and seeing whether each role was actually
+        // there when its beat came up.
+      }
+    }
+    if (!(s.laps > 0)) bad.push(`${s.id} runs ${s.laps} laps`);
+    // Every stage needs somebody else on the road: a rival to race, or police
+    // to get away from. A stage with neither is a stage you cannot lose.
+    if (s.rival) {
+      if (!s.rival.opts) bad.push(`${s.id}'s rival has no character`);
+    } else if (!(s.police > 0)) {
+      bad.push(`${s.id} has nobody else on the road`);
+    }
+    if (s.layout && !LAYOUTS[s.layout]) bad.push(`${s.id} wants a layout called "${s.layout}"`);
+    if (s.routeFraction !== undefined) {
+      // An open route ends at its end, so a whole one is the normal case now.
+      if (!(s.routeFraction > 0.2 && s.routeFraction <= 1)) {
+        bad.push(`${s.id} ends ${(s.routeFraction * 100).toFixed(0)}% of the way along`);
+      }
+      if (!(s.limit > 0)) bad.push(`${s.id} is a run with no clock on it`);
+      if (s.layout && LAYOUTS[s.layout] && LAYOUTS[s.layout].closed !== false && s.routeFraction >= 1) {
+        bad.push(`${s.id} asks for a whole lap of a circuit as a point-to-point`);
+      }
+    }
+    if (s.next !== null && !STAGES.some((x) => x.id === s.next)) {
+      bad.push(`${s.id} leads to "${s.next}", which is not a stage`);
+    }
+  }
+  const scripted = STAGES.reduce(
+    (a, s) => a + ['before', 'onWin', 'onLose'].filter((k) => s[k]).length, 0);
+  const ok = bad.length === 0;
+  return `${ok ? 'every stage resolves' : `WRONG — ${bad[0]}`} — ` +
+    `${STAGES.length} stage${STAGES.length === 1 ? '' : 's'}, ${scripted} scenes hung off them, ` +
+    `${STAGES.map((s) => (s.routeFraction
+      ? `${s.id} ${(s.routeFraction * 100).toFixed(0)}% of a route in ${s.limit}s`
+      : `${s.id} ${s.laps} laps`)).join(', ')}`;
+}
+
 function checkNoNeutral() {
   const zeros = CAR.gears.filter((g) => g === 0).length;
 
@@ -707,6 +2103,236 @@ function checkDriverName(game) {
     `${names.size}/${game.race.cars.length} names on the grid are distinct`;
 }
 
+// A field can be any size, and laps come from the race rather than the config.
+function checkField(game) {
+  const race = game.race;
+  const was = race.cars.map((c) => ({ livery: c.livery, isPlayer: c.isPlayer, name: c.name }));
+  const wasLaps = race.laps;
+
+  race.buildField({
+    cars: [
+      { livery: SELECTABLE[7], name: 'RIVAL', skill: 0.99 },
+      { livery: SELECTABLE[0], name: 'YOU', isPlayer: true },
+    ],
+    laps: 3, contact: true,
+  });
+  const two = race.cars.length === 2;
+  const onePlayer = race.cars.filter((c) => c.isPlayer).length === 1;
+  const apart = dist2D(race.cars[0].vehicle.x, race.cars[0].vehicle.z,
+    race.cars[1].vehicle.x, race.cars[1].vehicle.z) > 3;
+  const contactOn = race.contact === true;
+
+  // Put the sixteen back — every check after this one assumes them.
+  race.buildField(defaultField());
+  const back = race.cars.length === RACE.cars && race.laps === wasLaps
+    && race.cars.filter((c) => c.isPlayer).length === 1;
+  void was;
+
+  const ok = two && onePlayer && apart && contactOn && back;
+  return `${ok ? 'a field is whatever the stage says' : 'WRONG'} — ` +
+    `two cars gave ${race.cars.length === RACE.cars ? 2 : '?'} on distinct slots ` +
+    `${apart ? '' : 'OVERLAPPING '}with contact ${contactOn ? 'on' : 'OFF'}, ` +
+    `and the default field came ${back ? 'back' : 'BACK WRONG'} at ${RACE.cars}`;
+}
+
+// Contact, and the fact that it is off where it should be off.
+//
+// Two assertions in one, because the second is the product decision: the
+// sixteen-car race phases through by design and must keep doing so. The
+// existing `phasing` check proves cars pass through in race mode; this proves
+// they do NOT in a mode that asks for contact, and that a resting pair settles
+// rather than jittering — which is the failure mode of an unstable resolver.
+function checkContact(game) {
+  const race = game.race;
+  const t = game.track;
+  const p = t.atDistance(t.length * 0.55);
+  const yaw = Math.atan2(p.dirX, p.dirZ);
+
+  const pair = (contact, offset) => {
+    const A = new Vehicle(CAR), B = new Vehicle(CAR);
+    A.reset(p.x, p.z, yaw);
+    B.reset(p.x + p.nx * offset, p.z + p.nz * offset, yaw);
+    A.surfaceGrip = B.surfaceGrip = 1;
+    A.setSpeed(38); B.setSpeed(38);
+    const fake = {
+      contact,
+      cars: [{ vehicle: A, isPlayer: false }, { vehicle: B, isPlayer: false }],
+      game: { onImpact() {} },
+      _resolvePair: race._resolvePair.bind({ ...race, contact, game: { onImpact() {} } }),
+    };
+    fake._carContact = race._carContact.bind(fake);
+    for (let i = 0; i < Math.round(2.5 / FIXED); i++) {
+      A.steerInput = 0.10; B.steerInput = -0.10;      // steer into each other
+      A.throttle = B.throttle = 0.4;
+      A.update(FIXED, 2); B.update(FIXED, 2);
+      fake._carContact();
+    }
+    return dist2D(A.x, A.z, B.x, B.z);
+  };
+
+  const withContact = pair(true, 1.2);
+  const without = pair(false, 1.2);
+
+  // And two cars left overlapping with no input must settle, not jitter.
+  const A = new Vehicle(CAR), B = new Vehicle(CAR);
+  A.reset(p.x, p.z, yaw);
+  B.reset(p.x + p.nx * 0.6, p.z + p.nz * 0.6, yaw);
+  A.surfaceGrip = B.surfaceGrip = 1;
+  const rest = { contact: true, cars: [{ vehicle: A }, { vehicle: B }], game: { onImpact() {} } };
+  rest._resolvePair = race._resolvePair.bind(rest);
+  rest._carContact = race._carContact.bind(rest);
+  let last = 0, moved = 0;
+  for (let i = 0; i < Math.round(3 / FIXED); i++) {
+    A.update(FIXED, 2); B.update(FIXED, 2);
+    rest._carContact();
+    const d = dist2D(A.x, A.z, B.x, B.z);
+    if (i > Math.round(2.5 / FIXED)) moved = Math.max(moved, Math.abs(d - last));
+    last = d;
+  }
+  const settles = moved < 0.05;
+  const separated = withContact > without + 0.4;
+  const sane = Number.isFinite(withContact) && withContact < 40;
+
+  const ok = separated && settles && sane && !defaultField().contact;
+  return `${ok ? 'they touch in campaign and phase in race' : 'WRONG'} — ` +
+    `steered together they end ${withContact.toFixed(1)} m apart with contact ` +
+    `against ${without.toFixed(1)} without, a resting pair settles to ` +
+    `${(moved * 1000).toFixed(1)} mm of movement, and the race field asks for ` +
+    `contact ${defaultField().contact ? 'ON — WRONG' : 'off'}`;
+}
+
+// The rival: faster than the field, and visibly harder.
+//
+// "More aggressive" has to mean something numerical or it is just a colour.
+// Three things: it laps quicker than the best default driver, it really does
+// use the handbrake, and it does not use it so much that it is simply out of
+// control — a drift is a decision about a corner, not a driving style.
+function checkRival(game) {
+  const track = game.track;
+  // Deterministic for the duration.
+  //
+  // The drift decides whether to commit to a corner with Math.random(), and
+  // the driver's brake and throttle noise are rolled at construction — so this
+  // check gave 1.9 s off track one run and 6.8 s the next, against a fixed
+  // threshold. A test that fails on the dice is worse than no test: it trains
+  // you to ignore it. Swapping in a fixed sequence keeps the real code path
+  // and removes the only thing that was moving.
+  const realRandom = Math.random;
+  let seed = 0x2f6e2b1;
+  Math.random = () => {
+    seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+    return seed / 0x7fffffff;
+  };
+  try {
+    return rivalLap(track);
+  } finally {
+    Math.random = realRandom;
+  }
+}
+
+function rivalLap(track) {
+  const lap = (opts, skill) => {
+    const car = { vehicle: new Vehicle(CAR), loc: null };
+    const d = new Driver(car, track, skill, opts);
+    const start = track.atDistance(4);
+    car.vehicle.reset(start.x, start.z, Math.atan2(start.dirX, start.dirZ));
+    car.vehicle.setSpeed(30);
+    car.vehicle.surfaceGrip = 1;
+    car.loc = track.locate(car.vehicle.x, car.vehicle.z);
+    const solo = [car];
+    let t = 0, hand = 0, spells = 0, wasHand = false, peak = 0, off = 0;
+    const guard = Math.round(150 / FIXED);
+    for (let i = 0; i < guard; i++) {
+      d.drive(FIXED, solo);
+      car.vehicle.update(FIXED, 2);
+      car.loc = track.locate(car.vehicle.x, car.vehicle.z, car.loc.index);
+      const over = Math.abs(car.loc.lateral) - car.loc.width / 2;
+      car.vehicle.surfaceGrip = over <= 0 ? 1 : over < 1.6 ? 0.92 : 0.6;
+      if (over > 1.6) off += FIXED;
+      t += FIXED;
+      const on = car.vehicle.handbrake > 0.5;
+      if (on) { hand += FIXED; peak = Math.max(peak, Math.abs(car.vehicle.slipR || 0)); }
+      if (on && !wasHand) spells++;
+      wasHand = on;
+      if (t > 12 && car.loc.s < 40 && car.loc.s >= 0) break;   // back round
+    }
+    return { t, hand, spells, peak, off };
+  };
+
+  const fast = lap(RIVAL.opts, RIVAL.skill);
+  const base = lap({}, AI.maxSkill);
+  const noDrift = lap({ ...RIVAL.opts, drift: 0 }, RIVAL.skill);
+
+  const quicker = fast.t < base.t;
+  const drifts = fast.spells >= 2;
+  const restrained = fast.hand < fast.t * 0.14;
+  const clean = fast.off < 4;
+  const ok = quicker && drifts && restrained && clean;
+  return `${ok ? 'harder than the field, and still on the road' : 'WRONG'} — ` +
+    `laps in ${fast.t.toFixed(1)}s against the best default driver's ${base.t.toFixed(1)}s, ` +
+    `uses the handbrake in ${fast.spells} places for ${(fast.hand / fast.t * 100).toFixed(0)}% of the lap, ` +
+    `${fast.off.toFixed(1)}s off track ` +
+    `(the same pace without the drift: ${noDrift.t.toFixed(1)}s, ${noDrift.off.toFixed(1)}s off)`;
+}
+
+// And nothing else in the field picked the habit up.
+function checkNoDriftByDefault(game) {
+  const car = { vehicle: new Vehicle(CAR), loc: null };
+  const d = new Driver(car, game.track, AI.maxSkill);
+  const start = game.track.atDistance(4);
+  car.vehicle.reset(start.x, start.z, Math.atan2(start.dirX, start.dirZ));
+  car.vehicle.setSpeed(30);
+  car.vehicle.surfaceGrip = 1;
+  car.loc = game.track.locate(car.vehicle.x, car.vehicle.z);
+  let used = 0;
+  for (let i = 0; i < Math.round(45 / FIXED); i++) {
+    d.drive(FIXED, [car]);
+    car.vehicle.update(FIXED, 2);
+    car.loc = game.track.locate(car.vehicle.x, car.vehicle.z, car.loc.index);
+    if (car.vehicle.handbrake > 0.01) used++;
+  }
+  const ok = used === 0 && d.opts.drift === 0;
+  return `${ok ? 'the rest of the field never touches it' : 'WRONG'} — ` +
+    `a default driver used the handbrake on ${used} steps of a 45 s run`;
+}
+
+// No steps in a side street.
+//
+// Their height used to come straight from `locate(x, z).y` — the height of the
+// nearest point of the CIRCUIT. Fine at the junction, wrong further out: as
+// the street runs away the nearest circuit sample flips from one leg of the
+// lap to another and the height jumps with it, which on a hill is a visible
+// step in the middle of a road, in view of the racing line.
+function checkStreetGrade(track) {
+  let worst = 0, at = null, which = -1, profiled = 0, worstSeam = 0, seamAt = -1;
+  for (let si = 0; si < track.streets.length; si++) {
+    const t = track.streets[si];
+    if (t.heights) profiled++;
+    let prev = null;
+    for (let d = t.from; d <= t.to; d += 2) {
+      const y = track.streetY(t, d);
+      if (prev !== null) {
+        const step = Math.abs(y - prev) / 2;             // grade over 2 m
+        if (step > worst) { worst = step; at = d; which = si; }
+      }
+      prev = y;
+    }
+    // And a stem has to meet the junction where it emerges from it — which is
+    // at the edge of the junction's own surface, not at the stem's nominal
+    // start, because the junction covers everything before that.
+    if (t.stem) {
+      const d = 20;
+      const sx = t.x + t.ux * d, sz = t.z + t.uz * d;
+      const seam = Math.abs(track.streetY(t, d) - track.locate(sx, sz).y);
+      if (seam > worstSeam) { worstSeam = seam; seamAt = si; }
+    }
+  }
+  const ok = worst < 0.16 && worstSeam < 1.0;
+  return `${ok ? 'no steps in them' : 'WRONG'} — ` +
+    `${track.streets.length} of them, steepest ${(worst * 100).toFixed(1)}%, ` +
+    `worst junction seam ${worstSeam.toFixed(2)} m`;
+}
+
 // Street furniture that gives way.
 //
 // A lamp post a car passes through is scenery; one that goes over is a place.
@@ -961,6 +2587,176 @@ function checkAiLap(game) {
     `${minSpeed.toFixed(0)}–${maxSpeed.toFixed(0)} km/h`;
 }
 
+// Can anybody actually drive stage two, and can the police catch anybody?
+//
+// The layout being geometrically sound says nothing about whether the racing
+// line generator produced something driveable over four and a half kilometres
+// of it, and the run is the one stage where failing that is invisible until
+// somebody plays it — there is no lap time to look wrong, only a car in a wall
+// two minutes in.
+//
+// The chase is the second half. A police driver with `chase` on has to close
+// on the quarry rather than settle politely behind it, which is exactly what
+// the traffic rule every other driver obeys would make it do.
+function checkTheRun(game) {
+  // Deterministic for the duration, the same way `rival` is. Reaction times,
+  // brake noise and mistakes are all rolled from Math.random, and the pursuit
+  // is measured in seconds-with-the-car-boxed-in — a quantity that swung from
+  // 2.6 to 0.3 between two runs of identical code. A test that fails on the
+  // dice trains you to ignore it.
+  const realRandom = Math.random;
+  let seed = 0x51f3a9d;
+  Math.random = () => {
+    seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+    return seed / 0x7fffffff;
+  };
+  try {
+    return theRun(game);
+  } finally {
+    Math.random = realRandom;
+  }
+}
+
+function theRun(game) {
+  const t = new Track(LAYOUTS.run);
+  const stage = STAGES.find((q) => q.layout === 'run');
+  const finish = stage.routeFraction * t.length;
+
+  const spawn = (at, offset) => {
+    const p = t.atDistance(at);
+    const car = {
+      vehicle: new Vehicle(CAR), isPlayer: false,
+      loc: null, name: 'x',
+    };
+    car.vehicle.reset(p.x + p.nx * offset, p.z + p.nz * offset, Math.atan2(p.dirX, p.dirZ));
+    car.vehicle.autoShift = true;
+    car.vehicle.setSpeed(30);
+    car.loc = t.locate(car.vehicle.x, car.vehicle.z);
+    return car;
+  };
+
+  // --- the run itself, driven solo from the line to the ramp.
+  const runner = spawn(4, 0);
+  const driver = new Driver(runner, t, 0.95);
+  runner.driver = driver;
+  let time = 0, off = 0, worst = null, slowest = 999;
+  const solo = [runner];
+  const guard = Math.round(320 / FIXED);
+  let arrived = 0;
+  for (let i = 0; i < guard; i++) {
+    driver.drive(FIXED, solo);
+    runner.vehicle.update(FIXED, 2);
+    const loc = t.locate(runner.vehicle.x, runner.vehicle.z, runner.loc.index);
+    runner.loc = loc;
+    const over = Math.abs(loc.lateral) - loc.width / 2;
+    runner.vehicle.surfaceGrip = over <= 0 ? 1 : over < 1.6 ? 0.92 : 0.55;
+    if (over > 2.0) {
+      off += FIXED;
+      if (!worst) worst = Math.round(loc.s);
+    }
+    slowest = Math.min(slowest, runner.vehicle.speedKmh);
+    time += FIXED;
+    if (loc.s >= finish) { arrived = time; break; }
+  }
+
+  const bad = [];
+  if (!arrived) bad.push(`nobody reached the ramp in ${time.toFixed(0)}s`);
+  if (off > 4) bad.push(`${off.toFixed(1)}s off the road, first at ${worst} m`);
+  if (arrived && arrived > stage.limit) {
+    bad.push(`the drive takes ${arrived.toFixed(0)}s against a ${stage.limit}s limit`);
+  }
+  // And not so easy the clock is decoration: a limit twice the drive is not a
+  // chase, it is a scenic tour.
+  if (arrived && stage.limit > arrived * 1.9) {
+    bad.push(`${stage.limit}s is generous for a ${arrived.toFixed(0)}s drive`);
+  }
+
+  // --- the chase. A police driver behind a car that is not trying: it has to
+  // close the gap, not hold it.
+  // A quarry driving well — not a slow car for the cop to walk past, which
+  // proves nothing except that one driver is quicker than another. What is
+  // being asked is whether a chaser closes to CONTACT RANGE on somebody
+  // genuinely trying, because that is the whole of what the stage is.
+  // Both on a straight, found rather than guessed at.
+  //
+  // Dropped in at a fixed distance, the chaser started fifty-nine metres
+  // before a junction doing a hundred and eight and went straight through the
+  // outside of it — which measured the spawn point, not the pursuit.
+  let straightAt = 300;
+  for (let d = 200; d < t.length - 600; d += 20) {
+    let ok2 = true;
+    for (let k = 0; k < 320; k += 20) {
+      if (t.atDistance(d + k).curvature > 0.002) { ok2 = false; break; }
+    }
+    if (ok2) { straightAt = d; break; }
+  }
+  const quarry = spawn(straightAt + 60, 0);
+  const cop = spawn(straightAt, 0);
+  // Three of them, in the same three stations the stage uses.
+  const units = [];
+  for (let u = 0; u < 3; u++) {
+    const cop = spawn(straightAt - 55 - u * 18 + 55, u === 0 ? 0 : (u === 1 ? 2.6 : -2.6));
+    cop.driver = new Driver(cop, t, POLICE.skill, { ...POLICE.opts, station: u });
+    cop.driver.quarry = quarry;
+    units.push(cop);
+  }
+  // A stand-in for a player, not for a rival. The quarry here drives at about
+  // the pace somebody playing does — the units are meant to catch a person,
+  // and a person is not a ninety-per-cent AI on the racing line.
+  quarry.driver = new Driver(quarry, t, 0.80, { cornerMargin: 0.82 });
+  const pack = [quarry, ...units];
+  const gap0 = t.gap(quarry.loc.s, units[0].loc.s);
+  let closest = gap0, wide = 0, boxed = 0, ranAway = 0;
+  for (let i = 0; i < Math.round(100 / FIXED); i++) {
+    for (const c of pack) {
+      c.driver.drive(FIXED, pack);
+      c.vehicle.update(FIXED, 2);
+      c.loc = t.locate(c.vehicle.x, c.vehicle.z, c.loc.index);
+      const over = Math.abs(c.loc.lateral) - c.loc.width / 2;
+      c.vehicle.surfaceGrip = over <= 0 ? 1 : over < 1.6 ? 0.92 : 0.55;
+      // Time spent off the ROAD, measured against the road's own width the
+      // same way every other check here measures it — not against a fixed
+      // distance from the centreline. A junction is fifteen metres wide and
+      // the street between them eleven, so a fixed number is off the road at
+      // one end and comfortably on it at the other.
+      if (c !== quarry && over > 2.0) wide += FIXED;
+    }
+    for (const c of units) {
+      // Straight-line distance, not distance along the road: once it is
+      // alongside, the gap round the lap says nothing about whether it is
+      // close enough to hit you.
+      const d = dist2D(quarry.vehicle.x, quarry.vehicle.z, c.vehicle.x, c.vehicle.z);
+      if (d < closest) closest = d;
+      // Nobody overtakes and drives off. A unit forty metres up the road from
+      // the car it is chasing is in a race, not a pursuit — which is exactly
+      // what three racing drivers with sirens on did.
+      if (t.gap(c.loc.s, quarry.loc.s) > 40) ranAway += FIXED;
+    }
+    // Boxed in: something down each side at the same moment, close enough to
+    // lean on. One car on a bumper is a tail; three cars around you is a box.
+    const side = (sgn) => units.some((c) =>
+      Math.abs(t.gap(c.loc.s, quarry.loc.s)) < 12
+      && sgn * (c.loc.lateral - quarry.loc.lateral) > 1.4
+      && dist2D(quarry.vehicle.x, quarry.vehicle.z, c.vehicle.x, c.vehicle.z) < 14);
+    if (side(1) && side(-1)) boxed += FIXED;
+  }
+  // Letting a chaser off the corner limit as well as off the traffic rule made
+  // it close beautifully in a straight line and spend every corner thirty
+  // metres into the buildings.
+  if (wide > 8) bad.push(`the units spent ${wide.toFixed(1)} car-seconds off the road`);
+  if (closest > 8) bad.push(`the closest a unit got was ${closest.toFixed(0)} m`);
+  if (ranAway > 8) bad.push(`the units spent ${ranAway.toFixed(0)} car-seconds racing off up the road`);
+  if (boxed < 1.5) bad.push(`they had the car boxed in for only ${boxed.toFixed(1)}s of 100`);
+
+  const ok = bad.length === 0;
+  return `${ok ? 'driveable, and they close on you' : `WRONG — ${bad[0]}`} — ` +
+    `${(finish / 1000).toFixed(2)} km to the ramp in ${arrived ? arrived.toFixed(0) : '--'}s ` +
+    `of a ${stage.limit}s limit, ${off.toFixed(1)}s off the road, slowest ${slowest.toFixed(0)} km/h; ` +
+    `three units ${gap0.toFixed(0)} m behind a 0.80 driver got to ` +
+    `${closest.toFixed(0)} m, had it boxed in for ${boxed.toFixed(1)}s of 100, ` +
+    `ran off up the road for ${ranAway.toFixed(1)}, and spent ${wide.toFixed(1)} off it`;
+}
+
 // ------------------------------------------------------------ collisions
 
 // Two cars driven into each other must end up apart, still on the map, and
@@ -1083,6 +2879,111 @@ function checkHud(game) {
   notes.push(drew('tacho-c') ? 'tacho drawn' : 'TACHO BLANK');
   notes.push(drew('map-c') ? 'map drawn' : 'MAP BLANK');
 
+  // The speedometer, and whether its needle is attached to anything.
+  //
+  // "It drew something" is what a dial that has stopped reading the speed
+  // looks like too — the rim, the ticks and the numbers are all still there.
+  // So the sweep is measured at two speeds and the difference is the check.
+  {
+    // Brightness, not coverage.
+    //
+    // Counting non-transparent pixels does not work here: the value arc is
+    // drawn ON TOP of the dark rim, which already covers the whole sweep, so
+    // the number of lit pixels is the same at seven km/h as at two hundred and
+    // sixty. What changes is how much of that rim has a bright arc over it.
+    const ink = (id) => {
+      const cv = el(id);
+      const d = cv.getContext('2d').getImageData(0, 0, cv.width, cv.height).data;
+      let n = 0;
+      for (let i = 0; i < d.length; i += 4) n += (d[i] + d[i + 1] + d[i + 2]) * (d[i + 3] / 255);
+      return n / 1000;
+    };
+    const car = race.player.vehicle;
+    const was = car.u;
+    car.setSpeed(2);
+    hud.update(1 / 60);
+    const slow = ink('speedo-c');
+    car.setSpeed(72);                            // 260 km/h
+    hud.update(1 / 60);
+    const fast = ink('speedo-c');
+    car.setSpeed(was);
+    hud.update(1 / 60);
+    notes.push(slow > 50 ? 'speedo drawn' : 'SPEEDO BLANK');
+    notes.push(fast > slow * 1.15
+      ? `its sweep grows ${((fast / Math.max(slow, 1) - 1) * 100).toFixed(0)}% from 7 to 260 km/h`
+      : 'THE SPEEDO NEEDLE IS NOT READING THE SPEED');
+    // And it is on the other side of the screen from the tacho.
+    const l = el('dash-l').getBoundingClientRect();
+    const r = el('dash').getBoundingClientRect();
+    notes.push(l.right < r.left ? 'on the left, opposite the tacho' : 'THE TWO DIALS OVERLAP');
+  }
+
+  // The run reads the same two cells as a completely different board: how far
+  // to the ramp and how long is left, rather than which lap and how long it
+  // has taken. Driven by flipping the live race into route mode for one frame
+  // and putting it straight back, so it is the real board being read.
+  {
+    // `state` too: a full race has already been run to the flag by the time
+    // this check runs, and the clock only flashes while one is still going.
+    const was = { route: race.route, limit: race.limit, time: race.time, state: race.state };
+    race.state = 'racing';
+    // Measured from where the player actually is, so the board has a real
+    // distance to read rather than a negative one: `progress` is not distance
+    // travelled, and a fixed fraction of the lap is already behind a car on
+    // its second one.
+    race.route = race.distanceAlong(race.player) + 1500;
+    race.limit = 200;
+    race.time = 178;
+    hud.update(1 / 60);
+    const dist = el('lap-v').textContent;
+    const clock = el('race-time').textContent;
+    const urgent = el('race-time').classList.contains('urgent');
+    notes.push(el('lap-k').textContent === 'TO RAMP' && /^[\d.]+(km|m)$/.test(dist)
+      ? `a run reads ${dist} to the ramp` : `RUN DISTANCE READS "${dist}"`);
+    notes.push(/^0:2[12]\./.test(clock)
+      ? `${clock} left of 200` : `RUN CLOCK READS "${clock}" WITH 22s LEFT`);
+    notes.push(urgent ? 'and it is flashing'
+      : `THE LAST 22s ARE NOT FLASHING (state ${race.state})`);
+    // The map follows the car on a run.
+    //
+    // "It drew something" passes for a map that is still showing the whole
+    // eleven kilometres with a dot on it that never appears to move, which is
+    // what a route got before. So the car is moved and the picture compared:
+    // a rolling window redraws completely, a fixed overview barely changes.
+    const mapInk = () => {
+      const cv = el('map-c');
+      const d = cv.getContext('2d').getImageData(0, 0, cv.width, cv.height).data;
+      let n = 0;
+      for (let i = 0; i < d.length; i += 16) n += d[i] + d[i + 1] + d[i + 2] + d[i + 3] * (i % 97);
+      return n;
+    };
+    const pv = race.player.vehicle;
+    const at = { x: pv.x, z: pv.z, yaw: pv.yaw };
+    hud.update(1 / 60);
+    const m0 = mapInk();
+    const far = race.track.atDistance((race.player.loc.s + race.track.length * 0.3) % race.track.length);
+    pv.x = far.x; pv.z = far.z; pv.yaw = Math.atan2(far.dirX, far.dirZ);
+    race.player.loc = race.track.locate(pv.x, pv.z);
+    hud.update(1 / 60);
+    const m1 = mapInk();
+    pv.x = at.x; pv.z = at.z; pv.yaw = at.yaw;
+    race.player.loc = race.track.locate(pv.x, pv.z);
+    notes.push(m0 !== m1 ? 'and the map moves with the car' : 'THE MAP DOES NOT FOLLOW THE CAR');
+
+    // And the race furniture is gone: no position, no timing strip, no order.
+    const gone = ['pos-cell', 'timing', 'standings']
+      .filter((id) => getComputedStyle(el(id)).display !== 'none');
+    notes.push(gone.length === 0
+      ? 'and the position, timing and order panels are hidden'
+      : `${gone.join('/')} STILL SHOWN ON A RUN`);
+
+    race.route = was.route; race.limit = was.limit; race.time = was.time;
+    race.state = was.state;
+    hud.update(1 / 60);
+    notes.push(el('lap-k').textContent === 'LAP' ? 'a race reads laps again' : 'THE BOARD STUCK ON A RUN');
+    if (getComputedStyle(el('standings')).display === 'none') notes.push('THE ORDER NEVER CAME BACK');
+  }
+
   // The order list has a row per car it is showing, and yours is marked.
   const rows = el('standings-rows').children.length;
   hud.showAll = true;
@@ -1102,34 +3003,65 @@ function checkHud(game) {
 
 // ------------------------------------------------------------- the run
 
+// One check throwing used to take the whole report with it: no lines, no
+// errors, nothing written — indistinguishable from the page never loading.
+// Wrapped, a broken check reports itself as broken and the other forty carry
+// on telling you about the game.
+function guard(label, fn) {
+  try {
+    return `${label}${fn()}`;
+  } catch (e) {
+    return `${label}WRONG — the check itself threw: ${e && e.message ? e.message : e}`;
+  }
+}
+
 function assertions(game) {
   const track = game.track;
   return [
-    `track          ${checkTrack(track)}`,
-    `corner grade   ${checkCornerGrade(track)}`,
-    `racing line    ${checkRacingLine(track)}`,
-    `grid           ${checkGrid(track)}`,
-    `clearance      ${checkClearance(track)}`,
-    `side streets   ${checkSideStreets(track)}`,
-    `city           ${checkCity(track)}`,
-    `street         ${checkBreakables(track)}`,
-    `driver         ${checkDriverName(game)}`,
-    `acceleration   ${checkAcceleration()}`,
-    `braking        ${checkBraking()}`,
-    `brake balance  ${checkBrakeStability()}`,
-    `gearbox        ${checkGearbox()}`,
-    `neutral        ${checkNoNeutral()}`,
-    `cornering      ${checkCornering()}`,
-    `held turn      ${checkHeldTurn()}`,
-    `steering       ${checkSteering(game)}`,
-    `steering feel  ${checkSteeringWeight()}`,
-    `handbrake      ${checkHandbrakeDrift()}`,
-    `weight         ${checkWeightTransfer()}`,
-    `surface        ${checkSurface(game)}`,
-    `phasing        ${checkCollision(game)}`,
-    `ai lap         ${checkAiLap(game)}`,
-    `full race      ${checkRace(game)}`,
-    `hud            ${checkHud(game)}`,
+    guard('track          ', () => checkTrack(track)),
+    guard('corner grade   ', () => checkCornerGrade(track)),
+    guard('racing line    ', () => checkRacingLine(track)),
+    guard('grid           ', () => checkGrid(track)),
+    guard('clearance      ', () => checkClearance(track)),
+    guard('side streets   ', () => checkSideStreets(track)),
+    guard('city           ', () => checkCity(track)),
+    guard('street         ', () => checkBreakables(track)),
+    guard('street grade   ', () => checkStreetGrade(track)),
+    guard('ground         ', () => checkGroundField(track)),
+    guard('track swap     ', () => checkTrackSwap(game)),
+    guard('stage two      ', () => checkRunLayout()),
+    guard('the run        ', () => checkTheRun(game)),
+    guard('the bridge     ', () => checkBridge(game)),
+    guard('driver         ', () => checkDriverName(game)),
+    guard('field          ', () => checkField(game)),
+    guard('contact        ', () => checkContact(game)),
+    guard('rival          ', () => checkRival(game)),
+    guard('no drift       ', () => checkNoDriftByDefault(game)),
+    guard('cutscene       ', () => checkCutscene(game)),
+    guard('campaign       ', () => checkCampaign()),
+    guard('stage one      ', () => checkCampaignFlow(game)),
+    guard('cheats         ', () => checkCheats()),
+    guard('acceleration   ', () => checkAcceleration()),
+    guard('braking        ', () => checkBraking()),
+    guard('brake balance  ', () => checkBrakeStability()),
+    guard('gearbox        ', () => checkGearbox()),
+    guard('neutral        ', () => checkNoNeutral()),
+    guard('ai defaults    ', () => checkDriverDefaults(game.track)),
+    guard('shots          ', () => checkShots(game.track)),
+    guard('cornering      ', () => checkCornering()),
+    guard('held turn      ', () => checkHeldTurn()),
+    guard('steering       ', () => checkSteering(game)),
+    guard('steering feel  ', () => checkSteeringWeight()),
+    guard('handbrake      ', () => checkHandbrakeDrift()),
+    guard('weight         ', () => checkWeightTransfer()),
+    guard('surface        ', () => checkSurface(game)),
+    guard('phasing        ', () => checkCollision(game)),
+    guard('ai lap         ', () => checkAiLap(game)),
+    guard('full race      ', () => checkRace(game)),
+    guard('hud            ', () => checkHud(game)),
+    guard('settings       ', () => checkSettings(game)),
+    guard('keybinds       ', () => checkKeybinds(game)),
+    guard('chase rules    ', () => checkChaseRules(game)),
   ];
 }
 
@@ -1203,6 +3135,7 @@ function dumpFrames(game) {
     cam.up.set(0, 1, 0);
     cam.lookAt(at[0], at[1], at[2]);
     cam.updateProjectionMatrix();
+    game.skyFollow(cam);
     game.post.render(game.scene, cam);
     post(`/__frame/${name}`, c.toDataURL('image/png'));
   };
@@ -1224,7 +3157,7 @@ function dumpFrames(game) {
       post(`/__frame/cutscene${sh}`, c.toDataURL('image/png'));
     }
     const shown = game.race.cars.filter((q) => q.model.visible).length;
-    game._endAttract();
+    game._leaveAttract();
     game.started = wasStarted;
     if (shown !== 1) console.log(`cutscene shows ${shown} cars`);
   } catch (e) { console.log(`cutscene dump failed: ${e.message}`); }
@@ -1382,5 +3315,219 @@ function dumpFrames(game) {
   shot('racing-line', [0, 700, 40], [0, 0, 0], 52);
   game.scene.fog = fog;
   game.scene.remove(mesh);
+
+  // The wager scene, played for real and photographed at three of its beats.
+  //
+  // Last, because `faceOff` picks the cars up and puts them down nose to nose
+  // — everything above this wants them where the race left them. The numbers
+  // in `checkCutscene` say the camera is not inside the bodywork; these say
+  // whether the two of them are actually framed like two people talking.
+  try {
+    const rival = game.race.cars.find((q) => !q.isPlayer);
+    const cast = { player: game.race.player, rival };
+    // Only the two of them. The dump runs on the sixteen-car race field, and
+    // the fourteen cars this scene is not about are parked all over the shot.
+    for (const q of game.race.cars) q.model.visible = q === cast.player || q === rival;
+    const cut = new Cutscene(game, SCRIPTS.WAGER, cast, () => {});
+    const wanted = [1, 2, 4];                       // twoShot, rival, the handshake
+    let shots = 0;
+    for (let i = 0; i < 20 * 60 && !cut.done; i++) {
+      cut.update(1 / 60);
+      const b = cut.beat;
+      if (b && wanted.includes(cut.i) && cut.t > b.t * 0.5 && shots === wanted.indexOf(cut.i)) {
+        game.skyFollow(game.camera);
+        game.post.render(game.scene, game.camera);
+        post(`/__frame/wager${shots}`, c.toDataURL('image/png'));
+        shots++;
+      }
+    }
+    cut.skip();
+
+    // And the police arriving, which is the one scene that has cars of its own
+    // in it — three of them, driving the circuit sideways. Played through with
+    // the real chase camera and photographed at the beats that are about them.
+    {
+      const cut3 = new Cutscene(game, SCRIPTS.POLICE_ARRIVE, cast, () => {});
+      const want3 = [2, 4, 5];
+      let got = 0, drifting = 0, slid = 0;
+      for (let i = 0; i < 30 * 60 && !cut3.done; i++) {
+        cut3.update(1 / 60);
+        for (const c of cut3.extras) {
+          if (c.vehicle.handbrake > 0.5) drifting++;
+          slid = Math.max(slid, Math.abs(Math.atan2(c.vehicle.v, Math.max(Math.abs(c.vehicle.u), 1))));
+        }
+        const b3 = cut3.beat;
+        if (b3 && want3.includes(cut3.i) && cut3.t > b3.t * 0.55 && got === want3.indexOf(cut3.i)) {
+          game.post.render(game.scene, game.camera);
+          post(`/__frame/police${got}`, c.toDataURL('image/png'));
+          got++;
+        }
+      }
+      cut3.skip();
+      dump.push(`the police scene got ${got} of ${want3.length} frames, `
+        + `${(drifting / 60).toFixed(1)} car-seconds on the handbrake, `
+        + `up to ${(slid * 57.3).toFixed(0)}° of slide`);
+    }
+
+    for (const q of game.race.cars) q.model.visible = true;
+    if (shots !== wanted.length) console.log(`wager dump got ${shots} of ${wanted.length} frames`);
+  } catch (e) { console.log(`wager dump failed: ${e.message}`); }
+
+  // Stage three: the bridge, with the traffic and the pursuit on it. Built
+  // before stage two only because stage two is what the frames after it are
+  // taken on; both replace the world, so both go at the end.
+  try {
+    disposeTrack(game.scene, game.track);
+    const br = new Track(LAYOUTS.bridge);
+    for (const _ of br.build(game.scene)) { /* off the clock */ }
+    game.track = br;
+
+    const stage3 = STAGES.find((q) => q.layout === 'bridge');
+    const c3 = new Campaign(game);
+    c3.index = STAGES.indexOf(stage3);
+    c3.car = SELECTABLE[0];
+    const plan3 = c3.field(br);
+    const base3 = br.gridSlots[0].s;
+    let nth = 0;
+    const cars3 = plan3.cars.map((spec, i) => {
+      const m = buildCar(spec.livery);
+      let at, lat;
+      if (spec.traffic) { at = base3 + 260 + (nth++) * 105; lat = spec.lane; }
+      else if (i === 0) { at = base3; lat = 0; }
+      else { at = base3 - 55 - (i - 1) * 18; lat = (i % 2) ? 2.6 : -2.6; }
+      const p2 = br.atDistance(Math.min(br.length - 20, Math.max(4, at)));
+      m.position.set(p2.x + p2.nx * lat, p2.y, p2.z + p2.nz * lat);
+      m.rotation.order = 'YXZ';
+      m.rotation.y = Math.atan2(p2.dirX, p2.dirZ);
+      const bx = m.userData.beacons;
+      if (bx) { bx[0].visible = i % 2 === 1; bx[1].visible = i % 2 === 0; }
+      game.scene.add(m);
+      return m;
+    });
+
+    // From the deck, looking up it: six lanes, traffic in them, a tower ahead.
+    const eye = br.atDistance(base3 - 30);
+    shot('bridge', [eye.x, eye.y + 3.0, eye.z],
+      [eye.x + eye.dirX * 400, eye.y + 26, eye.z + eye.dirZ * 400], 60);
+    // From the side and above, so the towers, the cables and the water read.
+    const midp = br.atDistance(br.length * 0.5);
+    shot('bridge-wide',
+      [midp.x + midp.nx * 620, midp.y + 95, midp.z + midp.nz * 620],
+      [midp.x, midp.y + 55, midp.z], 46);
+    // And down at deck level in the traffic.
+    const t3 = br.atDistance(base3 + 200);
+    shot('bridge-traffic', [t3.x - t3.dirX * 14 + t3.nx * 5, t3.y + 2.4, t3.z - t3.dirZ * 14 + t3.nz * 5],
+      [t3.x + t3.dirX * 130, t3.y + 3, t3.z + t3.dirZ * 130], 55);
+    for (const m of cars3) game.scene.remove(m);
+    disposeTrack(game.scene, br);
+    dump.push(`the bridge is ${(br.length / 1000).toFixed(2)} km, `
+      + `${plan3.cars.filter((q) => q.traffic).length} cars of traffic on it`);
+  } catch (e) { console.log(`bridge dump failed: ${e.message}`); }
+
+  // Stage two, built for real. Last of all, and it replaces the world: the
+  // circuit every frame above was taken on is gone by the time this returns,
+  // which is why nothing comes after it.
+  try {
+    disposeTrack(game.scene, game.track);
+    const run = new Track(LAYOUTS.run);
+    for (const _ of run.build(game.scene)) { /* off the clock */ }
+    game.track = run;
+    const fog2 = game.scene.fog;
+    game.scene.fog = null;
+    shot('run-map', [140, 2000, 120], [140, 0, 60], 52);
+    game.scene.fog = fog2;
+
+    // The ramp, from where a car arriving at it would be: down the street,
+    // through the sign gantry, with the deck climbing away beyond.
+    const r = run.rampPlan;
+    // Down the street at it, from where a car arriving would be — the gantry
+    // is 46 m short of the ramp, so this has to stand back beyond that.
+    // Ninety metres back: beyond the gantry, which is forty-six short of the
+    // ramp, and still inside the straight — a hundred and thirty put the
+    // camera round the previous corner looking at the side of a block.
+    // Far enough back to be behind the sign gantry, which on a route stands
+    // ninety metres before the road runs out.
+    const in0 = run.atDistance(r.at - 230);
+    const mid0 = r.segs[Math.floor(r.segs.length / 2)];
+    shot('ramp', [in0.x, in0.y + 3.2, in0.z], [mid0.x, mid0.y + 4, mid0.z], 56);
+    // And from the side, so the pillars and what is under them are visible.
+    const top = r.segs[r.segs.length - 1];
+    // From beside the ramp, square on to its own direction rather than to the
+    // last bit of street — which on a route has already turned away from it.
+    const mid = { x: (r.x + top.x) / 2, y: (r.y + top.y) / 2, z: (r.z + top.z) / 2 };
+    const rl = Math.hypot(top.x - r.x, top.z - r.z) || 1;
+    const rnx = -(top.z - r.z) / rl, rnz = (top.x - r.x) / rl;
+    shot('ramp-side', [mid.x + rnx * 420, mid.y + 170, mid.z + rnz * 420],
+      [mid.x, mid.y + 10, mid.z], 46);
+
+    // A drive-through: the view from the road at eight points along it, which
+    // is the only way to find something standing where it should not be.
+    for (let k = 0; k < 8; k++) {
+      const at = run.atDistance((k + 0.5) * (run.length / 8));
+      shot(`run${k}`, [at.x - at.dirX * 10, at.y + 2.6, at.z - at.dirZ * 10],
+        [at.x + at.dirX * 120, at.y + 4, at.z + at.dirZ * 120], 62);
+    }
+
+    // The same eight views again through a long lens, so whatever is standing
+    // at the end of each street can be identified rather than guessed at.
+    for (let k = 0; k < 8; k++) {
+      const at = run.atDistance((k + 0.5) * (run.length / 8));
+      shot(`zoom${k}`, [at.x - at.dirX * 10, at.y + 2.6, at.z - at.dirZ * 10],
+        [at.x + at.dirX * 400, at.y + 8, at.z + at.dirZ * 400], 16);
+    }
+
+    // The top of the hill on the run, which is fifty metres up.
+    const peak = run.samples.reduce((m, q) => (q.y > m.y ? q : m), run.samples[0]);
+    shot('run-hill', [peak.x - peak.dirX * 40, peak.y + 9, peak.z - peak.dirZ * 40],
+      [peak.x + peak.dirX * 120, peak.y + 2, peak.z + peak.dirZ * 120], 58);
+    // The pursuit, staged on the run's opening straight: you in front, three
+    // units behind with their bars lit. The light bars are the only thing in
+    // the game whose whole job is to be recognised at a glance, so they get a
+    // picture of their own.
+    {
+      const c2 = new Campaign(game);
+      c2.index = STAGES.findIndex((q) => q.layout === 'run');
+      c2.car = SELECTABLE[0];
+      const plan = c2.field(run);
+      // Laid out the way the stage lays them out — you on your own at the
+      // front, the units strung out a long way behind — not on the staggered
+      // two-abreast grid a race uses. The whole point of the change was that
+      // the first picture of this showed four cars side by side.
+      const base = run.gridSlots[0].s;
+      const models = plan.cars.map((spec, i) => {
+        const m = buildCar(spec.livery);
+        const back = i === 0 ? 0 : 55 + (i - 1) * 18;
+        const p2 = run.atDistance(Math.max(4, base - back));
+        const lat = i === 0 ? 0 : ((i % 2) ? 2.6 : -2.6);
+        const slot = { x: p2.x + p2.nx * lat, z: p2.z + p2.nz * lat, yaw: Math.atan2(p2.dirX, p2.dirZ) };
+        m.position.set(slot.x, run.locate(slot.x, slot.z).y, slot.z);
+        m.rotation.order = 'YXZ';
+        m.rotation.y = slot.yaw;
+        // Half of them showing red, half blue, so the picture shows both.
+        const bx = m.userData.beacons;
+        if (bx) { bx[0].visible = i % 2 === 1; bx[1].visible = i % 2 === 0; }
+        game.scene.add(m);
+        return m;
+      });
+      // Taken from a point ON the road behind the back row, not from an
+      // offset guessed off the last slot: the grid climbs, and a camera
+      // placed fifteen metres back at the back row's height is fifteen
+      // metres INTO the hill behind it, which is what the first attempt at
+      // this photographed.
+      const front = run.atDistance(base);
+      const eye = run.atDistance(Math.max(4, base - 55 - 2 * 18) - 18);
+      shot('pursuit',
+        [eye.x + eye.nx * 6, eye.y + 4.0, eye.z + eye.nz * 6],
+        [front.x, front.y + 0.7, front.z], 44);
+      const lit = models.filter((m) => m.userData.beacons).length;
+      for (const m of models) game.scene.remove(m);
+      dump.push(`the pursuit is ${models.length} cars, ${lit} of them with light bars`);
+    }
+
+    dump.push(`the run is ${(run.length / 1000).toFixed(2)} km, `
+      + `${run.stubs.length} side streets, ramp ${(r.at / 1000).toFixed(2)} km in`);
+  } catch (e) { console.log(`run dump failed: ${e.message}`); }
+
+  if (dump.length) post('/__result', `\n${dump.join('\n')}`);
   void clamp; void AI; void Track; void CAR;
 }

@@ -267,6 +267,22 @@ export const LAYOUTS = {
   },
 };
 
+// Every layout, and every layout driven the other way.
+//
+// A reversed track is a different track — different corner order, different
+// camber, the hill descended instead of climbed — for about thirty lines. They
+// are generated rather than written out so that a change to a layout cannot
+// leave its reverse behind.
+for (const id of Object.keys(LAYOUTS)) {
+  const base = LAYOUTS[id];
+  LAYOUTS[`${id}_rev`] = {
+    ...base,
+    id: `${id}_rev`,
+    name: `${base.name} REVERSE`,
+    reverse: !base.reverse,
+  };
+}
+
 // Give a built track back.
 //
 // Materials are the trap. Most of the geometry in here is drawn with the three
@@ -724,6 +740,49 @@ export class Track {
         this.startStraight = bestLen * this.step;
       }
     }
+
+    if (this.layout.reverse) this._reverse();
+  }
+
+  // Drive the same road the other way.
+  //
+  // Every track is two tracks: the corners come in the other order, the
+  // cambers are on the other side, the hill you climbed you now descend, and
+  // the racing line through all of it is different. It is the cheapest content
+  // in the game — about thirty lines against a day of laying out a new city.
+  //
+  // Done to the SAMPLES, right after they are built and before anything reads
+  // them. Everything downstream — the racing line, the speed profile, the
+  // grid, the side streets, the junction boxes, the ramp — is expressed in
+  // terms of the sample array and simply follows. Reversing any later would
+  // mean reversing each of those in turn, and one of them would be missed.
+  _reverse() {
+    const N = this.samples.length;
+    this.samples.reverse();
+    for (let i = 0; i < N; i++) {
+      const p = this.samples[i];
+      p.i = i;
+      p.s = i * this.step;
+      // Travel the other way: the tangent flips, and the LEFT of the new
+      // direction is the right of the old one.
+      p.dirX = -p.dirX;
+      p.dirZ = -p.dirZ;
+      p.nx = -p.dirZ;
+      p.nz = p.dirX;
+      // Curvature is unsigned and stays; which way it bends does not, and a
+      // climb driven the other way is a descent.
+      p.bend = -p.bend;
+      p.grade = -p.grade;
+    }
+    // The corners, likewise: the arm you arrive on becomes the arm you leave
+    // by, both point the other way, and a left-hander is a right-hander.
+    for (const c of this.corners) {
+      const u1x = c.u1x, u1z = c.u1z;
+      c.u1x = -c.u2x; c.u1z = -c.u2z;
+      c.u2x = -u1x; c.u2z = -u1z;
+      c.turn = -c.turn;
+    }
+    this.corners.reverse();
   }
 
   at(index) { return this.samples[this._w(index, this.samples.length)]; }

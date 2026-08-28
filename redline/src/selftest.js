@@ -21,7 +21,7 @@ import { clamp, lerp, lapTime, dist2D, angleDiff } from './utils.js';
 import { SHOTS, cameraFrame } from './camera.js';
 import { Cutscene, SCRIPTS } from './cutscene.js';
 import { PORTRAITS, portraitFor } from './portraits.js';
-import { Campaign, STAGES, laneCentres, trafficCount } from './campaign.js';
+import { Campaign, STAGES, laneCentres, laneSpeed, trafficCount } from './campaign.js';
 import { CHEATS, findCheat, normalise, unresolved } from './cheats.js';
 import { ACTIONS, actionFor, codesFor, isBound, rebind, resetBinds, label } from './keybinds.js';
 import { PADS, looksLikeTouch } from './touch.js';
@@ -468,11 +468,71 @@ function checkBridge(game) {
   }
   if (!crossed) bad.push(`nobody crossed it in ${time.toFixed(0)}s`);
   if (off > 3) bad.push(`${off.toFixed(1)}s off the deck crossing it`);
-  if (crossed && crossed > stage.limit) {
-    bad.push(`crossing takes ${crossed.toFixed(0)}s against a ${stage.limit}s clock`);
+  // The clock is judged against a POPULATED crossing, not a solo one.
+  //
+  // A clean lap on an empty deck is a number that is easy to measure and does
+  // not describe this stage: what the stage presents is three hundred and
+  // sixty-four cars of traffic to thread and a dozen police cars turning
+  // across the road. Bounding a clock against the solo time is bounding it
+  // against a drive nobody takes.
+  //
+  // So the tax is measured rather than guessed: the same stretch of deck,
+  // driven once empty and once at the stage's own density, and the ratio
+  // applied to the whole crossing.
+  let tax = 1;
+  {
+    const LEG = 1500;
+    const from = 1200;
+    const legTime = (withTraffic) => {
+      const cars = [];
+      const me = { vehicle: new Vehicle(CAR), loc: null, traffic: false };
+      const p1 = t.atDistance(from);
+      me.vehicle.reset(p1.x, p1.z, Math.atan2(p1.dirX, p1.dirZ));
+      me.vehicle.autoShift = true;
+      me.vehicle.setSpeed(45);
+      me.loc = t.locate(me.vehicle.x, me.vehicle.z);
+      me.driver = new Driver(me, t, 0.95);
+      cars.push(me);
+      if (withTraffic) {
+        const lanes = laneCentres(t);
+        const n = Math.round(LEG / stage.trafficEvery);
+        for (let k = 0; k < n; k++) {
+          const at = from + 120 + (k / n) * LEG;
+          const lane = lanes[k % lanes.length];
+          const p2 = t.atDistance(at);
+          const c = { vehicle: new Vehicle(CAR), loc: null, traffic: true };
+          c.vehicle.reset(p2.x + p2.nx * lane, p2.z + p2.nz * lane, Math.atan2(p2.dirX, p2.dirZ));
+          c.vehicle.autoShift = true;
+          c.vehicle.setSpeed(laneSpeed(lanes, lane));
+          c.loc = t.locate(c.vehicle.x, c.vehicle.z);
+          c.driver = new Cruiser(c, t, lane, laneSpeed(lanes, lane));
+          cars.push(c);
+        }
+      }
+      let el = 0;
+      for (let i = 0; i < Math.round(120 / FIXED); i++) {
+        for (const c of cars) {
+          c.driver.drive(FIXED, cars);
+          c.vehicle.update(FIXED, 2);
+          c.loc = t.locate(c.vehicle.x, c.vehicle.z, c.loc.index);
+          const ov = Math.abs(c.loc.lateral) - c.loc.width / 2;
+          c.vehicle.surfaceGrip = ov <= 0 ? 1 : ov < 1.6 ? 0.92 : 0.55;
+        }
+        el += FIXED;
+        if (me.loc.s >= from + LEG) break;
+      }
+      return el;
+    };
+    const empty = legTime(false);
+    const busy = legTime(true);
+    tax = busy / Math.max(empty, 0.001);
   }
-  if (crossed && stage.limit > crossed * 1.8) {
-    bad.push(`${stage.limit}s is generous for a ${crossed.toFixed(0)}s crossing`);
+  const real = crossed * tax;
+  if (crossed && real > stage.limit) {
+    bad.push(`a populated crossing takes ${real.toFixed(0)}s against a ${stage.limit}s clock`);
+  }
+  if (crossed && stage.limit > real * 1.8) {
+    bad.push(`${stage.limit}s is generous for a ${real.toFixed(0)}s crossing`);
   }
 
   // What ninety-odd cars cost per step.
@@ -565,8 +625,102 @@ function checkBridge(game) {
     `${Math.round(Math.max(...traffic.map((q) => q.speed)) * 3.6)} km/h, ` +
     `${stage.police} units still behind you, ${lamps} lamps and no street works; ` +
     `${f.cars.length} cars cost ` +
-    `${stepMs.toFixed(2)} ms a step; a clean lap of it takes ` +
-    `${crossed ? crossed.toFixed(0) : '--'}s of a ${stage.limit}s clock`;
+    `${stepMs.toFixed(2)} ms a step; a lap takes ` +
+    `${crossed ? crossed.toFixed(0) : '--'}s solo and ${real.toFixed(0)}s through the traffic ` +
+    `(a ${((tax - 1) * 100).toFixed(0)}% tax) of a ${stage.limit}s clock`;
+}
+
+// Every layout in the game, held to the same bar.
+//
+// This replaces a pair of per-layout checks with their own per-layout
+// thresholds. Two layouts could carry that; six cannot, and the reversed ones
+// double the count for nothing — a check that has to be written out per track
+// is a check that will not be written for the next track.
+//
+// What it asks is the same of all of them: it is long enough to be a stage and
+// short enough to fit the world, it never comes near enough to itself for one
+// stretch's scenery to land on another's road, the grades are drivable, the
+// ground meets the road rather than standing under it, and an AI can get round
+// without leaving the tarmac.
+function checkLayouts() {
+  const bad = [];
+  const lines = [];
+  for (const [id, layout] of Object.entries(LAYOUTS)) {
+    const t = new Track(layout);
+    const world = ((layout.world || 1800) / 2) - 60;
+
+    if (!(t.length > 600 && t.length < 14000)) bad.push(`${id} is ${t.length.toFixed(0)} m long`);
+
+    // How close it comes to itself, ignoring what is near along the road.
+    let closest = Infinity;
+    const skip = 110;
+    for (let i = 0; i < t.samples.length; i += 3) {
+      for (let j = i + 3; j < t.samples.length; j += 3) {
+        const along = (t.closed ? Math.min(j - i, t.samples.length - (j - i)) : j - i) * t.step;
+        if (along < skip) continue;
+        const a = t.samples[i], b = t.samples[j];
+        const d = dist2D(a.x, a.z, b.x, b.z);
+        if (d < closest) closest = d;
+      }
+    }
+    if (closest < 36) bad.push(`${id} runs ${closest.toFixed(0)} m from itself`);
+
+    const span = t.samples.reduce((m, q) => Math.max(m, Math.abs(q.x), Math.abs(q.z)), 0);
+    if (span > world) bad.push(`${id} reaches ${span.toFixed(0)} m of a ${world.toFixed(0)} m world`);
+
+    const grade = Math.max(...t.samples.map((q) => Math.abs(q.grade)));
+    if (grade > 0.18) bad.push(`${id} hits a ${(grade * 100).toFixed(0)}% grade`);
+
+    // The ground meets the road rather than standing a plinth under it. A
+    // bridge deck has water below it by design and is exempt.
+    let drop = 0;
+    if (!layout.deck) {
+      let sum = 0, n = 0;
+      for (let i = 0; i < t.samples.length; i += 31) {
+        const p = t.samples[i];
+        for (const sd of [-1, 1]) {
+          sum += p.y - t.groundAt(p.x + p.nx * sd * 10, p.z + p.nz * sd * 10);
+          n++;
+        }
+      }
+      drop = sum / n;
+      if (drop > 0.35) bad.push(`${id} stands ${drop.toFixed(2)} m above its own ground`);
+      if (drop < 0.02) bad.push(`${id} has ground level with or over the road`);
+    }
+
+    // And it can be driven. Short of the whole thing — enough road to meet
+    // several corners and find out whether the racing line is followable.
+    const car = { vehicle: new Vehicle(CAR), loc: null };
+    const p0 = t.atDistance(4);
+    car.vehicle.reset(p0.x, p0.z, Math.atan2(p0.dirX, p0.dirZ));
+    car.vehicle.autoShift = true;
+    car.vehicle.setSpeed(28);
+    car.loc = t.locate(car.vehicle.x, car.vehicle.z);
+    const d = new Driver(car, t, 0.95);
+    car.driver = d;
+    let off = 0, slowest = 999;
+    const solo = [car];
+    for (let i = 0; i < Math.round(70 / FIXED); i++) {
+      d.drive(FIXED, solo);
+      car.vehicle.update(FIXED, 2);
+      car.loc = t.locate(car.vehicle.x, car.vehicle.z, car.loc.index);
+      const over = Math.abs(car.loc.lateral) - car.loc.width / 2;
+      car.vehicle.surfaceGrip = over <= 0 ? 1 : over < 1.6 ? 0.92 : 0.55;
+      if (over > 2.0) off += FIXED;
+      slowest = Math.min(slowest, car.vehicle.speedKmh);
+      if (!t.closed && car.loc.s >= t.length - 8) break;
+    }
+    if (off > 3) bad.push(`${id} put a 0.95 driver ${off.toFixed(1)}s off the road`);
+    if (slowest < 18) bad.push(`${id} has a corner that drops a car to ${slowest.toFixed(0)} km/h`);
+
+    lines.push(`${id} ${(t.length / 1000).toFixed(2)}km/${closest.toFixed(0)}m`
+      + `/${(grade * 100).toFixed(0)}%${layout.deck ? '' : `/${drop.toFixed(2)}m`}`
+      + `/${off.toFixed(1)}s`);
+  }
+
+  const ok = bad.length === 0;
+  return `${ok ? 'every layout is a stage you could drive' : `WRONG — ${bad[0]}`} — ` +
+    `${lines.length} of them, as length/self-approach/grade/kerb/off-road: ${lines.join(', ')}`;
 }
 
 // Swapping the circuit under a running game.
@@ -3353,6 +3507,7 @@ function assertions(game) {
     guard('street         ', () => checkBreakables(track)),
     guard('street grade   ', () => checkStreetGrade(track)),
     guard('ground         ', () => checkGroundField(track)),
+    guard('layouts        ', () => checkLayouts()),
     guard('track swap     ', () => checkTrackSwap(game)),
     guard('stage two      ', () => checkRunLayout()),
     guard('the run        ', () => checkTheRun(game)),

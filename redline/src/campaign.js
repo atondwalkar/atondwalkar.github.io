@@ -63,13 +63,20 @@ export const STAGES = [
     routeFraction: 1,
     laps: 1,
     contact: true,
-    // A clean run at ninety-five per cent skill crosses it in a hundred and
-    // fifty-five seconds — on an empty deck, with nobody leaning on it. The
-    // clock is a minute and a half more than that, because the deck is not
-    // empty: three hundred and sixty cars of traffic to thread and a dozen
-    // police cars turning across the road in front of you is not the drive
-    // that number was measured on.
-    limit: 250,
+    // Eight minutes.
+    //
+    // The clock used to be set against a clean solo lap — a hundred and
+    // fifty-five seconds — and that number turns out to describe a drive
+    // nobody takes. Measured properly, on the deck this stage actually
+    // presents, threading three hundred and sixty-four cars of traffic costs
+    // about a hundred and fifty per cent on top: a POPULATED crossing at
+    // ninety-five per cent skill is three hundred and eighty-one seconds.
+    //
+    // So three hundred and seventy, which was two minutes more than the old
+    // figure and looked generous, was in fact unwinnable — by the AI, never
+    // mind by a person with police turning across the road in front of them.
+    // Four hundred and eighty is a quarter more than the measured crossing.
+    limit: 480,
     police: 3,
     leash: 380,
     intercept: { every: 7, from: 300, to: 620, max: 12 },
@@ -180,65 +187,78 @@ export class Campaign {
   field(track) {
     const s = this.stage;
     const mine = this.car || SELECTABLE[0];
+
+    // Four independent blocks, not a branch.
+    //
+    // This used to be `if (rival) { rival; me } else { me; traffic; police }`,
+    // so a stage was EITHER a duel OR a pursuit and could never be both. That
+    // one `if` ruled out most of what a campaign wants: a race through
+    // traffic, a race the police join, a duel with civilians in the way. The
+    // grid is in order, so who goes where in the list is the only thing that
+    // decides who starts in front.
+    const rivals = s.rivals || (s.rival ? [s.rival] : []);
+    const chase = (s.police || 0) > 0;
     const me = { livery: mine, isPlayer: true, name: this.game.playerName || mine.name };
     const cars = [];
-    if (s.rival) {
-      const rivalLivery = LIVERIES.find((l) => l.name !== mine.name) || LIVERIES[0];
-      cars.push({
-        livery: rivalLivery,
-        name: s.rival.name,
-        skill: s.rival.skill,
-        opts: s.rival.opts,
-      });
-      cars.push(me);
-    } else {
-      cars.push(me);
-      // The middle of each lane, worked out from the road rather than written
-      // down. They were at 0 and ±3.6 and ±7.2, which are the lane LINES on a
-      // six-lane deck, not the lanes — so every car sat astride a marking,
-      // including one straddling the centre of the road.
-      // Interleaved, so consecutive cars are not in adjacent lanes and every
-      // lane is used. Stepping by two through six lanes only ever lands on the
-      // odd ones — three of the six — which is what put eighteen cars into
-      // half a bridge.
-      const all = laneCentres(track);
-      const lanes = all.filter((_, k) => k % 2 === 0).concat(all.filter((_, k) => k % 2 === 1));
-      for (let i = 0; i < trafficCount(s, track); i++) {
-        const k = i % lanes.length;
-        cars.push({
-          livery: TRAFFIC[i % TRAFFIC.length],
-          name: '',
-          traffic: true,
-          lane: lanes[k],
-          speed: laneSpeed(lanes, lanes[k]),
-        });
-      }
-      for (let i = 0; i < (s.police || 0); i++) {
-        cars.push({
-          livery: POLICE.livery,
-          name: `${POLICE.name} ${i + 1}`,
-          skill: POLICE.skill,
-          // Each unit takes a different place in the box: the bumper and
-          // both flanks. Three cars all trying to sit on the same bumper is a
-          // queue, not a pursuit.
-          opts: { ...POLICE.opts, station: i },
-          pursuer: true,
-        });
-      }
+
+    // Rivals start ahead of you in a race and you start ahead of the police in
+    // a pursuit, so a stage with both puts you in the middle — which is
+    // exactly where a race with the police joining it should put you.
+    const taken = new Set([mine.name]);
+    for (const r of rivals) {
+      const livery = LIVERIES.find((l) => !taken.has(l.name)) || LIVERIES[0];
+      taken.add(livery.name);
+      cars.push({ livery, name: r.name, skill: r.skill, opts: r.opts });
     }
+    cars.push(me);
+
+    // Traffic, in the middle of each lane. They were at 0 and ±3.6 and ±7.2,
+    // which are the lane LINES on a six-lane deck rather than the lanes
+    // between them, so every car sat astride a marking.
+    //
+    // Interleaved, so consecutive cars are not in adjacent lanes and every
+    // lane is used: stepping by two through six lanes only ever lands on the
+    // odd ones, which is what put eighteen cars into half a bridge.
+    const all = laneCentres(track);
+    const lanes = all.filter((_, k) => k % 2 === 0).concat(all.filter((_, k) => k % 2 === 1));
+    for (let i = 0; i < trafficCount(s, track); i++) {
+      const k = i % lanes.length;
+      cars.push({
+        livery: TRAFFIC[i % TRAFFIC.length],
+        name: '',
+        traffic: true,
+        lane: lanes[k],
+        speed: laneSpeed(lanes, lanes[k]),
+      });
+    }
+
+    for (let i = 0; i < (s.police || 0); i++) {
+      cars.push({
+        livery: POLICE.livery,
+        name: `${POLICE.name} ${i + 1}`,
+        skill: POLICE.skill,
+        // Each unit takes a different place in the box: the bumper and both
+        // flanks. Three cars all trying to sit on the same bumper is a queue,
+        // not a pursuit.
+        opts: { ...POLICE.opts, station: i },
+        pursuer: true,
+      });
+    }
+
     return {
       cars,
       laps: s.laps,
       contact: s.contact,
       limit: s.limit ?? null,
-      // A duel is over the moment somebody takes the flag. A run lines up as a
-      // pursuit — you on your own, the units strung out behind.
-      endOnFirst: !!s.rival,
+      // Flags of their own now, rather than inferred from whether there
+      // happens to be a rival: a race the police join still ends when somebody
+      // takes the flag, and it still lines up as a grid.
+      endOnFirst: s.endOnFirst ?? rivals.length > 0,
+      formation: s.formation || (chase && !rivals.length ? 'pursuit' : 'grid'),
       leash: s.leash ?? null,
       intercept: s.intercept ?? null,
-      formation: s.police ? 'pursuit' : 'grid',
       // A fraction of whatever the layout came out at, so a change to the loop
-      // moves the ramp with it instead of stranding it inside a block.
+      // moves the finish with it instead of stranding it inside a block.
       route: s.routeFraction && track ? s.routeFraction * track.length : null,
       // Metres between cars of traffic — carried through so the race can keep
       // topping it up ahead of the player rather than laying it out once.

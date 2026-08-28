@@ -880,6 +880,10 @@ export class Race {
     car.prev = null;
     car.driver = new Driver(car, t, POLICE.skill, { ...POLICE.opts, station: n % 3 });
     car.driver.quarry = p;
+    // It cut in AHEAD, so it is a roadblock until it has been passed: it will
+    // stop, turn round and come back at the car rather than drive on down the
+    // road in front of it.
+    car.driver.intercepting = true;
     car.syncModel(t);
     this.cars.push(car);
     this.game.scene.add(car.model);

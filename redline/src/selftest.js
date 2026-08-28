@@ -768,6 +768,58 @@ function checkChaseRules(game) {
     race.intercept = null;
   }
 
+  // --- a unit that cut in ahead turns round and comes back.
+  //
+  // This is the difference between a roadblock and a slow car in your way. The
+  // units used to spawn three hundred metres up the road and simply drive it,
+  // nine metres a second slower than you, until you caught them — because the
+  // block only reached thirty-four metres and the station machinery was quite
+  // happy for a police car to lead the way.
+  let faceAngle = 0, faceGap = 0, faceStart = 0;
+  {
+    const t3 = t;
+    const q3 = { vehicle: new Vehicle(CAR), loc: null, name: '' };
+    const u3 = { vehicle: new Vehicle(CAR), loc: null, name: '' };
+    const place = (car, at, speed, lat = 0) => {
+      const p4 = t3.atDistance(at);
+      car.vehicle.reset(p4.x + p4.nx * lat, p4.z + p4.nz * lat, Math.atan2(p4.dirX, p4.dirZ));
+      car.vehicle.autoShift = true;
+      car.vehicle.surfaceGrip = 1;
+      car.vehicle.setSpeed(speed);
+      car.loc = t3.locate(car.vehicle.x, car.vehicle.z);
+    };
+    place(q3, 4000, 44);
+    place(u3, 4300, 22, 3);              // three hundred metres up the road
+    const d3 = new Driver(u3, t3, POLICE.skill, { ...POLICE.opts, station: 0 });
+    u3.driver = d3;
+    d3.quarry = q3;
+    d3.intercepting = true;
+    const qd3 = new Cruiser(q3, t3, 0, 44);
+    q3.driver = qd3;
+    faceStart = dist2D(q3.vehicle.x, q3.vehicle.z, u3.vehicle.x, u3.vehicle.z);
+    faceGap = faceStart;
+    for (let i = 0; i < Math.round(16 / FIXED); i++) {
+      for (const c of [q3, u3]) {
+        c.driver.drive(FIXED, [q3, u3]);
+        c.vehicle.update(FIXED, 2);
+        c.loc = t3.locate(c.vehicle.x, c.vehicle.z, c.loc.index);
+      }
+      const road3 = t3.atDistance(u3.loc.s);
+      faceAngle = Math.max(faceAngle, Math.abs(angleDiff(
+        u3.vehicle.yaw, Math.atan2(road3.dirX, road3.dirZ))) * 57.3);
+      faceGap = Math.min(faceGap, dist2D(q3.vehicle.x, q3.vehicle.z, u3.vehicle.x, u3.vehicle.z));
+    }
+    // Turned to face the oncoming car — a long way round, not a lane change.
+    if (faceAngle < 120) bad.push(`an interceptor turned only ${faceAngle.toFixed(0)}° to face the car`);
+    // And met it. A roadblock that turns beautifully and is never reached is
+    // a roadblock you drive past.
+    if (faceGap > 8) bad.push(`an interceptor got no closer than ${faceGap.toFixed(0)} m`);
+    // It must not have simply driven off down the road.
+    if (t3.gap(u3.loc.s, q3.loc.s) > 120) {
+      bad.push(`an interceptor is ${t3.gap(u3.loc.s, q3.loc.s).toFixed(0)} m up the road`);
+    }
+  }
+
   // --- a unit that has got in front turns across the road.
   let swing = 0, blockClose = 0;
   {
@@ -917,7 +969,9 @@ function checkChaseRules(game) {
     `5 cars cleared off the finish and one dropped from behind, ` +
     `while the one ahead stayed; ` +
     `${made} cars were added ahead over ${(t.length / 1000).toFixed(0)} km with none stacked; ` +
-    `${cutIn} units cut in ahead, nearest at ${nearest.toFixed(0)} m, and one in front ` +
+    `${cutIn} units cut in ahead, nearest at ${nearest.toFixed(0)} m; one dropped ` +
+    `${faceStart.toFixed(0)} m up the road turned ${faceAngle.toFixed(0)}° and met the car at ` +
+    `${faceGap.toFixed(0)} m; one in front ` +
     `turned ${swing.toFixed(0)}° across the road and closed to ${blockClose.toFixed(0)} m; ` +
     `it opens rolling at ${(openSpeed * 3.6).toFixed(0)} km/h in gear ${openGear} at ` +
     `${openRpm.toFixed(0)} rpm through ` +

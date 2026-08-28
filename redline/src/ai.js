@@ -42,13 +42,35 @@ const BLOCK_MAX = 34;
 const BLOCK_SPEED = 34;              // 122 km/h
 // How far round the nose has to come before it stops steering across the road
 // and starts steering at the car.
-const BLOCK_FACING = 0.75;           // 43 degrees
+// Low, on purpose. The "across the road" target sits a few metres ahead ALONG
+// the road, so as the car rotates the target rotates with it and the turn
+// settles at an equilibrium of about forty degrees — it slews and stops. The
+// handover has to come before that, because aiming at the car is what keeps
+// the rotation going: the further round the nose comes, the further off the
+// nose the quarry sits, and the harder it steers.
+const BLOCK_FACING = 0.42;           // 24 degrees
 // How far ahead the blocking target sits. Short, because a long look-ahead is
 // a gentle lane change and what is wanted is a car slewing sideways.
 const BLOCK_LOOK = 9;
 // What fraction of the quarry's speed a blocking unit drops to. Low enough
 // that the gap closes in a second or two rather than over half the stage.
 const BLOCK_BRAKE = 0.55;
+
+// A unit that cut in ahead: how far back down the road it will still try to
+// turn and face you from, how slowly it has to be going to turn in, how fast
+// it may come at you once it has, and how far past it you have to be before it
+// gives up and becomes an ordinary chaser again.
+const INTERCEPT_RANGE = 700;
+const INTERCEPT_TURN = 4;
+const INTERCEPT_CLOSE = 20;
+const INTERCEPT_DONE = 14;
+// How near the nose the quarry has to be before the unit is allowed to come at
+// it rather than to keep turning. Thirty-five degrees: past that it is still
+// swinging, and a car let off the leash while it is still swinging sweeps
+// instead of turning.
+const INTERCEPT_ROUND = 0.61;
+// How far ahead an interceptor aims while it is turning.
+const INTERCEPT_LOOK = 10;
 
 // Where the units try to be, relative to the car they are chasing: one on the
 // bumper and one down each side. `along` is metres up the road from it — so a
@@ -172,6 +194,9 @@ export class Driver {
     this.gap = Infinity;          // to the quarry, when there is one
     this.stationErr = 0;          // metres short of its place in the box
     this.blockSide = 0;           // which way it committed to slew, once blocking
+    this.intercepting = false;    // cut in ahead, and has not been passed yet
+    this.facing = false;          // turned round and looking at the quarry
+    this.blockSkew = 0;           // how far off the road's line it has come
     this.offset = 0;              // where on the track it wants to be, in metres
     this.offsetTarget = 0;
     this.reactT = 0;
@@ -489,13 +514,29 @@ export class Driver {
     // the bay. So it only happens slowly, and only when it is genuinely in
     // front rather than merely half a length up.
     const infront = -this.stationErr;
+
+    // An interceptor is a ROADBLOCK.
+    //
+    // The units that cut in ahead used to be ordinary pursuers who happened to
+    // be in front: the station machinery slowed them a little and the block
+    // only reached thirty-four metres, so from three hundred they simply drove
+    // down the road at nine metres a second slower than you until you caught
+    // them. What was wanted is a car that stops, turns round, and comes back
+    // at you — so the block reaches as far as they are spawned, and the speed
+    // limit below drops far enough for a car to turn in.
+    //
+    // It stops being an interceptor the moment you are past it, at which point
+    // it is a normal chaser with a normal station behind you.
+    if (this.intercepting && gap > INTERCEPT_DONE) this.intercepting = false;
+    const reach = this.intercepting ? INTERCEPT_RANGE : BLOCK_MAX;
+    this.facing = false;
     // In front and close: this is a block, not a cruise.
     //
     // What it used to do was hold station at the quarry's speed, seven metres
     // ahead, for ever — which from the driving seat is a police car escorting
     // you politely to the ramp. A unit that has got in front has one job, and
     // `_speedLimit` does the other half of it: brake hard enough to be caught.
-    if (infront > BLOCK_MIN && infront < BLOCK_MAX && speed < BLOCK_SPEED) {
+    if (infront > BLOCK_MIN && infront < reach && speed < BLOCK_SPEED) {
       // ACROSS the road, not at the car.
       //
       // Aiming at the quarry looks like the obvious thing and does nothing at
@@ -513,7 +554,15 @@ export class Driver {
       if (this.blockSide === 0) this.blockSide = loc.lateral > 0 ? -1 : 1;
       const side = this.blockSide;
       const road = t.atDistance(loc.s);
-      const skew = Math.abs(angleDiff(this.car.vehicle.yaw, Math.atan2(road.dirX, road.dirZ)));
+      const v0 = this.car.vehicle;
+      const skew = Math.abs(angleDiff(v0.yaw, Math.atan2(road.dirX, road.dirZ)));
+      // How far off the nose the quarry sits. This, not the angle to the ROAD,
+      // is what "facing the car" means — a unit broadside across a bridge is
+      // ninety degrees off the road and pointing straight at you, and gating
+      // its speed on the road angle left it sitting there at walking pace
+      // while you went past.
+      this.blockSkew = Math.abs(angleDiff(
+        v0.yaw, Math.atan2(q.vehicle.x - v0.x, q.vehicle.z - v0.z)));
 
       // Two halves to the manoeuvre, and they need different targets.
       //
@@ -523,9 +572,53 @@ export class Driver {
       // nothing with it. But once the nose has come round far enough to be
       // pointing at the quarry rather than down the road, that stops being
       // true: from there it aims at the CAR, and drives into it.
-      if (skew > BLOCK_FACING) return { x: q.vehicle.x, z: q.vehicle.z };
+      // An interceptor turns straight toward the car and never does the
+      // across-the-road phase at all.
+      //
+      // That phase exists to break the tie when the quarry is DIRECTLY behind,
+      // where the lateral error pure pursuit steers on is zero. A unit that
+      // cut in three hundred metres up the road is not in that position — the
+      // car is a long way back and a little off-line — so aiming at it gives
+      // a target behind the nose, which the pure-pursuit clamp turns into full
+      // lock, which is a car turning round. Nudged a couple of metres to the
+      // side it committed to, so the tie is broken even when it is exact.
+      if (this.intercepting) {
+        this.facing = true;
+        // A point ten metres away in the DIRECTION of the car, not the car
+        // itself three hundred metres off.
+        //
+        // Pure pursuit divides by how far the target is, so aiming at
+        // something three hundred metres behind asks for one degree of lock
+        // and the car takes half a minute to come round — by which time you
+        // have gone past. Ten metres in the same direction asks for all of it.
+        const dx0 = q.vehicle.x - this.car.vehicle.x;
+        const dz0 = q.vehicle.z - this.car.vehicle.z;
+        const l0 = Math.hypot(dx0, dz0) || 1;
+        // The side nudge exists only to break the tie while it is still
+        // turning — aiming at a car directly behind gives zero lateral error
+        // and nothing happens. Once it is round, the nudge is two metres of
+        // deliberate miss, and at a closing speed of sixty there is no time to
+        // correct it: so it fades out as the nose comes onto the car.
+        const n = loc.sample;
+        const nudge = side * 2 * clamp(this.blockSkew / INTERCEPT_ROUND, 0, 1);
+        return {
+          x: this.car.vehicle.x + (dx0 / l0) * INTERCEPT_LOOK + n.nx * nudge,
+          z: this.car.vehicle.z + (dz0 / l0) * INTERCEPT_LOOK + n.nz * nudge,
+        };
+      }
+      if (skew > BLOCK_FACING) {
+        // Round far enough to be looking at the car: go at it. `facing` is
+        // read by the speed limit, which stops holding it back the moment the
+        // turn is done — a roadblock that has turned and then crawls is a
+        // roadblock you drive round.
+        this.facing = true;
+        return { x: q.vehicle.x, z: q.vehicle.z };
+      }
       const across = t.atDistance(loc.s + BLOCK_LOOK);
-      const off = side * (across.width / 2 - 1.5);
+      // A pivot, not a lane change. An interceptor that swings to the far side
+      // of a six-lane deck to begin its turn ends the turn twenty metres off
+      // the line the car is on, and twenty metres is a miss.
+      const off = side * (this.intercepting ? 3.5 : across.width / 2 - 1.5);
       return { x: across.x + across.nx * off, z: across.z + across.nz * off };
     }
 
@@ -603,7 +696,20 @@ export class Driver {
       // one outcome a block must not produce — the unit sits in front doing
       // the same speed as you until the stage ends.
       const front = -err;
-      if (front > BLOCK_MIN && front < BLOCK_MAX) {
+      const reach2 = this.intercepting ? INTERCEPT_RANGE : BLOCK_MAX;
+      if (front > BLOCK_MIN && front < reach2) {
+        // The speed is gated on how far ROUND it is, not on whether it has
+        // started aiming at the car. Those are different moments: the aim
+        // hands over at twenty-four degrees, which is early on purpose because
+        // that is what keeps the rotation going, and a car let off the leash
+        // at twenty-four degrees and twenty metres a second does not turn, it
+        // sweeps — the first version of this ended up a hundred metres off the
+        // side of the bridge, still politely rotating.
+        if (this.blockSkew < INTERCEPT_ROUND) return Math.min(cap, INTERCEPT_CLOSE);
+        // Not yet round: slow enough to turn in. A car doing forty cannot
+        // spin on the spot, and an interceptor that cannot turn is a slow car
+        // in your way.
+        if (this.intercepting) return Math.min(cap, INTERCEPT_TURN);
         return Math.min(cap, Math.max(4, qs * BLOCK_BRAKE));
       }
       // Station keeping, once it is anywhere near. A flat "back off to the
@@ -721,6 +827,11 @@ export class Driver {
     const t = this.track;
     const offRoad = Math.abs(loc.lateral) > loc.width / 2 + 1.5;
     const wrongWay = Math.abs(angleDiff(v.yaw, Math.atan2(loc.sample.dirX, loc.sample.dirZ))) > 1.9;
+    // A unit that has deliberately turned to face the oncoming car is not
+    // lost. Recovery exists to rescue a driver that has spun or gone off; run
+    // on a roadblock it undoes the roadblock, points the car back down the
+    // road and drives it away — which is exactly what this was doing.
+    if (this.facing) return false;
     const stuck = speed < 2.5 && (offRoad || wrongWay);
 
     if (stuck) this.recoverT = Math.max(this.recoverT, 0.9);

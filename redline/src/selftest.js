@@ -25,6 +25,8 @@ import { Campaign, STAGES, laneCentres, laneSpeed, trafficCount } from './campai
 import { CHEATS, findCheat, normalise, unresolved } from './cheats.js';
 import { ACTIONS, actionFor, codesFor, isBound, rebind, resetBinds, label } from './keybinds.js';
 import { PADS, looksLikeTouch } from './touch.js';
+import { DriftScore, DRIFT } from './score.js';
+import { GhostRecorder, GhostCar, GHOST_HZ, saveIfBest, loadGhost } from './ghost.js';
 
 const FIXED = 1 / 120;
 
@@ -1473,6 +1475,119 @@ function checkWetAndEscape(game) {
     `${wet.damageMax}-point car; the meter held ${cooled.toFixed(1)}s clear and paid out`;
 }
 
+// Drift scoring and the ghost.
+//
+// The scorer is an economy, so its rules are what get driven: sideways earns,
+// straight banks, a wall takes the chain and leaves the bank, and off the
+// course earns nothing. The ghost is a recording, so its check is fidelity:
+// what it plays back is the path that was recorded, saved only when faster,
+// and refused when the stored shape is not one it understands.
+function checkDriftAndGhost(game) {
+  const bad = [];
+
+  // --- the drift economy, on a fake vehicle whose slip is dictated.
+  {
+    const sc = new DriftScore();
+    const v = { u: 30, v: 0 };
+    // Straight and fast: nothing.
+    for (let i = 0; i < 120; i++) sc.step(FIXED, v, true);
+    if (sc.total || sc.chain) bad.push('driving straight scored points');
+    // Sideways: the chain builds and the multiplier climbs.
+    v.v = 12;                              // ~22 degrees of slip at 30 m/s
+    for (let i = 0; i < 240; i++) sc.step(FIXED, v, true);
+    const riding = sc.chain;
+    if (!(riding > 50)) bad.push(`two seconds sideways earned ${riding.toFixed(0)}`);
+    if (!(sc.mult > 1.2)) bad.push('the multiplier never climbed');
+    // Straighten and hold: it banks.
+    v.v = 0;
+    for (let i = 0; i < Math.round((DRIFT.bankT + 0.2) / FIXED); i++) sc.step(FIXED, v, true);
+    if (sc.chain !== 0) bad.push('the chain never banked');
+    if (Math.abs(sc.total - riding) > 1) bad.push(`banking kept ${sc.total.toFixed(0)} of ${riding.toFixed(0)}`);
+    // Slide again, hit a wall: the chain is lost, the bank is not.
+    v.v = 12;
+    for (let i = 0; i < 240; i++) sc.step(FIXED, v, true);
+    const banked = sc.total;
+    sc.drop();
+    if (sc.chain !== 0) bad.push('a wall left the chain standing');
+    if (sc.total !== banked) bad.push('a wall took the banked total');
+    // And a slide off the course is worth nothing.
+    const before = sc.total + sc.chain;
+    for (let i = 0; i < 120; i++) sc.step(FIXED, v, false);
+    if (sc.total + sc.chain > before) bad.push('drifting across the pavement scored');
+  }
+
+  // --- the yard's own numbers: the target is reachable inside the clock.
+  const yard = STAGES.find((q) => q.id === 'yard');
+  {
+    // A driver holding a plausible drift for a third of each lap earns at a
+    // measurable rate; the stage has to be winnable at well under the ideal.
+    const sc = new DriftScore();
+    const v = { u: 22, v: 8 };            // a modest, holdable slide
+    for (let i = 0; i < Math.round(1 / FIXED); i++) sc.step(FIXED, v, true);
+    sc.bank();
+    const perSec = sc.total;               // one second of modest drift, banked
+    // Sliding a third of the time at that modest rate:
+    const plausible = perSec * yard.limit / 3;
+    if (yard.driftTarget > plausible) {
+      bad.push(`the yard wants ${yard.driftTarget} and a modest driver earns ~${plausible.toFixed(0)}`);
+    }
+    if (yard.driftTarget < perSec * yard.limit / 20) {
+      bad.push('the yard target is met by one slide');
+    }
+  }
+
+  // --- the ghost: fidelity, thrift, and the save rule.
+  {
+    const t = game.race.track;
+    const rec = new GhostRecorder();
+    const v = { x: 0, z: 0, yaw: 0 };
+    // Drive a synthetic arc at 120 Hz for four seconds.
+    for (let i = 0; i < Math.round(4 / FIXED); i++) {
+      const tt = i * FIXED;
+      v.x = Math.sin(tt * 0.8) * 100;
+      v.z = tt * 40;
+      v.yaw = tt * 0.3;
+      rec.step(FIXED, v);
+    }
+    const n = rec.frames.length;
+    if (Math.abs(n - 4 * GHOST_HZ) > 2) bad.push(`four seconds recorded ${n} frames at ${GHOST_HZ} Hz`);
+
+    // Replay it and compare against the analytic path at mid-run.
+    const ghost = new GhostCar(game.scene, { name: '', body: 0xffffff, trim: 0x000000, num: 0, shape: 'gt' }, rec.frames);
+    let worst = 0;
+    for (let i = 0; i < Math.round(3.6 / FIXED); i++) {
+      ghost.step(FIXED, t);
+      const tt = ghost.t;
+      const ex = Math.sin(tt * 0.8) * 100;
+      const ez = tt * 40;
+      worst = Math.max(worst, Math.hypot(ghost.model.position.x - ex, ghost.model.position.z - ez));
+    }
+    ghost.dispose();
+    // A 20 Hz recording lerped between samples: the error bound is the sag of
+    // a chord across one sample of the tightest curve driven, plus rounding.
+    if (worst > 1.0) bad.push(`the ghost strays ${worst.toFixed(2)} m from the path it recorded`);
+
+    // Storage: only a faster run replaces the stored one, and garbage is
+    // refused rather than replayed.
+    const id = '__test__';
+    try { localStorage.removeItem(`redline.ghost.${id}`); } catch (e) { /* fine */ }
+    if (!saveIfBest(id, rec.frames, 100)) bad.push('a first run was not saved');
+    if (saveIfBest(id, rec.frames, 120)) bad.push('a SLOWER run replaced the best');
+    if (!saveIfBest(id, rec.frames, 80)) bad.push('a faster run was refused');
+    const back = loadGhost(id);
+    if (!back || back.time !== 80) bad.push('the stored ghost is not the fastest run');
+    try { localStorage.setItem(`redline.ghost.${id}`, '{"v":99,"frames":"no"}'); } catch (e) { /* fine */ }
+    if (loadGhost(id)) bad.push('a ghost from a future version was replayed anyway');
+    try { localStorage.removeItem(`redline.ghost.${id}`); } catch (e) { /* fine */ }
+  }
+
+  const ok = bad.length === 0;
+  return `${ok ? 'style is earned, banked and losable; the best run drives again' : `WRONG — ${bad[0]}`} — ` +
+    `sideways earns, straight banks, a wall keeps the bank and takes the chain; ` +
+    `the yard's ${yard.driftTarget} is reachable in ${yard.limit}s; a 4 s run is ` +
+    `${4 * GHOST_HZ} frames replayed within a metre, and only a faster time overwrites`;
+}
+
 // The keybinds.
 //
 // The thing worth checking is not that the table can be edited — it is that
@@ -2216,9 +2331,13 @@ function checkCampaign() {
       if (!r.opts) bad.push(`${s.id}'s rival ${r.name || '?'} has no character`);
       if (!r.name) bad.push(`${s.id} has an unnamed rival`);
     }
-    if (!rivals2.length && !(s.police > 0)) {
+    // A stage needs an opponent — rivals, police, or a target with a clock on
+    // it. The yard's opponent is the number: you cannot lose to nobody, but
+    // you can absolutely lose to 4000 points in 150 seconds.
+    if (!rivals2.length && !(s.police > 0) && !(s.driftTarget > 0 && s.limit > 0)) {
       bad.push(`${s.id} has nobody else on the road`);
     }
+    if (s.driftTarget && !(s.limit > 0)) bad.push(`${s.id} has a score target and no clock`);
     // Checkpoints only mean something against a clock, and they have to be in
     // order and inside the route — one past the finish is one never crossed.
     if (s.checkpoints) {
@@ -3863,6 +3982,7 @@ function assertions(game) {
     guard('chase rules    ', () => checkChaseRules(game)),
     guard('new stages     ', () => checkNewStages(game)),
     guard('wet + escape   ', () => checkWetAndEscape(game)),
+    guard('drift + ghost  ', () => checkDriftAndGhost(game)),
   ];
 }
 

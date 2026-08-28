@@ -732,7 +732,7 @@ to be turned rather than squeezing a landscape game into a strip.
 
 ## Cheats
 
-Three codes, one per campaign stage, typed into the CHEATS box on the title
+One code per campaign stage, typed into the CHEATS box on the title
 screen. Case, spaces and punctuation are thrown away, because nobody types a
 cheat code carefully — `golden gate`, `Golden-Gate` and `GOLDENGATE` all work.
 
@@ -741,6 +741,12 @@ cheat code carefully — `golden gate`, `Golden-Gate` and `GOLDENGATE` all work.
 | `FOLSOMANDSIXTH` | stage one — the duel with KESTREL, three laps, pink slips |
 | `GOLDENGATE` | stage two — CROSSTOWN, the run across the city to the on-ramp |
 | `SIXLANESOUT` | stage three — the bridge, six lanes and eleven kilometres |
+| `NOTLUCK` | stage four — THE ESTUARY, three rivals and traffic in the Oakland yards |
+| `FIRSTLIGHT` | stage five — SKYLINE, the checkpoint sprint at dawn |
+| `STYLECOUNTS` | stage six — THE YARD, a drift score against the clock |
+| `RAINCHECK` | stage seven — WET WORK, rain, roadblocks, and a car that can break |
+| `LASTCALL` | stage eight — the escape: no finish line, lose them or don't |
+| `GHOSTRUN` / `GHOSTCROSSTOWN` / `GHOSTGATE` | time trials against your own saved best — refused until the campaign is finished |
 
 Nothing lists them in the game. A panel that tells you the codes is a level
 select with extra steps, and it hands a player who opened it out of curiosity

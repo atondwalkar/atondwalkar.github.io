@@ -132,6 +132,32 @@ export const STAGES = [
     checkpoints: { at: [0.22, 0.44, 0.66, 0.86], bonus: 30 },
     onWin: 'SKYLINE_WON',
     onLose: 'OUT_OF_TIME',
+    next: 'yard',
+  },
+  {
+    id: 'yard',
+    name: 'THE YARD',
+    blurb: 'NOBODY TO BEAT. JUST THE SCORE.',
+    layout: 'estuary_rev',
+    before: 'SIDEWAYS',
+    laps: 9,
+    contact: true,
+    // No opponents at all: the stage is the car, the yard, a clock, and a
+    // number. Won the moment the score is met, lost when the clock runs out —
+    // and the chain is dropped by any wall, which is what makes the last few
+    // hundred points a decision rather than a wait.
+    //
+    // Two thousand, because the test prices it: a MODEST drifter — sideways a
+    // third of the time, no chain play at all — earns about 2150 in the clock.
+    // The stage should be winnable by that player, and quick for the one who
+    // holds a chain and lets the multiplier do the arithmetic. Four thousand
+    // read as bigger-is-better and was a wall for exactly the player the
+    // stage exists to teach.
+    driftTarget: 2000,
+    limit: 150,
+    endOnFirst: false,
+    onWin: 'YARD_SCORE',
+    onLose: 'OUT_OF_TIME',
     next: 'wetwork',
   },
   {
@@ -362,6 +388,7 @@ export class Campaign {
       roadblocks: s.roadblocks ?? null,
       escape: s.escape ?? null,
       damageMax: s.damageMax ?? null,
+      driftTarget: s.driftTarget ?? null,
       // Metres between cars of traffic — carried through so the race can keep
       // topping it up ahead of the player rather than laying it out once.
       trafficEvery: s.trafficEvery || null,
@@ -394,6 +421,7 @@ export class Campaign {
     // by winning it. Position means nothing in the first two: the police are
     // not competitors and traffic is not a field.
     if (this.stage.escape) return p.finished;
+    if (this.stage.driftTarget) return p.finished;
     if (this.stage.routeFraction) return p.finished;
     return p.finished && p.position === 1;
   }

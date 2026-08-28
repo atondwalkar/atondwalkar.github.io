@@ -304,6 +304,16 @@ export const SCRIPTS = {
     { t: 2.2, shot: 'highWide', subject: 'player', who: '', say: 'AGAIN, BEFORE THE STREETS FILL.' },
   ],
 
+  // Stage six: the yards again, empty, with a number to hit.
+  SIDEWAYS: [
+    { t: 2.8, shot: 'highWide', subject: 'player', who: '', say: 'THE YARDS, CLEARED OUT. NOBODY TO BEAT TONIGHT.' },
+    { t: 2.6, shot: 'wheelArch', subject: 'player', who: 'MARLOWE', say: 'AROUND HERE STYLE COUNTS. SHOW US THE CAR SIDEWAYS.' },
+  ],
+  YARD_SCORE: [
+    { t: 2.6, shot: 'orbit', subject: 'player', who: 'MARLOWE', say: 'THAT IS HOW IT IS DONE.' },
+    { t: 2.4, shot: 'lowRear', subject: 'player', who: '', say: 'STYLE, BANKED.' },
+  ],
+
   // Stage seven: the first circuit again, in the rain, with the heat on.
   RAIN_CHECK: [
     { t: 2.8, shot: 'highWide', subject: 'player', who: '', say: 'RAIN ON FOLSOM. THE SAME CORNERS, THE OTHER WAY, AND NONE OF THE GRIP.' },

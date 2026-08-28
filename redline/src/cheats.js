@@ -24,8 +24,16 @@ export const CHEATS = [
   { code: 'SIXLANESOUT', what: 'stage three, the bridge', stage: 'bridge' },
   { code: 'NOTLUCK', what: 'stage four, the yards', stage: 'estuary' },
   { code: 'FIRSTLIGHT', what: 'stage five, the sprint', stage: 'skyline' },
+  { code: 'STYLECOUNTS', what: 'stage six, the yard', stage: 'yard' },
   { code: 'RAINCHECK', what: 'stage seven, the wet', stage: 'wetwork' },
   { code: 'LASTCALL', what: 'stage eight, the escape', stage: 'lastcall' },
+  // The ghost runs. `trial` rather than `stage`: a time trial on that layout,
+  // against your own saved best — and the codes are refused until the campaign
+  // has been finished, which makes them the one thing here that is a reward
+  // rather than a door.
+  { code: 'GHOSTRUN', what: 'time trial, the circuit', trial: 'folsom' },
+  { code: 'GHOSTCROSSTOWN', what: 'time trial, crosstown', trial: 'run' },
+  { code: 'GHOSTGATE', what: 'time trial, the bridge', trial: 'bridge' },
 ];
 
 // Typed however: spaces, punctuation and case are all thrown away, because
@@ -43,6 +51,7 @@ export function findCheat(typed) {
 export function unresolved() {
   const bad = [];
   for (const c of CHEATS) {
+    if (c.trial) continue;              // checked against LAYOUTS by the tests
     if (!STAGES.some((s) => s.id === c.stage)) {
       bad.push(`${c.code} goes to "${c.stage}", which is not a stage`);
     }

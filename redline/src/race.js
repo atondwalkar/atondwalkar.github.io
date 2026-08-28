@@ -6,6 +6,7 @@
 import * as THREE from 'three';
 import { Vehicle } from './vehicle.js';
 import { Driver, Cruiser } from './ai.js';
+import { DriftScore } from './score.js';
 import { buildCar } from './carmodels.js';
 import { RACE, CAR, CONTACT, HULL, LIVERIES, PLAYER_LIVERY, POLICE, AI } from './defs.js';
 import { clamp, lerp, rand, sign, angleDiff, dist2D } from './utils.js';
@@ -226,6 +227,11 @@ export class Race {
     // stages where a wall is a wall and nothing more.
     this.damageMax = plan.damageMax ?? null;
     this.damage = 0;
+    // Drift scoring: a points target inside the clock. Null elsewhere, and the
+    // scorer only exists where the stage asks for it — a running total nobody
+    // can see is work nobody asked for.
+    this.driftTarget = plan.driftTarget ?? null;
+    this.drift = this.driftTarget ? new DriftScore() : null;
     // The traffic specs are kept as a POOL, not just as a one-off layout: the
     // race tops the road up ahead of the player from them as it goes.
     this.trafficSpecs = (plan.cars || []).filter((c) => c.traffic);
@@ -565,6 +571,23 @@ export class Race {
       this.results = this.order.slice();
       return;
     }
+    // Drift: score accrues while the player is sideways, and the stage is won
+    // the moment the target is met. The clock running out first is the loss.
+    if (this.state === 'racing' && this.drift && this.player) {
+      const p3 = this.player;
+      this.drift.step(dt, p3.vehicle, p3.vehicle.onTrack !== false);
+      if (p3.contactT > 0 && this.drift.chain > 0) this.drift.drop();
+      if (this.drift.total >= this.driftTarget && !p3.finished) {
+        this.drift.bank();
+        p3.finished = true;
+        p3.finishTime = this.time;
+        this.game.onFinish(p3);
+        this.state = 'finished';
+        this.results = this.order.slice();
+        return;
+      }
+    }
+
     // Escape: the stage with no finish line. The player wins by having no
     // pursuer within `clear` metres for `hold` seconds together — losing them,
     // held. Any unit closing inside the radius puts the meter back to zero,

@@ -184,6 +184,19 @@
   #heat .bar i { display: block; height: 100%; width: 0%; background: var(--cool); }
   #heat.hot .bar i { background: var(--hot); }
   #heat .k { font-size: 9px; letter-spacing: 4px; opacity: 0.7; text-align: center; margin-bottom: 5px; }
+  /* The drift score: total banked, and the chain riding on the current slide.
+     The chain is the risk, so it is the loud one. */
+  #drift {
+    position: absolute; left: 50%; top: 16px; transform: translateX(-50%);
+    display: none; text-align: center;
+  }
+  #hud.drift #drift { display: block; }
+  #hud.drift #lap-cell { display: none; }
+  #drift .k { font-size: 9px; letter-spacing: 4px; opacity: 0.7; }
+  #drift-total { font-size: 34px; line-height: 1.1; text-shadow: 0 2px 10px #000; }
+  #drift-chain { font-size: 13px; letter-spacing: 2px; color: var(--amber); height: 16px; }
+  #drift-chain.hot { color: var(--hot); }
+
   /* Damage colours as it climbs. */
   #dmg-v.warn { color: var(--amber); }
   #dmg-v.crit { color: var(--hot); }
@@ -491,6 +504,12 @@
   </div>
 
   <div id="heat"><div class="k">LOSE THEM</div><div class="bar"><i></i></div></div>
+
+  <div id="drift">
+    <div class="k">DRIFT</div>
+    <div id="drift-total">0</div>
+    <div id="drift-chain"></div>
+  </div>
 
   <div id="timing">
     <span><b>LAP</b><i id="cur-lap">--:--.---</i></span>

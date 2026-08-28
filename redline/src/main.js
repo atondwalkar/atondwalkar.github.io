@@ -19,6 +19,7 @@ import { Cutscene, SCRIPTS } from './cutscene.js';
 import { Campaign, STAGES } from './campaign.js';
 import { findCheat } from './cheats.js';
 import { TouchControls, looksLikeTouch } from './touch.js';
+import { GhostRecorder, GhostCar, saveIfBest, loadGhost } from './ghost.js';
 import { ACTIONS, actionFor, codesFor, isBound, rebind, resetBinds, label } from './keybinds.js';
 import { clamp, lerp, approach, lapTime, ordinal, dist2D } from './utils.js';
 import { Post } from './post.js';
@@ -40,6 +41,9 @@ const SLOWMO_TIME = 1.6;
 const SLOWMO_MIN = 0.32;
 
 // The night sky the game has always had, as data so a layout can override it.
+// What the ghost drives: pale, and deliberately nobody's livery.
+const GHOST_LIVERY = { name: 'GHOST', body: 0xdfe4ea, trim: 0x9aa4ad, num: 0, shape: 'gt' };
+
 const SKY_NIGHT = { top: 0x05070f, mid: 0x101a2e, low: 0x3a3040, glow: 0x6b4a32 };
 
 const SKY_R = 2400;
@@ -652,6 +656,12 @@ class Game {
   }
 
   restart() {
+    if (this.trial) {
+      // A restarted trial is a fresh run against the same ghost.
+      this.trial.recorder = new GhostRecorder();
+      this.trial.saved = false;
+      if (this.trial.ghost) this.trial.ghost.t = 0;
+    }
     this.fx.clear();
     this.race.gridUp();
     this.fastestLap = { time: Infinity, car: null };
@@ -728,6 +738,7 @@ class Game {
     const near = this._nearestRival();
     this.audio.update(dt, this.race.player, near.car, near.dist);
     this.audio.siren(this._nearestSiren());
+    this._trialTick(dt);
 
     // Once the leader has taken the flag, give everyone else a few seconds and
     // then show the result whether or not the tail-enders are home.
@@ -888,6 +899,16 @@ class Game {
       if (e.code !== 'Enter') return;
       const hit = findCheat(input.value);
       if (!hit) { said.textContent = 'NOTHING HAPPENS'; input.select(); return; }
+      if (hit.trial) {
+        // The ghost runs are the reward for finishing: the code is refused
+        // until the campaign has been.
+        let done = false;
+        try { done = localStorage.getItem('redline.done') === '1'; } catch (e) { /* fine */ }
+        if (!done) { said.textContent = 'FINISH THE CAMPAIGN FIRST'; input.select(); return; }
+        close();
+        this.timeTrial(hit.trial);
+        return;
+      }
       close();
       this.jumpToStage(hit.stage);
     });
@@ -901,6 +922,7 @@ class Game {
   async jumpToStage(id) {
     const i = STAGES.findIndex((s) => s.id === id);
     if (i < 0 || this.phase === PHASE.RACING) return;
+    this.endTrial();
     this.mode = MODE.CAMPAIGN;
     this.campaign = new Campaign(this);
     this.campaign.index = i;
@@ -963,6 +985,7 @@ class Game {
   // a second or two — which the loading screen has to be up for, or the game
   // simply stops responding for two seconds with a race on screen.
   async beginStage() {
+    this.endTrial();
     const c = this.campaign;
     c.car = this.playerLivery;
     const want = LAYOUTS[c.stage.layout] || LAYOUTS.folsom;
@@ -1077,7 +1100,63 @@ class Game {
     return best;
   }
 
+  // The time trial: you, a layout, a clock, and — once you have set one — the
+  // translucent car of your own best run to chase. Reached by cheat code after
+  // the campaign; the unlock is the code, the reward is the ghost.
+  async timeTrial(layoutId) {
+    if (this.phase === PHASE.RACING) return;
+    const layout = LAYOUTS[layoutId] || LAYOUTS.folsom;
+    this.mode = MODE.RACE;
+    this.campaign = null;
+    this._leaveAttract();
+    this.keys.clear();
+    document.getElementById('menu').style.display = 'none';
+    if (this.track.layout !== layout) await this.buildTrack(layout);
+    this.playerLivery = this.playerLivery || SELECTABLE[0];
+    this.race.buildField({
+      cars: [{ livery: this.playerLivery, isPlayer: true, name: this.playerName || 'PLAYER' }],
+      laps: layout.closed === false ? 1 : 1,
+      contact: false,
+      route: layout.closed === false ? this.track.length : null,
+    });
+    this.trial = { layoutId, recorder: new GhostRecorder(), ghost: null };
+    const best = loadGhost(layoutId);
+    if (best) {
+      this.trial.ghost = new GhostCar(this.scene, GHOST_LIVERY, best.frames);
+      this.hud.flashLap(`YOUR BEST · ${lapTime(best.time)}`, 2.2);
+    }
+    this.hud.show();
+    this.audio.unlock();
+    this._greenLight();
+  }
+
+  // The trial's frame work: record the run, drive the ghost alongside it, and
+  // when the flag comes, keep the recording only if it beat the one it raced.
+  _trialTick(dt) {
+    const t = this.trial;
+    if (!t) return;
+    if (this.race.state === 'racing' && !this.race.player.finished) {
+      t.recorder.step(dt, this.race.player.vehicle);
+    }
+    if (t.ghost && this.race.state === 'racing') t.ghost.step(dt, this.track);
+    if (this.race.state === 'finished' && !t.saved) {
+      t.saved = true;
+      const time = this.race.player.finishTime;
+      if (Number.isFinite(time) && saveIfBest(t.layoutId, t.recorder.frames, time)) {
+        this.hud.flashLap('NEW BEST — GHOST SAVED', 2.6);
+      }
+    }
+  }
+
+  endTrial() {
+    if (this.trial && this.trial.ghost) this.trial.ghost.dispose();
+    this.trial = null;
+  }
+
   async endCampaign() {
+    // The campaign is done, and done-ness outlives the session: it is what
+    // unlocks the time trial.
+    try { localStorage.setItem('redline.done', '1'); } catch (e) { /* private window */ }
     this.mode = MODE.RACE;
     this.campaign = null;
     if (this.track.layout !== LAYOUTS.folsom) await this.buildTrack(LAYOUTS.folsom);

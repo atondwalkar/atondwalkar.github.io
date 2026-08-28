@@ -16,6 +16,7 @@ export class Hud {
       lapK: $('lap-k'), rtK: $('rt-k'),
       heat: $('heat'), heatBar: document.querySelector('#heat .bar i'),
       dmgCell: $('dmg-cell'), dmgV: $('dmg-v'),
+      driftTotal: $('drift-total'), driftChain: $('drift-chain'),
       curLap: $('cur-lap'), lastLap: $('last-lap'), bestLap: $('best-lap'), gap: $('gap-ahead'),
       speed: $('speed'), gear: $('gear'), autobox: $('autobox'),
       thr: $('thr').firstElementChild, brk: $('brk').firstElementChild,
@@ -92,8 +93,18 @@ export class Hud {
     // A run hides the race furniture wholesale rather than filling it with
     // meaningless numbers: "3rd of 4" against three police cars is not a
     // position, and a best lap on a road with no laps on it is blank forever.
-    this.el.hud.classList.toggle('run', race.route !== null || !!race.escape);
+    this.el.hud.classList.toggle('run', race.route !== null || !!race.escape || !!race.drift);
     this.el.hud.classList.toggle('escape', !!race.escape);
+    this.el.hud.classList.toggle('drift', !!race.drift);
+    // The score: banked total large, the chain and its multiplier riding
+    // above it in amber — the number you are one wall away from losing.
+    if (race.drift && this.el.driftTotal) {
+      this._set('dtot', this.el.driftTotal, String(Math.floor(race.drift.total)));
+      const c = race.drift.chain;
+      this._set('dch', this.el.driftChain,
+        c > 0.5 ? `+${Math.floor(c)} ×${race.drift.mult.toFixed(1)}` : '');
+      this.el.driftChain.classList.toggle('hot', race.drift.mult > 2.5);
+    }
     // The heat meter: how close the player is to having lost them. Filling
     // while nobody is near; red and empty the moment somebody is.
     if (race.escape && this.el.heatBar) {
@@ -112,7 +123,17 @@ export class Hud {
         this.el.dmgV.classList.toggle('crit', k > 0.8);
       }
     }
-    if (race.escape) {
+    if (race.drift) {
+      // The board is target and clock: how many points still owed, how long.
+      const owed = Math.max(0, race.driftTarget - race.drift.total - race.drift.chain);
+      this._set('lapk', this.el.lapK, 'TO GO');
+      this._set('lap', this.el.lap, String(Math.ceil(owed)));
+      this.el.lap.classList.toggle('final', owed < race.driftTarget * 0.15);
+      const clock = Math.max(0, (race.limit ?? 0) - race.time);
+      this._set('rtk', this.el.rtK, 'CLOCK');
+      this._set('rt', this.el.raceTime, lapTime(race.state === 'countdown' ? race.limit ?? 0 : clock));
+      this.el.raceTime.classList.toggle('urgent', clock < 30 && race.state === 'racing');
+    } else if (race.escape) {
       // No distance readout — there is nowhere to get to. The clock stays.
       const clock = Math.max(0, (race.limit ?? 0) - race.time);
       this._set('rtk', this.el.rtK, 'CLOCK');

@@ -307,6 +307,17 @@ for (const id of Object.keys(LAYOUTS)) {
 // the generator, because it belongs to the STAGE's version of the road, not to
 // reversal in general.
 LAYOUTS.run_rev.name = 'SKYLINE';
+
+// Stage seven drives the first circuit backwards in the rain. `wet` multiplies
+// the grip at the one place grip is decided; the darker fog and the harder
+// bloom are what rain looks like at night from a car.
+LAYOUTS.folsom_rev.name = 'WET WORK';
+LAYOUTS.folsom_rev.wet = 0.78;
+LAYOUTS.folsom_rev.fog = { near: 60, far: 520, colour: 0x0e1418 };
+
+// Stage eight is the bridge back toward the city with everything out. Same
+// deck; what changes is what is on it.
+LAYOUTS.bridge_rev.name = 'LAST CALL';
 LAYOUTS.run_rev.sky = { top: 0x1a2a45, mid: 0x4a4a68, low: 0xb0685a, glow: 0xd88a4e };
 LAYOUTS.run_rev.fog = { near: 120, far: 1100, colour: 0x554455 };
 
@@ -1167,8 +1178,12 @@ export class Track {
       // resurfacing, not shading.
       const patch = Math.sin(i * 0.37) * Math.cos(i * 0.11) * 0.5 + 0.5;
       const seam = i % 23 === 0 || i % 37 === 0;
-      const a = 0.115 + patch * 0.055 + (seam ? 0.03 : 0);
-      quad(p, q, [a, a * 1.02, a * 1.05], -hw0, hw0, -hw1, hw1, 0.02);
+      // Wet asphalt is darker and slightly blue — the water in the surface
+      // kills the diffuse and what is left leans toward the sky. The grip
+      // change lives in the race; this is only what the rain looks like.
+      const wetK = this.layout.wet ? 0.62 : 1;
+      const a = (0.115 + patch * 0.055 + (seam ? 0.03 : 0)) * wetK;
+      quad(p, q, [a, a * 1.02, a * (this.layout.wet ? 1.22 : 1.05)], -hw0, hw0, -hw1, hw1, 0.02);
 
       // Edge line, solid white, close in to the curb.
       // (On a six-lane deck the same pass runs; what changes is how many

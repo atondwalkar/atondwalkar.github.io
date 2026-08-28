@@ -14,6 +14,8 @@ export class Hud {
     this.el = {
       hud: $('hud'), pos: $('pos-v'), lap: $('lap-v'), raceTime: $('race-time'),
       lapK: $('lap-k'), rtK: $('rt-k'),
+      heat: $('heat'), heatBar: document.querySelector('#heat .bar i'),
+      dmgCell: $('dmg-cell'), dmgV: $('dmg-v'),
       curLap: $('cur-lap'), lastLap: $('last-lap'), bestLap: $('best-lap'), gap: $('gap-ahead'),
       speed: $('speed'), gear: $('gear'), autobox: $('autobox'),
       thr: $('thr').firstElementChild, brk: $('brk').firstElementChild,
@@ -90,8 +92,33 @@ export class Hud {
     // A run hides the race furniture wholesale rather than filling it with
     // meaningless numbers: "3rd of 4" against three police cars is not a
     // position, and a best lap on a road with no laps on it is blank forever.
-    this.el.hud.classList.toggle('run', race.route !== null);
-    if (race.route !== null) {
+    this.el.hud.classList.toggle('run', race.route !== null || !!race.escape);
+    this.el.hud.classList.toggle('escape', !!race.escape);
+    // The heat meter: how close the player is to having lost them. Filling
+    // while nobody is near; red and empty the moment somebody is.
+    if (race.escape && this.el.heatBar) {
+      const k = clamp((race.coolT || 0) / race.escape.hold, 0, 1);
+      this.el.heatBar.style.width = `${(k * 100).toFixed(1)}%`;
+      this.el.heat.classList.toggle('hot', race.nearestHeat <= race.escape.clear);
+    }
+    // Damage, where the stage takes it.
+    if (this.el.dmgCell) {
+      const on = !!race.damageMax;
+      this.el.dmgCell.style.display = on ? '' : 'none';
+      if (on) {
+        const k = (race.damage || 0) / race.damageMax;
+        this.el.dmgV.textContent = `${Math.round(k * 100)}%`;
+        this.el.dmgV.classList.toggle('warn', k > 0.5 && k <= 0.8);
+        this.el.dmgV.classList.toggle('crit', k > 0.8);
+      }
+    }
+    if (race.escape) {
+      // No distance readout — there is nowhere to get to. The clock stays.
+      const clock = Math.max(0, (race.limit ?? 0) - race.time);
+      this._set('rtk', this.el.rtK, 'CLOCK');
+      this._set('rt', this.el.raceTime, lapTime(race.state === 'countdown' ? race.limit ?? 0 : clock));
+      this.el.raceTime.classList.toggle('urgent', clock < 30 && race.state === 'racing');
+    } else if (race.route !== null) {
       // A run has no laps and no elapsed time worth reading: what matters is
       // how far there is to go and how long there is to do it in. Same two
       // cells, relabelled, rather than a second strip that only ever appears
@@ -527,6 +554,14 @@ export class Hud {
 
   // The minimap path is built once from the track's samples and cached. Swap
   // the track without this and it draws the old circuit forever — silently.
+  // A hit landed: pulse the damage number so it is seen to move.
+  damaged(k) {
+    if (!this.el.dmgV) return;
+    this.el.dmgV.style.transform = 'scale(1.3)';
+    setTimeout(() => { this.el.dmgV.style.transform = ''; }, 120);
+    void k;
+  }
+
   trackChanged() { this._mapPath = null; this._mapT = null; this._cache = {}; }
 
   hideResults() { this.el.results.classList.remove('open'); }

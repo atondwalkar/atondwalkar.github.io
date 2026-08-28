@@ -8,7 +8,7 @@ import { Vehicle } from './vehicle.js';
 import { Driver, Cruiser } from './ai.js';
 import { buildCar } from './carmodels.js';
 import { RACE, CAR, CONTACT, HULL, LIVERIES, PLAYER_LIVERY, POLICE, AI } from './defs.js';
-import { clamp, lerp, rand, sign, angleDiff } from './utils.js';
+import { clamp, lerp, rand, sign, angleDiff, dist2D } from './utils.js';
 
 export class Car {
   constructor(livery, isPlayer = false) {
@@ -216,6 +216,16 @@ export class Race {
     // Where and how often fresh units cut in ahead of the player, and how many
     // there may be at once. Null for a stage with a fixed field.
     this.intercept = plan.intercept ?? null;
+    this.roadblocks = plan.roadblocks ?? null;
+    // Losing the police as the WIN condition: no pursuer within `clear` for
+    // `hold` seconds. Null everywhere the stage has a finish line instead.
+    this.escape = plan.escape ?? null;
+    this.coolT = 0;
+    this.nearestHeat = Infinity;
+    // How much the player's car can take before the stage is lost. Null for
+    // stages where a wall is a wall and nothing more.
+    this.damageMax = plan.damageMax ?? null;
+    this.damage = 0;
     // The traffic specs are kept as a POOL, not just as a one-off layout: the
     // race tops the road up ahead of the player from them as it goes.
     this.trafficSpecs = (plan.cars || []).filter((c) => c.traffic);
@@ -475,7 +485,7 @@ export class Race {
     // --- drivers
     for (let ci = 0; ci < this.cars.length; ci++) {
       const car = this.cars[ci];
-      if (skip(car, ci)) continue;
+      if (skip(car, ci) || car.roadblock) continue;
       const step = car.traffic && car.loc
         && Math.abs(this.track.gap(car.loc.s, here)) > FAR_TRAFFIC ? dt * FAR_EVERY : dt;
       car._step = step;
@@ -509,12 +519,17 @@ export class Race {
       // for running wide — no invisible walls, just a car that will not turn.
       v.grade = loc.grade;
       const over = Math.abs(loc.lateral) - loc.width / 2;
-      if (over <= 0) { v.surfaceGrip = 1; v.onTrack = true; car.offTrackT = 0; }
-      else if (over < 1.6) { v.surfaceGrip = 0.92; v.onTrack = true; }
+      // Rain is a multiplier on whatever the surface gives, applied here at
+      // the ONE place grip is decided — a wet road and a wet verge are both
+      // wetter than their dry selves, and a rain that only affected one of
+      // them would make running wide the fast line.
+      const wet = this.track.layout.wet || 1;
+      if (over <= 0) { v.surfaceGrip = wet; v.onTrack = true; car.offTrackT = 0; }
+      else if (over < 1.6) { v.surfaceGrip = 0.92 * wet; v.onTrack = true; }
       else {
         v.onTrack = false;
         car.offTrackT += dt;
-        v.surfaceGrip = loc.sample.curvature > 0.0055 ? 0.80 : 0.52;
+        v.surfaceGrip = (loc.sample.curvature > 0.0055 ? 0.80 : 0.52) * wet;
       }
     }
 
@@ -538,6 +553,7 @@ export class Race {
       this._topUpTraffic();
       this._leash();
       this._intercept(dt);
+      this._roadblocks(dt);
     }
 
     this._order();
@@ -549,6 +565,30 @@ export class Race {
       this.results = this.order.slice();
       return;
     }
+    // Escape: the stage with no finish line. The player wins by having no
+    // pursuer within `clear` metres for `hold` seconds together — losing them,
+    // held. Any unit closing inside the radius puts the meter back to zero,
+    // which is what makes the leash and the interceptors the opposition here:
+    // the road never ends, only the heat does.
+    if (this.state === 'racing' && this.escape && this.player) {
+      const p2 = this.player;
+      let nearest = Infinity;
+      for (const c of this.cars) {
+        if (!c.pursuer || !c.loc || !p2.loc) continue;
+        nearest = Math.min(nearest, dist2D(p2.vehicle.x, p2.vehicle.z, c.vehicle.x, c.vehicle.z));
+      }
+      this.coolT = nearest > this.escape.clear ? (this.coolT || 0) + dt : 0;
+      this.nearestHeat = nearest;
+      if (this.coolT >= this.escape.hold && !p2.finished) {
+        p2.finished = true;
+        p2.finishTime = this.time;
+        this.game.onFinish(p2);
+        this.state = 'finished';
+        this.results = this.order.slice();
+        return;
+      }
+    }
+
     // A run ends when the player reaches the ramp. The units chasing them
     // never finish anything, so waiting for every car would wait forever.
     if (this.state === 'racing' && this.route !== null && this.player.finished) {
@@ -996,6 +1036,62 @@ export class Race {
     this.game.scene.add(car.model);
   }
 
+  // Roadblocks: parked units across the road ahead.
+  //
+  // Not a driver slowing down to block — a car with NO driver, placed
+  // stationary and turned across the carriageway, with its bar lit. What it
+  // asks of the player is different from what a chaser asks: a chaser is
+  // pressure from behind, an interceptor is an argument in front, and a
+  // roadblock is a puzzle — which side is open, decided at speed.
+  //
+  // Two cars, offset to alternating sides so there is always a gap, and the
+  // gap is never in the middle two blocks running.
+  _roadblocks(dt) {
+    const spec = this.roadblocks;
+    if (!spec) return;
+    const t = this.track;
+    const p = this.player;
+    if (!p || !p.loc) return;
+    this._blockT = (this._blockT || 0) + dt;
+    if (this._blockT < spec.every) return;
+    this._blockT = 0;
+
+    const n = (this._blockN = (this._blockN || 0) + 1);
+    const ahead = spec.from + ((n * 131) % Math.max(1, spec.to - spec.from));
+    const s = t.closed ? p.loc.s + ahead : Math.min(t.length - 60, p.loc.s + ahead);
+    if (!t.closed && s <= p.loc.s + spec.from * 0.8) return;
+    const at = t.atDistance(s);
+    const half = at.width / 2;
+    // The open side alternates, and the two cars cover the rest of the road
+    // nose to tail, turned across it.
+    const openSide = (n % 2) ? 1 : -1;
+    const yaw = Math.atan2(at.dirX, at.dirZ) + Math.PI / 2 * openSide;
+    for (let k = 0; k < 2; k++) {
+      const lat = -openSide * (half - 2.2 - k * 4.6);
+      const car = new Car(POLICE.livery, false);
+      car.name = '';
+      car.pursuer = true;                        // flashes, counts for heat
+      car.roadblock = true;                      // but never moves
+      car.vehicle.reset(at.x + at.nx * lat, at.z + at.nz * lat, yaw);
+      car.vehicle.autoShift = true;
+      car.loc = t.locate(car.vehicle.x, car.vehicle.z);
+      car.lastS = car.loc.s;
+      car.progress = car.loc.s;
+      car.prev = null;
+      car.syncModel(t);
+      this.cars.push(car);
+      this.game.scene.add(car.model);
+    }
+    // And kept from piling up: one behind the player is done with.
+    for (const c of this.cars) {
+      if (c.roadblock && c.loc && t.gap(p.loc.s, c.loc.s) > 250) c.gone = true;
+    }
+    if (this.cars.some((c) => c.gone)) {
+      for (const c of this.cars) if (c.gone) disposeCar(this.game.scene, c.model);
+      this.cars = this.cars.filter((c) => !c.gone);
+    }
+  }
+
   // Keep the pursuit in the mirror.
   //
   // A police car that has lost you by four hundred metres is not a pursuit any
@@ -1019,7 +1115,7 @@ export class Race {
     const p = this.player;
     if (!p || !p.loc) return;
     for (const car of this.cars) {
-      if (!car.pursuer || !car.loc) continue;
+      if (!car.pursuer || car.roadblock || !car.loc) continue;
       const gap = t.gap(p.loc.s, car.loc.s);         // + means the player is ahead
       if (gap < this.leash) continue;
       const back = LEASH_BACK + (car.driver ? (car.driver.opts.station | 0) * 14 : 0);

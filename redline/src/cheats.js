@@ -24,6 +24,8 @@ export const CHEATS = [
   { code: 'SIXLANESOUT', what: 'stage three, the bridge', stage: 'bridge' },
   { code: 'NOTLUCK', what: 'stage four, the yards', stage: 'estuary' },
   { code: 'FIRSTLIGHT', what: 'stage five, the sprint', stage: 'skyline' },
+  { code: 'RAINCHECK', what: 'stage seven, the wet', stage: 'wetwork' },
+  { code: 'LASTCALL', what: 'stage eight, the escape', stage: 'lastcall' },
 ];
 
 // Typed however: spaces, punctuation and case are all thrown away, because

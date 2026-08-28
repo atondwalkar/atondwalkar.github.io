@@ -1296,6 +1296,183 @@ function checkNewStages(game) {
     `paid once each`;
 }
 
+// Stages seven and eight: the rain, and the stage with no finish line.
+//
+// Four mechanics, each driven. Wet has to change a number a driver feels (a
+// braking distance), a roadblock has to be a stationary object across the
+// road, damage has to accumulate and bust, and the escape meter has to fill
+// ONLY while nobody is close — each of these is the kind of flag that can be
+// wired to nothing and still look right in the data.
+function checkWetAndEscape(game) {
+  const bad = [];
+  const wet = STAGES.find((q) => q.id === 'wetwork');
+  const last = STAGES.find((q) => q.id === 'lastcall');
+
+  // --- wet lengthens a braking distance.
+  let dryStop = 0, wetStop = 0;
+  {
+    const stop = (grip) => {
+      const v = new Vehicle(CAR);
+      v.reset(0, 0, 0);
+      v.autoShift = true;
+      v.surfaceGrip = grip;
+      v.setSpeed(100 / 3.6 * 1.0);
+      v.u = 27.8;                        // 100 km/h
+      let dist = 0;
+      for (let i = 0; i < Math.round(8 / FIXED); i++) {
+        v.throttle = 0; v.brake = 1;
+        v.update(FIXED, 2);
+        dist += v.u * FIXED;
+        if (v.u < 0.5) break;
+      }
+      return dist;
+    };
+    dryStop = stop(1);
+    wetStop = stop(LAYOUTS.folsom_rev.wet);
+    if (!(LAYOUTS.folsom_rev.wet < 1)) bad.push('the wet layout is not wet');
+    if (wetStop < dryStop * 1.12) {
+      bad.push(`the wet stop (${wetStop.toFixed(1)} m) is barely longer than the dry (${dryStop.toFixed(1)} m)`);
+    }
+  }
+
+  // --- a roadblock stands across the road, stationary, and is cleaned up.
+  let blocks = 0, across = 0;
+  {
+    const t = new Track(LAYOUTS.folsom_rev);
+    const race = Object.create(Object.getPrototypeOf(game.race));
+    Object.assign(race, {
+      game, track: t, cars: [], roadblocks: { every: 0.5, from: 300, to: 500 },
+      state: 'racing', time: 0,
+    });
+    const p0 = t.atDistance(100);
+    const player = {
+      vehicle: new Vehicle(CAR), loc: null, isPlayer: true,
+      traffic: false, pursuer: false, syncModel() {},
+    };
+    player.vehicle.reset(p0.x, p0.z, Math.atan2(p0.dirX, p0.dirZ));
+    player.loc = t.locate(player.vehicle.x, player.vehicle.z);
+    race.player = player;
+    race.cars = [player];
+    race._roadblocks(1);
+    const units = race.cars.filter((c) => c.roadblock);
+    blocks = units.length;
+    if (blocks !== 2) bad.push(`a roadblock is ${blocks} cars, not 2`);
+    for (const u of units) {
+      if (Math.abs(u.vehicle.u) > 0.1) bad.push('a roadblock car is moving');
+      if (u.driver) bad.push('a roadblock car has a driver');
+      const road = t.atDistance(u.loc.s);
+      const skew = Math.abs(angleDiff(u.vehicle.yaw, Math.atan2(road.dirX, road.dirZ))) * 57.3;
+      across = Math.max(across, skew);
+      if (skew < 60) bad.push(`a roadblock car sits only ${skew.toFixed(0)}° across the road`);
+      if (t.gap(u.loc.s, player.loc.s) < 200) bad.push('a roadblock landed on the bonnet');
+    }
+    // There is always a way through: the two cars must not span the road.
+    if (units.length === 2) {
+      const lats = units.map((u) => u.loc.lateral).sort((a, b) => a - b);
+      const width = t.atDistance(units[0].loc.s).width;
+      const gapL = lats[0] + width / 2;
+      const gapR = width / 2 - lats[1];
+      if (Math.max(gapL, gapR) < 3.4) bad.push('a roadblock leaves no gap to drive through');
+    }
+    // And one left far behind is taken away on the next spawn tick.
+    const far = t.atDistance(900);
+    player.vehicle.reset(far.x, far.z, Math.atan2(far.dirX, far.dirZ));
+    player.loc = t.locate(player.vehicle.x, player.vehicle.z);
+    race._blockT = 99;
+    race._roadblocks(1);
+    if (race.cars.some((c) => c.roadblock && t.gap(player.loc.s, c.loc.s) > 250)) {
+      bad.push('a passed roadblock is never cleaned up');
+    }
+    for (const c of race.cars) if (c.model) {
+      game.scene.remove(c.model);
+      c.model.traverse((o) => { if (o.geometry) o.geometry.dispose(); });
+    }
+  }
+
+  // --- damage accumulates, pulses the HUD, and busts.
+  {
+    const race = game.race;
+    const kept = {
+      dmgMax: race.damageMax, dmg: race.damage, state: race.state,
+      busted: game._busted, results: race.results,
+    };
+    race.damageMax = wet.damageMax;
+    race.damage = 0;
+    race.state = 'racing';
+    game._busted = false;
+    game.onImpact(game.race.player, 10);
+    if (race.damage !== 10) bad.push(`one 10-force hit left ${race.damage} damage`);
+    if (game._busted) bad.push('a first hit busted the car');
+    for (let i = 0; i < 10; i++) game.onImpact(game.race.player, 10);
+    if (!game._busted) bad.push(`${race.damage} of ${race.damageMax} damage never busted`);
+    if (game._busted && race.state !== 'finished') bad.push('busting did not end the stage');
+    // Small knocks are free, same as the sound: the game already ignores them.
+    race.damage = 0; race.state = 'racing'; game._busted = false;
+    game.onImpact(game.race.player, 0.5);
+    if (race.damage > 0) bad.push('a touch you cannot hear still cost damage');
+    race.damageMax = kept.dmgMax; race.damage = kept.dmg; race.state = kept.state;
+    game._busted = kept.busted; race.results = kept.results;
+  }
+
+  // --- the escape meter fills only while clear, resets when not, and wins.
+  let cooled = 0;
+  {
+    const t = game.race.track;
+    const race = Object.create(Object.getPrototypeOf(game.race));
+    let won = 0;
+    Object.assign(race, {
+      game: { onFinish: () => won++, onLap() {}, onCheckpoint() {} },
+      track: t, state: 'racing', time: 0, laps: 1, route: null, limit: null,
+      escape: { clear: last.escape.clear, hold: 2 }, coolT: 0, nearestHeat: Infinity,
+      leash: null, intercept: null, roadblocks: null, trafficSpecs: [], trafficEvery: 0,
+      checkpoints: null, contact: false, endOnFirst: false, formation: 'pursuit',
+      damageMax: null, results: [], order: [],
+    });
+    const mk = (at, pursuer) => {
+      const p2 = t.atDistance(at);
+      const c = {
+        vehicle: new Vehicle(CAR), loc: null, isPlayer: !pursuer, pursuer,
+        traffic: false, finished: false, lap: 0, lastS: 0, progress: 0,
+        contactT: 0, position: 1, lapTimes: [], bestLap: Infinity,
+        syncModel() {}, capture() {}, model: null, driver: null,
+      };
+      c.vehicle.reset(p2.x, p2.z, Math.atan2(p2.dirX, p2.dirZ));
+      c.loc = t.locate(c.vehicle.x, c.vehicle.z);
+      c.lastS = c.loc.s;
+      return c;
+    };
+    const me = mk(400, false);
+    const cop = mk(300, true);          // 100 m back: NOT clear
+    race.cars = [me, cop];
+    race.player = me;
+    race._order = () => { race.order = [me, cop]; return race.order; };
+    for (let i = 0; i < 60; i++) race.update(FIXED);
+    if (race.coolT > 0) bad.push('the meter fills with a unit a hundred metres back');
+    // Move the unit out past clear: now it fills.
+    const farP = t.atDistance(300 - last.escape.clear - 200);
+    cop.vehicle.reset(farP.x, farP.z, 0);
+    cop.loc = t.locate(cop.vehicle.x, cop.vehicle.z);
+    for (let i = 0; i < Math.round(1 / FIXED) && !won; i++) race.update(FIXED);
+    cooled = race.coolT;
+    if (!(race.coolT > 0.5)) bad.push(`clear of everybody, the meter read ${race.coolT.toFixed(2)}s`);
+    // And it pays out: at hold, the player has escaped.
+    for (let i = 0; i < Math.round(2 / FIXED) && !won; i++) race.update(FIXED);
+    if (!won) bad.push('holding the gap never won the stage');
+    if (won && race.state !== 'finished') bad.push('escaping did not end the stage');
+    // The finale's own numbers have to be winnable BY DESIGN: no leash and no
+    // interceptors, or the meter is emptied by the machinery that keeps other
+    // stages alive.
+    if (last.leash) bad.push('the escape stage has a leash — escaping empties the meter');
+    if (last.intercept) bad.push('the escape stage spawns interceptors faster than the hold');
+  }
+
+  const ok = bad.length === 0;
+  return `${ok ? 'rain costs grip, blocks stand across, damage busts, and losing them wins' : `WRONG — ${bad[0]}`} — ` +
+    `100–0 goes ${dryStop.toFixed(0)} m dry and ${wetStop.toFixed(0)} m wet; a block is ` +
+    `${blocks} parked cars at ${across.toFixed(0)}° with a gap; eleven audible hits bust a ` +
+    `${wet.damageMax}-point car; the meter held ${cooled.toFixed(1)}s clear and paid out`;
+}
+
 // The keybinds.
 //
 // The thing worth checking is not that the table can be edited — it is that
@@ -3685,6 +3862,7 @@ function assertions(game) {
     guard('keybinds       ', () => checkKeybinds(game)),
     guard('chase rules    ', () => checkChaseRules(game)),
     guard('new stages     ', () => checkNewStages(game)),
+    guard('wet + escape   ', () => checkWetAndEscape(game)),
   ];
 }
 
@@ -4102,6 +4280,22 @@ function dumpFrames(game) {
     game.scene.fog.near = wasSky.near; game.scene.fog.far = wasSky.far;
     disposeTrack(game.scene, skyl);
     dump.push(`the estuary is ${(est.length / 1000).toFixed(2)} km, the skyline ${(skyl.length / 1000).toFixed(2)}`);
+
+    // Stage seven's rain, which is a fog change and a surface change and needs
+    // an eye on both at once.
+    const wetT = new Track(LAYOUTS.folsom_rev);
+    for (const _ of wetT.build(game.scene)) { /* off the clock */ }
+    game.track = wetT;
+    const wf = LAYOUTS.folsom_rev.fog;
+    const keptFog = { c: game.scene.fog.color.getHex(), n: game.scene.fog.near, f: game.scene.fog.far };
+    game.scene.fog.color.setHex(wf.colour);
+    game.scene.fog.near = wf.near; game.scene.fog.far = wf.far;
+    const w0 = wetT.atDistance(60);
+    shot('wetwork', [w0.x, w0.y + 2.6, w0.z],
+      [w0.x + w0.dirX * 140, w0.y + 4, w0.z + w0.dirZ * 140], 60);
+    game.scene.fog.color.setHex(keptFog.c);
+    game.scene.fog.near = keptFog.n; game.scene.fog.far = keptFog.f;
+    disposeTrack(game.scene, wetT);
   } catch (e) { console.log(`stage 4/5 dump failed: ${e.message}`); }
 
   // Stage two, built for real. Last of all, and it replaces the world: the

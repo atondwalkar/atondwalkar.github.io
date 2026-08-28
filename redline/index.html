@@ -171,6 +171,22 @@
      the three panels that say those things are not drawn on one. What is left
      is the distance to the end and the clock, which is the whole stage. */
   #hud.run #pos-cell, #hud.run #timing, #hud.run #standings { display: none; }
+  /* The heat meter: the escape stage's whole scoreboard. Fills while nobody is
+     close, empties the moment anybody is. */
+  #heat {
+    position: absolute; left: 50%; top: 16px; transform: translateX(-50%);
+    width: min(46vw, 420px); display: none;
+  }
+  #hud.escape #heat { display: block; }
+  /* An escape stage has no distance-to-ramp either — there is no ramp. */
+  #hud.escape #lap-cell { display: none; }
+  #heat .bar { height: 9px; background: rgba(8, 11, 15, 0.7); border: 1px solid var(--line); border-radius: 3px; overflow: hidden; }
+  #heat .bar i { display: block; height: 100%; width: 0%; background: var(--cool); }
+  #heat.hot .bar i { background: var(--hot); }
+  #heat .k { font-size: 9px; letter-spacing: 4px; opacity: 0.7; text-align: center; margin-bottom: 5px; }
+  /* Damage colours as it climbs. */
+  #dmg-v.warn { color: var(--amber); }
+  #dmg-v.crit { color: var(--hot); }
 
   #map {
     position: absolute; left: 22px; top: 18px; width: 216px; height: 216px;
@@ -470,15 +486,18 @@
 <div id="hud">
   <div id="top">
     <div class="cell" id="pos-cell"><div class="k">POS</div><div class="v" id="pos-v">16/16</div></div>
-    <div class="cell"><div class="k" id="lap-k">LAP</div><div class="v" id="lap-v">1/3</div></div>
+    <div class="cell" id="lap-cell"><div class="k" id="lap-k">LAP</div><div class="v" id="lap-v">1/3</div></div>
     <div class="cell"><div class="k" id="rt-k">RACE</div><div class="v" id="race-time">0:00.000</div></div>
   </div>
+
+  <div id="heat"><div class="k">LOSE THEM</div><div class="bar"><i></i></div></div>
 
   <div id="timing">
     <span><b>LAP</b><i id="cur-lap">--:--.---</i></span>
     <span><b>LAST</b><i id="last-lap">--:--.---</i></span>
     <span><b>BEST</b><i id="best-lap">--:--.---</i></span>
     <span><b>AHEAD</b><i id="gap-ahead">--</i></span>
+    <span id="dmg-cell" style="display:none"><b>DAMAGE</b><i id="dmg-v">0%</i></span>
   </div>
 
   <div id="map"><canvas id="map-c" width="432" height="432"></canvas></div>

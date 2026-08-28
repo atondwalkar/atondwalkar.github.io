@@ -132,6 +132,64 @@ export const STAGES = [
     checkpoints: { at: [0.22, 0.44, 0.66, 0.86], bonus: 30 },
     onWin: 'SKYLINE_WON',
     onLose: 'OUT_OF_TIME',
+    next: 'wetwork',
+  },
+  {
+    id: 'wetwork',
+    name: 'WET WORK',
+    blurb: 'RAIN. ROADBLOCKS. ONE CAR TO KEEP WHOLE.',
+    layout: 'folsom_rev',
+    before: 'RAIN_CHECK',
+    // The first circuit again, backwards, in the rain, with the police on the
+    // course — three laps of a track you know driven like one you do not.
+    laps: 3,
+    contact: true,
+    police: 3,
+    leash: 300,
+    intercept: { every: 14, from: 220, to: 420, max: 6 },
+    roadblocks: { every: 22, from: 300, to: 500 },
+    // And a car that can only take so much. The wall is no longer free.
+    damageMax: 60,
+    endOnFirst: false,
+    formation: 'pursuit',
+    onWin: 'RAIN_WON',
+    onLose: 'BUSTED',
+    next: 'lastcall',
+  },
+  {
+    id: 'lastcall',
+    name: 'LAST CALL',
+    blurb: 'NO FINISH LINE. LOSE THEM OR DO NOT.',
+    layout: 'bridge_rev',
+    before: 'LAST_CALL',
+    laps: 1,
+    contact: true,
+    police: 4,
+    // NO leash and NO interceptors, and that is the design, not an oversight.
+    //
+    // The leash exists to keep a pursuit alive by bringing lost units back —
+    // which on an escape stage is a machine for emptying the meter: escape too
+    // well and a police car teleports to a hundred and forty metres behind
+    // you. And an interceptor every nine seconds spawns ahead, turns, and is
+    // inside the clear radius within a couple — against a fourteen-second
+    // hold, the meter could never fill. Both are machinery for stages you WIN
+    // BY ARRIVING; this one you win by getting away, so getting away has to be
+    // allowed to work.
+    //
+    // What makes it hard instead: four units from the start, traffic thick
+    // enough that they are a wall as much as a hazard, and roadblocks that
+    // slow YOU while the pack behind does not have to thread them. The cars
+    // are mechanically identical — the police lose ground only where they
+    // brake for the traffic you cut through, which makes the traffic the
+    // terrain of the duel.
+    trafficEvery: 45,
+    roadblocks: { every: 18, from: 300, to: 520 },
+    escape: { clear: 260, hold: 14 },
+    limit: 300,
+    endOnFirst: false,
+    formation: 'pursuit',
+    onWin: 'CLEAN_AWAY',
+    onLose: 'PULLED_OVER',
     next: null,
   },
 ];
@@ -301,6 +359,9 @@ export class Campaign {
       // moves the finish with it instead of stranding it inside a block.
       route: s.routeFraction && track ? s.routeFraction * track.length : null,
       checkpoints: s.checkpoints ?? null,
+      roadblocks: s.roadblocks ?? null,
+      escape: s.escape ?? null,
+      damageMax: s.damageMax ?? null,
       // Metres between cars of traffic — carried through so the race can keep
       // topping it up ahead of the player rather than laying it out once.
       trafficEvery: s.trafficEvery || null,
@@ -328,6 +389,12 @@ export class Campaign {
   won_(race) {
     const p = race.player;
     if (!p) return false;
-    return this.stage.routeFraction ? p.finished : (p.finished && p.position === 1);
+    // An escape is won by having escaped — `finished` is only ever set there
+    // by the meter filling. A route is won by reaching its end. A race is won
+    // by winning it. Position means nothing in the first two: the police are
+    // not competitors and traffic is not a field.
+    if (this.stage.escape) return p.finished;
+    if (this.stage.routeFraction) return p.finished;
+    return p.finished && p.position === 1;
   }
 }

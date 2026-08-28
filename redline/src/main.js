@@ -545,6 +545,20 @@ class Game {
     this.audio.impact(force * 1.2);
     this.fx.spark(car.vehicle.x, 0.4, car.vehicle.z, force);
     if (car.isPlayer) this.chase.bump(clamp(force / 7, 0.15, 1.4));
+    // Damage, where the stage has it. Only impacts that would already have
+    // made a noise count, and only the player takes it — a damage model for
+    // three hundred cars of traffic is bookkeeping nobody reads.
+    if (car.isPlayer && this.race.damageMax && this.race.state === 'racing') {
+      this.race.damage = Math.min(this.race.damageMax, (this.race.damage || 0) + force);
+      this.hud.damaged(this.race.damage / this.race.damageMax);
+      if (this.race.damage >= this.race.damageMax && !this._busted) {
+        this._busted = true;
+        // Busted: the stage ends as a loss, through the same path a clock
+        // running out takes.
+        this.race.state = 'finished';
+        this.race.results = this.race.order.slice();
+      }
+    }
   }
 
   // --------------------------------------------------------------- flow
@@ -1011,6 +1025,8 @@ class Game {
     this.hud.hideResults();
     this.hud.show();
     this.chase.started = false;
+    this._busted = false;
+    this.race.damage = 0;
     this.keys.clear();
     // A rolling start gets the slow-motion opening; a standing one has five
     // seconds of red lights to do the same job.

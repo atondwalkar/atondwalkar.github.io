@@ -304,6 +304,31 @@ export const SCRIPTS = {
     { t: 2.2, shot: 'highWide', subject: 'player', who: '', say: 'AGAIN, BEFORE THE STREETS FILL.' },
   ],
 
+  // Stage seven: the first circuit again, in the rain, with the heat on.
+  RAIN_CHECK: [
+    { t: 2.8, shot: 'highWide', subject: 'player', who: '', say: 'RAIN ON FOLSOM. THE SAME CORNERS, THE OTHER WAY, AND NONE OF THE GRIP.' },
+    { t: 2.6, shot: 'closeFront', subject: 'player', who: 'KESTREL', say: 'THEY KNOW THE CAR NOW. KEEP IT WHOLE.' },
+  ],
+  RAIN_WON: [
+    { t: 2.6, shot: 'orbit', subject: 'player', who: '', say: 'THREE LAPS IN THE WET WITH THE HEAT ON, AND THE CAR STILL WHOLE.' },
+    { t: 2.4, shot: 'lowRear', subject: 'player', who: 'KESTREL', say: 'ONE ROAD LEFT.' },
+  ],
+  BUSTED: [
+    { t: 2.6, shot: 'orbit', subject: 'player', who: '', say: 'THE CAR GAVE OUT BEFORE THE ROAD DID.' },
+    { t: 2.2, shot: 'closeFront', subject: 'player', who: '', say: 'AGAIN.' },
+  ],
+
+  // Stage eight: the bridge back, and no line to cross — just them, gone.
+  LAST_CALL: [
+    { t: 2.8, shot: 'highWide', subject: 'player', who: '', say: 'THE BRIDGE AGAIN, BACK TOWARD THE CITY. EVERY UNIT THEY HAVE.' },
+    { t: 2.6, shot: 'closeFront', subject: 'player', who: 'KESTREL', say: 'THERE IS NO LINE TO CROSS. LOSE THEM, OR PARK.' },
+  ],
+  CLEAN_AWAY: [
+    { t: 3.0, shot: 'orbit', subject: 'player', who: '', say: 'NO LIGHTS IN THE MIRROR. NONE COMING.' },
+    { t: 2.8, shot: 'highWide', subject: 'player', who: 'KESTREL', say: 'THAT IS THE WHOLE ROAD, THEN. NOBODY DROVE IT BETTER.' },
+    { t: 2.6, shot: 'lowRear', subject: 'player', who: '', say: 'THE CITY, THE BRIDGE, AND OUT. GONE.' },
+  ],
+
   ACROSS: [
     { t: 2.8, shot: 'lowRear', subject: 'player', who: '', say: 'MARIN COUNTY. THE LIGHTS BEHIND YOU STOP AT THE COUNTY LINE.' },
     { t: 3.0, shot: 'highWide', subject: 'player', who: 'YOU', say: 'THAT IS TWO CARS I DID NOT LOSE TONIGHT.' },

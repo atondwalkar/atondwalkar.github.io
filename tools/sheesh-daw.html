@@ -142,6 +142,10 @@
     background:transparent;border:none;color:var(--ink-dim);font-size:10px;cursor:pointer;
   }
   .panel-head .tools button{padding:5px 10px;font-size:10px;letter-spacing:.1em}
+  .diag-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:4px 16px;font:11px "IBM Plex Mono",monospace;color:var(--ink-dim)}
+  .diag-grid b{color:var(--amber);font-weight:600}
+  .diag-grid .bad b{color:#ff6b6b}
+  .diag-log{margin-top:8px;font:10px "IBM Plex Mono",monospace;color:var(--ink-dim);max-height:150px;overflow:auto;white-space:pre;background:#0b0d11;border:1px solid var(--line);border-radius:4px;padding:6px 8px}
   #snap-btn{display:inline-flex;align-items:center;justify-content:center}
   #snap-btn.on{background:var(--amber);border-color:var(--amber);color:#221a08}
   .panel-head .tools .stepper button{width:26px;height:26px;padding:0}
@@ -849,6 +853,19 @@
     </div>
   </div>
   <div class="no-item ed-empty" id="editor-no-item">No pattern selected — double-click an instrument track's lane, or click a MIDI item</div>
+</section>
+
+<section class="panel" id="diag-panel">
+  <div class="panel-head">
+    <h2><button class="pfold" data-k="diag" data-def="1" aria-label="Collapse diagnostics">▾</button>Diagnostics <span class="itemlab" id="diag-sum"></span></h2>
+    <div class="tools">
+      <button id="diag-copy" title="Copy the last 10 minutes of engine events + counters as JSON">Copy JSON</button>
+      <button id="diag-rebuild" title="Tear the audio engine down and rebuild it on a fresh AudioContext (the fix for 'no audio until refresh')">Rebuild engine</button>
+      <button id="diag-reset" title="Reset the counters (start a soak run)">Reset</button>
+    </div>
+  </div>
+  <div class="diag-grid" id="diag-grid"></div>
+  <div class="diag-log" id="diag-log"></div>
 </section>
 
 <!-- ============ MASTER ============ -->
@@ -1973,7 +1990,24 @@ process(inputs,outputs,params){
  }
  if(this.w>1073741824){ this.w-=1073741824; }                          // re-base the ring pointer (multiple of every power-of-two N) before int32 masks lie
  return true}}
-registerProcessor('s16-limit',S16Limit);`;
+registerProcessor('s16-limit',S16Limit);
+class S16Diag extends AudioWorkletProcessor{
+ // dropout detector: the audio thread should call process() at a steady device-buffer cadence; a gap far
+ // longer than the typical callback period means the render thread was late (underrun / stall)
+ constructor(){ super(); this.last=0; this.calls=0; this.gaps=0; this.maxGap=0; this.winMax=0; this.typ=0; this.acc=0; }
+ process(inputs,outputs){
+  const now=Date.now();
+  if(this.last){ const g=now-this.last; if(g>this.winMax) this.winMax=g; const thr=Math.max(8, 2.5*(this.typ||g)); if(this.typ && g>thr){ this.gaps++; if(g>this.maxGap) this.maxGap=g; } }
+  this.last=now; this.calls++; this.acc+=128;
+  if(this.acc>=sampleRate){
+   this.acc=0;
+   this.typ=this.typ? Math.min(this.typ*1.1, Math.max(1,this.winMax)) : Math.max(1,this.winMax);   // settle onto the real callback period
+   this.port.postMessage({gaps:this.gaps,maxGap:this.maxGap,typ:this.typ,calls:this.calls});
+   this.gaps=0; this.maxGap=0; this.winMax=0; this.calls=0;
+  }
+  const o=outputs[0]; if(o) for(let c=0;c<o.length;c++) o[c].fill(0);
+  return true; }}
+registerProcessor('s16-diag',S16Diag);`;
 
 let WORKLET_SRC_CACHE=null;
 function workletSrc(){
@@ -2032,6 +2066,7 @@ function ensureSamples(){
       try{ trapKit(ctx.sampleRate); }catch(_){}               // synthesize the 808 kit now, not inside the scheduler on first hit
       liveWorklet=await ensureWorklet(ctx);
       ctx._s16wk=liveWorklet;
+      attachDiagNode();
       if(liveWorklet) tracksAll.forEach(rebuildChain);   // upgrade gates to sample-accurate
     })().catch(e=>{ console.error('audio init failed',e); });
   }
@@ -3681,6 +3716,10 @@ function tickFn(){
     const missed=Math.floor((ctx.currentTime-nextTime)/sd);
     if(missed>0){ nextTime+=missed*sd; absStep+=missed; diagLog('sched','resync: skipped '+missed+' steps after a '+Math.round((missed*sd)*1000)+' ms stall'); }
   }
+  { const nowW=performance.now(); DIAG.sched.ticks++;
+    if(DIAG.sched.lastTick){ const dt=nowW-DIAG.sched.lastTick; if(dt>DIAG.sched.maxTick) DIAG.sched.maxTick=dt; if(dt>TICK*3){ DIAG.sched.slowTicks++; if(dt>200) diagLog('sched','tick '+Math.round(dt)+' ms late'); } }
+    DIAG.sched.lastTick=nowW;
+    const margin=nextTime-ctx.currentTime; if(margin<DIAG.sched.minMargin) DIAG.sched.minMargin=margin; if(margin<0) DIAG.sched.late++; }
   const wrapEnd=loopRegion?loopRegion.end:songSteps();     // once per tick, not per step
   const wrapStart=loopRegion?loopRegion.start:0;
   while(nextTime < ctx.currentTime + LOOKAHEAD){
@@ -3750,6 +3789,7 @@ function playFrom(pos){
   nextTime=startCtx + (k*sd - startPos);
   absStep=k;
   scheduleClips(startPos, startCtx);
+  DIAG.sched.lastTick=0;
   timerId=startTicker();
   state.playing=true;
   if(autoTracks().some(t=>t.autoMode==='write' && t.autos && t.autos.length)) pushHistory();
@@ -8801,6 +8841,7 @@ async function rebuildEngine(reason){
     try{ if(old && old.state!=='closed') old.close().catch(()=>{}); }catch(_){}
     initAudio();                                          // fresh context + master + per-track nodes
     liveWorklet=await ensureWorklet(ctx); ctx._s16wk=liveWorklet;
+    attachDiagNode();
     tracksAll.forEach(rebuildChain); rebuildChain(MASTER_TRACK);
     tracksAll.forEach(t=>{ try{ applyBusRouting(t); }catch(_){} });
     try{ updateMonitor(); }catch(_){}
@@ -8812,6 +8853,72 @@ async function rebuildEngine(reason){
   finally{ rebuildEngine._busy=false; }
 }
 const ENGINE_WD={lastT:0,lastWall:0,stalls:0,cooldownUntil:0,worker:null};
+/* ---- diagnostics: turn "sometimes glitches" into numbers ---- */
+DIAG.audio={gaps:0,maxGap:0,typ:0,windows:0,lastCalls:0};
+DIAG.sched={ticks:0,late:0,minMargin:Infinity,slowTicks:0,maxTick:0,lastTick:0};
+DIAG.longTasks=0; DIAG.longMax=0; DIAG.since=Date.now();
+let diagNode=null;
+function attachDiagNode(){
+  if(!ctx || !ctx._s16wk) return;
+  try{
+    if(diagNode){ try{ diagNode.disconnect(); }catch(_){} }
+    diagNode=new AudioWorkletNode(ctx,'s16-diag',{numberOfInputs:0,numberOfOutputs:1,outputChannelCount:[1]});
+    diagNode.connect(ctx.destination);
+    diagNode.port.onmessage=e=>{ const d=e.data; DIAG.audio.windows++; DIAG.audio.typ=d.typ; DIAG.audio.lastCalls=d.calls;
+      if(d.gaps){ DIAG.audio.gaps+=d.gaps; DIAG.audio.maxGap=Math.max(DIAG.audio.maxGap,d.maxGap); diagLog('dropout',d.gaps+' gap'+(d.gaps>1?'s':'')+' (max '+d.maxGap+' ms, callback ~'+d.typ.toFixed(1)+' ms)'); } };
+    diagNode.onprocessorerror=()=>diagLog('error','diagnostics worklet died');
+  }catch(e){ diagLog('error','diag node: '+e.message); }
+}
+try{ new PerformanceObserver(list=>{ for(const e of list.getEntries()){ if(e.duration>50){ DIAG.longTasks++; DIAG.longMax=Math.max(DIAG.longMax,e.duration); diagLog('longtask',Math.round(e.duration)+' ms main-thread stall'); } } }).observe({type:'longtask',buffered:true}); DIAG.ltObs=true; }catch(_){ DIAG.ltObs=false; }
+function audioBytes(){
+  const seen=new Set(); let bytes=0;
+  const add=b=>{ if(b && !seen.has(b)){ seen.add(b); bytes+=b.length*b.numberOfChannels*4; if(b._rev && !seen.has(b._rev)){ seen.add(b._rev); bytes+=b._rev.length*b._rev.numberOfChannels*4; } } };
+  tracksAll.forEach(t=>{ t.clips.forEach(c=>add(c.buffer)); t.fx.forEach(f=>{ add(f.sampleBuffer); add(f.irBuffer); }); });
+  Object.values(sampleBufs).forEach(add); Object.values(egBufs).forEach(add); Object.values(ebBufs).forEach(add);
+  return bytes;
+}
+function diagSnapshot(){
+  const mem=performance.memory;
+  return {
+    when:new Date().toISOString(), sinceMin:+((Date.now()-DIAG.since)/60000).toFixed(1),
+    ctx: ctx?{state:ctx.state, sampleRate:ctx.sampleRate, baseLatencyMs:+(ctx.baseLatency*1000).toFixed(2), outputLatencyMs:+((ctx.outputLatency||0)*1000).toFixed(2), sink:outId||'default', worklets:!!ctx._s16wk}:null,
+    audio:{...DIAG.audio}, sched:{...DIAG.sched, minMargin:isFinite(DIAG.sched.minMargin)?+DIAG.sched.minMargin.toFixed(3):null}, longTasks:DIAG.longTasks, longMaxMs:Math.round(DIAG.longMax),
+    memory:{jsHeapMB:mem?+(mem.usedJSHeapSize/1048576).toFixed(0):null, audioMB:+(audioBytes()/1048576).toFixed(0)},
+    live:{voices:liveVoices.size, sources:activeSources.size, tracks:tracksAll.length, fxNodes:allTracks().reduce((a,t)=>a+t.fx.filter(f=>f.nodes).length,0), undo:undoStack.length},
+    counts:{...DIAG.counts}, events:DIAG.events.slice(-400),
+  };
+}
+function updateDiagPanel(){
+  const panel=document.getElementById('diag-panel'); if(!panel) return;
+  const h=(Date.now()-DIAG.since)/3600000, perHour=h>0?DIAG.audio.gaps/h:0;
+  const sum=document.getElementById('diag-sum'); if(sum) sum.textContent=(DIAG.audio.gaps?DIAG.audio.gaps+' dropouts':'no dropouts')+(DIAG.longTasks?' · '+DIAG.longTasks+' stalls':'');
+  if(panel.classList.contains('pcollapsed')) return;
+  const d=diagSnapshot(), g=document.getElementById('diag-grid');
+  const row=(k,v,bad)=>'<div'+(bad?' class="bad"':'')+'>'+k+' <b>'+v+'</b></div>';
+  g.innerHTML=[
+    row('engine', d.ctx?d.ctx.state+' · '+d.ctx.sampleRate+' Hz':'—', d.ctx&&d.ctx.state!=='running'),
+    row('latency', d.ctx?d.ctx.baseLatencyMs+' ms base · '+d.ctx.outputLatencyMs+' ms out':'—'),
+    row('output', d.ctx?d.ctx.sink:'—'), row('worklets', d.ctx?(d.ctx.worklets?'on':'OFF'):'—', d.ctx&&!d.ctx.worklets),
+    row('dropouts', DIAG.audio.gaps+' ('+perHour.toFixed(1)+'/h, max '+DIAG.audio.maxGap+' ms)', DIAG.audio.gaps>0),
+    row('audio callback', DIAG.audio.typ?DIAG.audio.typ.toFixed(1)+' ms':'measuring…'),
+    row('scheduler', DIAG.sched.ticks+' ticks · '+DIAG.sched.late+' late · min margin '+(isFinite(DIAG.sched.minMargin)?Math.round(DIAG.sched.minMargin*1000)+' ms':'—'), DIAG.sched.late>0),
+    row('slow ticks', DIAG.sched.slowTicks+' (max '+Math.round(DIAG.sched.maxTick)+' ms)', DIAG.sched.slowTicks>0),
+    row('main-thread stalls', DIAG.longTasks+' (max '+Math.round(DIAG.longMax)+' ms)', DIAG.longTasks>0),
+    row('memory', (d.memory.jsHeapMB??'?')+' MB heap · '+d.memory.audioMB+' MB audio', (d.memory.jsHeapMB||0)>1500||d.memory.audioMB>1000),
+    row('live', d.live.voices+' voices · '+d.live.sources+' sources · '+d.live.fxNodes+' fx nodes', d.live.voices>64),
+    row('errors', (DIAG.counts.error||0), (DIAG.counts.error||0)>0),
+    row('soak', d.sinceMin+' min'),
+  ].join('');
+  const log=document.getElementById('diag-log');
+  log.textContent=DIAG.events.slice(-30).map(e=>new Date(e.t).toLocaleTimeString()+'  '+e.kind.padEnd(8)+' '+e.msg).join('\n')||'no events';
+}
+(function wireDiagPanel(){
+  const cp=document.getElementById('diag-copy'), rb=document.getElementById('diag-rebuild'), rs=document.getElementById('diag-reset');
+  if(!cp) return;
+  cp.onclick=async()=>{ const txt=JSON.stringify(diagSnapshot(),null,1); try{ await navigator.clipboard.writeText(txt); flash('Diagnostics copied ('+DIAG.events.length+' events).'); }catch(_){ const ta=document.createElement('textarea'); ta.value=txt; document.body.appendChild(ta); ta.select(); try{ document.execCommand('copy'); }catch(__){} ta.remove(); flash('Diagnostics copied.'); } };
+  rb.onclick=()=>{ initAudio(); rebuildEngine('manual'); };
+  rs.onclick=()=>{ DIAG.audio={gaps:0,maxGap:0,typ:DIAG.audio.typ,windows:0,lastCalls:0}; DIAG.sched={ticks:0,late:0,minMargin:Infinity,slowTicks:0,maxTick:0,lastTick:0}; DIAG.longTasks=0; DIAG.longMax=0; DIAG.counts={}; DIAG.since=Date.now(); updateDiagPanel(); };
+})();
 function engineWatchdogTick(){
   if(!ctx) return;
   const now=performance.now();
@@ -8824,6 +8931,7 @@ function engineWatchdogTick(){
     }else ENGINE_WD.stalls=0;
   }
   ENGINE_WD.lastWall=now; ENGINE_WD.lastT=ctx?ctx.currentTime:0;
+  updateDiagPanel();
 }
 (function startWatchdog(){                               // a Worker timer keeps ticking when the tab is in the background
   try{

@@ -2039,7 +2039,10 @@ function ensureSamples(){
 function initAudio(){
   if(ctx) return;
   ctx = new (window.AudioContext||window.webkitAudioContext)({latencyHint:'interactive'});   // 0 = minimum buffer = maximum underruns
-  ctx.onstatechange=()=>diagLog('ctx','state '+ctx.state);
+  ctx.onstatechange=()=>{
+    diagLog('ctx','state '+ctx.state);
+    if(ctx.state==='suspended' || ctx.state==='interrupted') armResumeOnGesture();
+  };
   if(outId && ctx.setSinkId) ctx.setSinkId(outId).catch(()=>{});
 
   master = ctx.createGain(); master.gain.value = parseFloat(mvol.value);
@@ -8739,6 +8742,66 @@ function syncMixer(){
 }
 
 /* ============================== transport controls & fx ============================== */
+/* ---- engine watchdog + rebuild: the answer to "no audio until I refresh the page" ---- */
+function armResumeOnGesture(){
+  if(armResumeOnGesture._armed) return; armResumeOnGesture._armed=true;
+  const go=()=>{ armResumeOnGesture._armed=false; document.removeEventListener('pointerdown',go,true); document.removeEventListener('keydown',go,true);
+    if(ctx && ctx.state!=='running'){ ctx.resume().then(()=>diagLog('ctx','resumed on gesture')).catch(e=>diagLog('error','resume failed: '+e.message)); } };
+  document.addEventListener('pointerdown',go,true); document.addEventListener('keydown',go,true);
+  flash('Audio is paused by the browser \u2014 click or press a key to resume.');
+}
+async function rebuildEngine(reason){
+  if(rebuildEngine._busy) return false;
+  rebuildEngine._busy=true;
+  diagLog('ctx','engine rebuild: '+reason);
+  try{
+    if(state.playing) stopAll();
+    try{ midiAllOff(); }catch(_){}
+    try{ killVoices(); }catch(_){}
+    const old=ctx;
+    tracksAll.forEach(t=>{ const tr=state.tracks[t.id]; tr.gain=null; tr.input=null; tr.panner=null; tr.meterAnL=tr.meterAnR=null; t.fx.forEach(f=>{ f.nodes=null; f._liveMacros=[]; }); });
+    MASTER_TRACK.fx.forEach(f=>{ f.nodes=null; });
+    state.tracks.master.gain=null; state.tracks.master.input=null;
+    monSrc=null; liveWorklet=false; ctx=null;
+    try{ if(old && old.state!=='closed') old.close().catch(()=>{}); }catch(_){}
+    initAudio();                                          // fresh context + master + per-track nodes
+    liveWorklet=await ensureWorklet(ctx); ctx._s16wk=liveWorklet;
+    tracksAll.forEach(rebuildChain); rebuildChain(MASTER_TRACK);
+    tracksAll.forEach(t=>{ try{ applyBusRouting(t); }catch(_){} });
+    try{ updateMonitor(); }catch(_){}
+    seek(userPos);
+    ENGINE_WD.lastWall=0; ENGINE_WD.cooldownUntil=performance.now()+10000;
+    flash('Audio engine rebuilt ('+reason+').');
+    return true;
+  }catch(e){ diagLog('error','engine rebuild failed: '+(e&&e.message||e)); return false; }
+  finally{ rebuildEngine._busy=false; }
+}
+const ENGINE_WD={lastT:0,lastWall:0,stalls:0,cooldownUntil:0,worker:null};
+function engineWatchdogTick(){
+  if(!ctx) return;
+  const now=performance.now();
+  if(ENGINE_WD.lastWall && now>ENGINE_WD.cooldownUntil){
+    const dw=(now-ENGINE_WD.lastWall)/1000, da=ctx.currentTime-ENGINE_WD.lastT;
+    if(ctx.state==='running' && dw>0.9 && da<dw*0.5){
+      ENGINE_WD.stalls++;
+      diagLog('ctx','audio clock stalled: '+da.toFixed(2)+' s advanced in '+dw.toFixed(2)+' s ('+ENGINE_WD.stalls+')');
+      if(ENGINE_WD.stalls>=2){ ENGINE_WD.stalls=0; rebuildEngine('audio clock stalled'); }
+    }else ENGINE_WD.stalls=0;
+  }
+  ENGINE_WD.lastWall=now; ENGINE_WD.lastT=ctx?ctx.currentTime:0;
+}
+(function startWatchdog(){                               // a Worker timer keeps ticking when the tab is in the background
+  try{
+    const src='setInterval(()=>postMessage(1),1000)';
+    let w=null;
+    try{ w=new Worker(URL.createObjectURL(new Blob([src],{type:'application/javascript'}))); }
+    catch(_){ w=new Worker('data:application/javascript,'+encodeURIComponent(src)); }
+    w.onmessage=engineWatchdogTick; ENGINE_WD.worker=w;
+  }catch(e){ setInterval(engineWatchdogTick,1000); }
+})();
+if(navigator.mediaDevices && navigator.mediaDevices.addEventListener){
+  navigator.mediaDevices.addEventListener('devicechange',()=>{ diagLog('device','device change'); setTimeout(()=>checkAudioSink(),300); });
+}
 async function checkAudioSink(){
   // a saved output device can vanish between sessions (headset unplugged, monitor off) — audio then goes nowhere, silently
   if(outId && navigator.mediaDevices && navigator.mediaDevices.enumerateDevices){

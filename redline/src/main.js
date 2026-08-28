@@ -605,12 +605,18 @@ class Game {
       return;
     }
     this._leaveAttract();
-    this.phase = PHASE.RACING;
-    // Whatever was held down to get here is not a driving input.
-    this.keys.clear();
     document.getElementById('menu').style.display = 'none';
     this.hud.show();
     this.audio.unlock();
+    // Through the SAME reset a campaign stage goes through.
+    //
+    // This used to set the phase and stop, which left `raceEnded` and the
+    // twelve-second end timer holding whatever the attract loop had put in
+    // them — and the attract loop runs a real three-lap race behind the menu,
+    // so if it took the flag while you were choosing a car, the timer started
+    // counting the moment you pressed START and the results table appeared
+    // over the top of your race.
+    this._greenLight();
   }
 
   restart() {

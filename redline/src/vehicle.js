@@ -131,6 +131,34 @@ export class Vehicle {
   setSpeed(mps) {
     this.u = mps;
     this.omegaF = this.omegaR = mps / this.spec.wheelRadius;
+    this.matchGear();
+  }
+
+  // Put the lever where it would be if you had driven up to this speed.
+  //
+  // `setSpeed` used to move the car and leave the gearbox alone, which is fine
+  // from a standing start and wrong everywhere else: a pursuit stage opens at
+  // a hundred and fifty and everybody was in first, over the limiter, with a
+  // manual gearbox and no way to know it. The lowest gear that will still
+  // PULL this speed is the one a driver would be in.
+  matchGear() {
+    const g = this.spec.gears;
+    if (this.u < 1) return;
+    // The gear nearest a comfortable cruise, not merely the lowest one that
+    // will not hit the limiter — that answer is a gear you would upshift out
+    // of in the first second, which is the same "wrong gear" feeling one lower
+    // would have given.
+    const target = this.spec.redline * 0.72;
+    let best = 1, bestErr = Infinity;
+    for (let k = 1; k < g.length; k++) {
+      const ratio = g[k] * this.spec.finalDrive;
+      const rpm = (this.u / this.spec.wheelRadius) * ratio * 60 / (Math.PI * 2);
+      if (rpm > this.spec.redline) continue;
+      const err = Math.abs(rpm - target);
+      if (err < bestErr) { bestErr = err; best = k; }
+    }
+    this.gear = best;
+    this.shiftT = 0;
   }
 
   reset(x, z, yaw) {

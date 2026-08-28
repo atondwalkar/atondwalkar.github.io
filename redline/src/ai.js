@@ -39,10 +39,16 @@ const PURSUIT_MIN_FLANK = 2.3;
 // slewing sideways stops being a block and starts being a crash.
 const BLOCK_MIN = 6;
 const BLOCK_MAX = 34;
-const BLOCK_SPEED = 26;              // 94 km/h
+const BLOCK_SPEED = 34;              // 122 km/h
+// How far round the nose has to come before it stops steering across the road
+// and starts steering at the car.
+const BLOCK_FACING = 0.75;           // 43 degrees
 // How far ahead the blocking target sits. Short, because a long look-ahead is
 // a gentle lane change and what is wanted is a car slewing sideways.
 const BLOCK_LOOK = 9;
+// What fraction of the quarry's speed a blocking unit drops to. Low enough
+// that the gap closes in a second or two rather than over half the stage.
+const BLOCK_BRAKE = 0.55;
 
 // Where the units try to be, relative to the car they are chasing: one on the
 // bumper and one down each side. `along` is metres up the road from it — so a
@@ -483,6 +489,12 @@ export class Driver {
     // the bay. So it only happens slowly, and only when it is genuinely in
     // front rather than merely half a length up.
     const infront = -this.stationErr;
+    // In front and close: this is a block, not a cruise.
+    //
+    // What it used to do was hold station at the quarry's speed, seven metres
+    // ahead, for ever — which from the driving seat is a police car escorting
+    // you politely to the ramp. A unit that has got in front has one job, and
+    // `_speedLimit` does the other half of it: brake hard enough to be caught.
     if (infront > BLOCK_MIN && infront < BLOCK_MAX && speed < BLOCK_SPEED) {
       // ACROSS the road, not at the car.
       //
@@ -500,6 +512,18 @@ export class Driver {
       // direction and holds it until the block ends.
       if (this.blockSide === 0) this.blockSide = loc.lateral > 0 ? -1 : 1;
       const side = this.blockSide;
+      const road = t.atDistance(loc.s);
+      const skew = Math.abs(angleDiff(this.car.vehicle.yaw, Math.atan2(road.dirX, road.dirZ)));
+
+      // Two halves to the manoeuvre, and they need different targets.
+      //
+      // Turning across the road has to be expressed as somewhere to GO — the
+      // far side of the carriageway, a few metres ahead — because aiming at a
+      // car directly behind gives zero lateral error and pure pursuit does
+      // nothing with it. But once the nose has come round far enough to be
+      // pointing at the quarry rather than down the road, that stops being
+      // true: from there it aims at the CAR, and drives into it.
+      if (skew > BLOCK_FACING) return { x: q.vehicle.x, z: q.vehicle.z };
       const across = t.atDistance(loc.s + BLOCK_LOOK);
       const off = side * (across.width / 2 - 1.5);
       return { x: across.x + across.nx * off, z: across.z + across.nz * off };
@@ -574,6 +598,14 @@ export class Driver {
       // a faster car: it is a driver taking more of what the tyres already
       // have, the further behind it is.
       if (err > 0) cap *= lerp(1, PURSUIT_CATCHUP, clamp(err / 60, 0, 1));
+      // In front: brake, hard, so the quarry arrives. Holding station at the
+      // quarry's own speed keeps the gap exactly where it is, which is the
+      // one outcome a block must not produce — the unit sits in front doing
+      // the same speed as you until the stage ends.
+      const front = -err;
+      if (front > BLOCK_MIN && front < BLOCK_MAX) {
+        return Math.min(cap, Math.max(4, qs * BLOCK_BRAKE));
+      }
       // Station keeping, once it is anywhere near. A flat "back off to the
       // quarry's pace" overshoots and then has to catch up again, so a unit
       // that should be sitting on a door spends its time swinging past it and

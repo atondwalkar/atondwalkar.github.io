@@ -296,7 +296,11 @@ export class Race {
       // The player at the front; the units at 55 m and then 18 m apart, which
       // is far enough back to be got away from and close enough to see in the
       // mirror from the first corner.
-      const back = i === 0 ? 0 : PURSUIT_GAP + (i - 1) * 18;
+      // Thirteen metres apart rather than eighteen. The two flankers have to
+      // get past the car on the bumper and out to a door before there is a box
+      // at all, and starting them nearly a hundred metres back meant that
+      // happened, when it happened, in the last third of the stage.
+      const back = i === 0 ? 0 : PURSUIT_GAP + (i - 1) * 13;
       const s = t.closed ? base - back : Math.max(4, base - back);
       const p = t.atDistance(s);
       const off = i === 0 ? 0 : ((i % 2) ? 2.6 : -2.6);

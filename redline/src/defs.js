@@ -140,7 +140,7 @@ export const RIVAL = {
     cornerMargin: 0.96,    // where the field uses 0.90
     aggression: 0.98,
     block: 0.85,
-    drift: 0.45,          // some corners, not every corner
+    drift: 0.34,          // some corners, not every corner
   },
 };
 

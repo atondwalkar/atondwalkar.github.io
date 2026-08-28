@@ -74,6 +74,15 @@ const GROUND_R = 40;
 // field sits below the road it is averaged from. Both were a metre or more,
 // which put the whole road on a plinth; a kerb is fifteen centimetres and the
 // land beyond a pavement is not much further down than that.
+// How far past the edge of the city the water starts, and how far it takes to
+// become all water. The margin has to clear the buildings, which stand a
+// hundred and thirty metres back from the road at the third rank.
+// How far back from the road the shore towns stand.
+const SHORE_CLEAR = 58;
+
+const BAY_MARGIN = 210;
+const BAY_FADE = 230;
+
 const KERB_DROP = 0.18;
 const GROUND_FALL = 0.34;
 
@@ -241,10 +250,19 @@ export const LAYOUTS = {
       [35, 0.9], [70, 0.5], [105, 0],
     ],
     // The deck rises to mid-span and falls away again, which is the shape a
-    // suspended span actually takes.
+    // suspended span actually takes — and comes DOWN at both ends, because a
+    // bridge that begins at thirty-four metres begins in mid-air.
     elevation: [
-      [0.00, 34], [0.14, 40], [0.30, 44], [0.50, 46],
-      [0.70, 44], [0.86, 40], [1.00, 34],
+      [0.00, 7], [0.05, 22], [0.12, 36], [0.30, 44], [0.50, 46],
+      [0.70, 44], [0.88, 36], [0.95, 22], [1.00, 7],
+    ],
+    // Where the land is: a fraction along the route, a radius, and how much
+    // city stands on it. San Francisco at the near end and a great deal more
+    // of Oakland at the far one — which is the right way round, and which is
+    // also what tells you at a glance which way you are going.
+    land: [
+      { at: 0, r: 520, town: 0.75, tall: 0.30 },
+      { at: 1, r: 900, town: 1.0, tall: 0.22 },
     ],
   },
 };
@@ -316,6 +334,20 @@ export class Track {
     // last, and a deck that climbs over the rooftops looks exactly as wrong
     // going THROUGH one as you would expect.
     this.rampPlan = (layout.ramp || (!this.closed && !layout.deck)) ? this._rampPlan() : null;
+    // How far the city reaches: the centre of the route and the furthest any
+    // of it gets from that centre. The water is put outside this, rather than
+    // outside a distance from the nearest ROAD — see `_bayAt`.
+    {
+      let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+      for (const p of this.samples) {
+        minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+        minZ = Math.min(minZ, p.z); maxZ = Math.max(maxZ, p.z);
+      }
+      const cx2 = (minX + maxX) / 2, cz2 = (minZ + maxZ) / 2;
+      let r = 0;
+      for (const p of this.samples) r = Math.max(r, Math.hypot(p.x - cx2, p.z - cz2));
+      this.extent = { x: cx2, z: cz2, r };
+    }
   }
 
   // Where the deck goes.
@@ -950,14 +982,27 @@ export class Track {
         // way here cost as much again as the `groundAt` below — which needs
         // the same number and gets it the same cheap way.
         const dist = Math.sqrt(this._nearestSample(x, z).d2);
-        const bay = this.layout.deck ? 1 : clamp((dist - 340) / 200, 0, 1);
+        const bay = this._bayAt(x, z);
         // Height first, then colour: the deck branch below returns early, and
         // with the height set after it the water came out perfectly flat and
         // beautifully shaded, which is a lit sheet of paper.
         pos.setY(i, this.groundAt(x, z));
         if (this.layout.deck) {
           const w = waterColour(x, z, clamp(1 - dist / 420, 0, 1));
-          col[i * 3] = w[0]; col[i * 3 + 1] = w[1]; col[i * 3 + 2] = w[2];
+          // The landfalls are towns, not sea. Colouring the whole plane as
+          // water and then standing a city on it leaves the city on black
+          // ground — which from two miles out is a skyline floating in a void.
+          const k = this.layout.land ? this.landAt(x, z) : 0;
+          if (k <= 0.01) {
+            col[i * 3] = w[0]; col[i * 3 + 1] = w[1]; col[i * 3 + 2] = w[2];
+            continue;
+          }
+          const n2 = Math.sin(x * 0.021 + z * 0.013) * Math.cos(z * 0.017 - x * 0.011) * 0.5 + 0.5;
+          const block = (Math.floor(x / 34) + Math.floor(z / 34)) % 2 ? 0.05 : 0;
+          const g2 = 0.24 + n2 * 0.08 + block;
+          col[i * 3] = lerp(w[0], g2 * 0.98, k);
+          col[i * 3 + 1] = lerp(w[1], g2 * 0.96, k);
+          col[i * 3 + 2] = lerp(w[2], g2 * 0.92, k);
           continue;
         }
         // Blocks of city, read as a grid of paving and rooftops, going blue
@@ -2032,10 +2077,69 @@ export class Track {
     return wsum > 0 ? ysum / wsum : 0;
   }
 
+  // How much of this point is water.
+  //
+  // Outside the CITY, not away from the nearest road. It used to be the
+  // second: three hundred and forty metres from any piece of tarmac and the
+  // ground turned into bay — which is right at the edge of a compact circuit
+  // and wrong the moment a route weaves, because the middle of a large block
+  // is also three hundred and forty metres from any road. What that produced
+  // was flat teal lakes lying among the rooftops at street level, one of them
+  // straight down the road from the start of stage two.
+  //
+  // A bay is a thing the city stops at, so it is measured from how far the
+  // city reaches.
+  // How much land there is at a point on a deck layout: 1 at the middle of a
+  // landfall, 0 out over the water. Smoothstepped, so the shoreline is a
+  // beach rather than a step.
+  landAt(x, z) {
+    const land = this.layout.land;
+    if (!land) return 0;
+    let best = 0;
+    for (const L of land) {
+      const p = this._landAnchor(L);
+      const d = Math.hypot(x - p.x, z - p.z);
+      const k = clamp(1 - d / L.r, 0, 1);
+      best = Math.max(best, k * k * (3 - 2 * k));
+    }
+    return best;
+  }
+
+  _landAnchor(L) {
+    if (!L._at) {
+      const p = this.atDistance(clamp(L.at, 0, 1) * this.length);
+      L._at = { x: p.x, z: p.z, y: p.y };
+    }
+    return L._at;
+  }
+
+  _bayAt(x, z) {
+    if (this.layout.deck) return 1 - this.landAt(x, z);
+    const e = this.extent;
+    if (!e) return 0;
+    const r = Math.hypot(x - e.x, z - e.z);
+    return clamp((r - (e.r + BAY_MARGIN)) / BAY_FADE, 0, 1);
+  }
+
   groundAt(x, z) {
     // Open water, if the road is a bridge. There is no city floor under a
     // suspended span — there is the bay, a hundred metres down.
-    if (this.layout.deck) return SEA_Y + swell(x, z);
+    if (this.layout.deck) {
+      const k = this.landAt(x, z);
+      if (k <= 0) return SEA_Y + swell(x, z);
+      // The shore rises to just under the road at the end it belongs to, and
+      // falls back to the sea over the width of the landfall.
+      const land = this.layout.land;
+      let top = SEA_Y;
+      for (const L of land) {
+        const p = this._landAnchor(L);
+        const d = Math.hypot(x - p.x, z - p.z);
+        const kk = clamp(1 - d / L.r, 0, 1);
+        const kkk = kk * kk * (3 - 2 * kk);
+        top = Math.max(top, lerp(SEA_Y, p.y - KERB_DROP, kkk));
+      }
+      return lerp(SEA_Y + swell(x, z), top, k);
+    }
     // The city floor, and the one number the terrain, the pavements, the
     // street furniture and every building in the place have to agree about.
     //
@@ -2057,7 +2161,7 @@ export class Track {
     const dist = Math.sqrt(this._nearestSample(x, z).d2);
     const fall = clamp((dist - 22) / 300, 0, 1);
     const hill = Math.sin(x * 0.0052) * Math.cos(z * 0.0061) * 26 + Math.sin(z * 0.0091) * 11;
-    const bay = clamp((dist - 340) / 200, 0, 1);
+    const bay = this._bayAt(x, z);
     // Swell out over the water, fading in as the land runs out. Colouring a
     // flat plane as if it had waves on it works until the light rakes across
     // it, at which point it is a painting of the sea.
@@ -2715,12 +2819,88 @@ export class Track {
     pool.renderOrder = 3;
     group.add(pool);
     yield 'the lights';
+    if (this.layout.land) { yield* this._buildShore(group); }
     // No landmarks. They are placed at fixed world coordinates a few hundred
     // metres out — a downtown cluster, the hills, and a Golden Gate Bridge —
     // all of which is correct scenery for a city and wrong for a stage that IS
     // the bridge: a second one across the horizon, and a wall of towers
     // standing in the water directly behind this one. What belongs behind a
     // bridge at night is the bay and the sky.
+  }
+
+  // The cities at each end of the bridge.
+  //
+  // A span that begins and ends in open water begins and ends nowhere: you
+  // drive onto it out of nothing and off it into nothing, and the one thing a
+  // bridge is FOR — getting from somewhere to somewhere else — never appears.
+  // So there is a city at each end, and they are not the same size: a smaller
+  // one behind you and a great deal more of it ahead, which is the right way
+  // round and is also what tells you which way you are going.
+  //
+  // Not the same builder as the circuit's city. That one lays a frontage along
+  // a street and ranks blocks behind it, which is what a street wants and has
+  // nothing to say about a shoreline seen from two miles out at sixty metres.
+  // This scatters blocks on a jittered grid, keeps them off the road and out
+  // of the water, and lets the skyline fall away from the middle.
+  *_buildShore(group) {
+    const b = new MeshBuilder();
+    const lit = new MeshBuilder();
+    const RENDER = [0xd8d3c6, 0xc9c2b4, 0xbfb8a9, 0x9aa3aa, 0x8e979e, 0x7d868d];
+    const GLASS = 0x39586b;
+    const WARM = [0xffd9a0, 0xffc478, 0xffe8c4, 0xd8e8f0, 0xc4dcea];
+
+    for (const L of this.layout.land) {
+      const anchor = this._landAnchor(L);
+      const STEP = 34;
+      const reach = L.r * 0.92;
+      for (let gx = -reach; gx <= reach; gx += STEP) {
+        for (let gz = -reach; gz <= reach; gz += STEP) {
+          const x = anchor.x + gx + rand(-9, 9);
+          const z = anchor.z + gz + rand(-9, 9);
+          const d = Math.hypot(x - anchor.x, z - anchor.z);
+          if (d > reach) continue;
+          // Density falls off toward the water, so the town thins out into a
+          // shoreline instead of ending on a circle.
+          const k = 1 - d / reach;
+          if (Math.random() > L.town * (0.25 + k * 0.9)) continue;
+          // Off the road, and on dry land.
+          // Well back from the road. Twenty-six metres put tower blocks up
+          // against the parapet of a six-lane freeway, which reads as a
+          // canyon rather than as a city the road runs out of.
+          const loc = this.locate(x, z);
+          if (Math.abs(loc.lateral) < loc.width / 2 + SHORE_CLEAR) continue;
+          const gy = this.groundAt(x, z);
+          if (gy < SEA_Y + 1.5) continue;
+
+          const tall = Math.random() < L.tall * k * k;
+          const w = tall ? rand(16, 26) : rand(13, 24);
+          const dep = tall ? rand(16, 26) : rand(13, 24);
+          const h = tall ? rand(40, 120) * (0.4 + k) : rand(9, 26) * (0.5 + k);
+          const ry = rand(0, Math.PI * 2);
+          b.add(G.box(w, h, dep), pick(RENDER), { x, y: gy + h / 2, z, ry, mottle: 0.07 });
+
+          // Windows, as lit bands: at this range individual panes are one
+          // pixel, and what reads is how much of the block is on.
+          const floors = Math.max(2, Math.round(h / 3.6));
+          for (let f = 1; f < floors; f++) {
+            if (Math.random() > 0.55) continue;
+            const fy = gy + (f / floors) * h;
+            const bh = (h / floors) * 0.42;
+            lit.add(G.box(w * 0.86, bh, dep + 0.1), pick(WARM),
+              { x, y: fy, z, ry, mottle: 0.2 });
+            lit.add(G.box(w + 0.1, bh, dep * 0.86), pick(WARM),
+              { x, y: fy, z, ry, mottle: 0.2 });
+          }
+          if (tall) {
+            b.add(G.box(w * 0.9, 1.2, dep * 0.9), GLASS, { x, y: gy + h + 0.6, z, ry });
+            lit.add(G.sphere(0.9, 8, 6), 0xff3a2a, { x, y: gy + h + 2.6, z });
+          }
+        }
+      }
+      yield `the shore`;
+    }
+    group.add(b.build());
+    group.add(lit.build(VC_UNLIT));
   }
 
   *_buildCity(group) {

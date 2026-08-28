@@ -64,10 +64,12 @@ export const STAGES = [
     laps: 1,
     contact: true,
     // A clean run at ninety-five per cent skill crosses it in a hundred and
-    // fifty-six seconds. This is a fifth more than that, which is enough slack
-    // for a person weaving through traffic with three police cars leaning on
-    // them and not enough to stop and admire the view.
-    limit: 190,
+    // fifty-five seconds — on an empty deck, with nobody leaning on it. The
+    // clock is a minute and a half more than that, because the deck is not
+    // empty: three hundred and sixty cars of traffic to thread and a dozen
+    // police cars turning across the road in front of you is not the drive
+    // that number was measured on.
+    limit: 250,
     police: 3,
     leash: 380,
     intercept: { every: 7, from: 300, to: 620, max: 12 },

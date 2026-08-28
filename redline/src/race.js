@@ -128,6 +128,23 @@ const TRAFFIC_PER_TICK = 3;
 // than the threshold that triggered it, or the leash fires again immediately.
 const LEASH_BACK = 130;
 
+// How wide a contact bucket is, and how many cars there have to be before
+// bucketing is worth the map. Twenty metres is comfortably wider than a car,
+// and below a couple of dozen cars the straight double loop is cheaper than
+// building the map.
+const CONTACT_BIN = 20;
+const CONTACT_BUCKET_FROM = 24;
+
+// How far away traffic has to be before it is stepped less often, and how much
+// less often. Seven hundred metres is past the fog on every layout that has
+// traffic on it.
+const FAR_TRAFFIC = 700;
+const FAR_EVERY = 3;
+
+// How far up the road traffic is still drawn. Past the fog there is nothing
+// to see, and a car nobody can see is a draw call nobody needs.
+const DRAW_RANGE = 620;
+
 // How fast everybody is already going when a pursuit stage opens.
 const ROLLING_START = 42;            // 150 km/h
 
@@ -381,7 +398,24 @@ export class Race {
   // Called once a frame, not once a step: the frame is drawn between the last
   // two physics steps.
   sync(alpha) {
-    for (const car of this.cars) car.syncModel(this.track, alpha);
+    // Traffic beyond the fog is not drawn.
+    //
+    // Three hundred and sixty cars is three hundred and sixty models, each a
+    // shell, four wheels, two plates and a shadow — a couple of thousand draw
+    // calls for a road whose far end is invisible at three hundred metres. The
+    // cars are still simulated; they are simply not submitted.
+    //
+    // Frustum culling does not do this for you here: a car behind you is
+    // culled, but the two hundred ahead of you down a straight bridge are all
+    // in frame and all beyond seeing.
+    const p = this.player;
+    const here = p && p.loc ? p.loc.s : 0;
+    for (const car of this.cars) {
+      car.syncModel(this.track, alpha);
+      if (car.traffic && car.model && car.loc) {
+        car.model.visible = Math.abs(this.track.gap(car.loc.s, here)) < DRAW_RANGE;
+      }
+    }
     this._flash();
   }
 
@@ -415,10 +449,32 @@ export class Race {
 
     const racing = this.state === 'racing' || this.state === 'finished';
 
+    // Traffic a long way off is stepped less often.
+    //
+    // Three hundred and sixty cars on an eleven-kilometre bridge is three
+    // hundred and sixty drivers and three hundred and sixty tyre models a
+    // hundred and twenty times a second, and all but a dozen of them are
+    // beyond the fog holding a lane at fifty. They are stepped every third
+    // frame at three times the interval instead, which is the same motion at a
+    // third of the cost and is only ever applied to cars nobody can see.
+    //
+    // The step is still fixed — a third of 120 Hz is 40 Hz, not a variable
+    // rate — so this is not the thing a variable timestep would be.
+    this._slice = ((this._slice || 0) + 1) % FAR_EVERY;
+    const here = this.player && this.player.loc ? this.player.loc.s : 0;
+    const skip = (car, i) => car.traffic && car.loc
+      && Math.abs(this.track.gap(car.loc.s, here)) > FAR_TRAFFIC
+      && (i % FAR_EVERY) !== this._slice;
+
     // --- drivers
-    for (const car of this.cars) {
+    for (let ci = 0; ci < this.cars.length; ci++) {
+      const car = this.cars[ci];
+      if (skip(car, ci)) continue;
+      const step = car.traffic && car.loc
+        && Math.abs(this.track.gap(car.loc.s, here)) > FAR_TRAFFIC ? dt * FAR_EVERY : dt;
+      car._step = step;
       if (car.driver) {
-        if (racing) car.driver.drive(dt, this.cars);
+        if (racing) car.driver.drive(step, this.cars);
         else {
           car.vehicle.throttle = 0;
           car.vehicle.brake = 1;
@@ -434,10 +490,13 @@ export class Race {
     }
 
     // --- physics
-    for (const car of this.cars) {
+    for (let ci = 0; ci < this.cars.length; ci++) {
+      const car = this.cars[ci];
+      if (skip(car, ci)) continue;
+      const step = car._step || dt;
       const v = car.vehicle;
-      car.capture(dt);
-      v.update(dt);
+      car.capture(step);
+      v.update(step);
       const loc = this.track.locate(v.x, v.z, car.loc ? car.loc.index : -1);
       car.loc = loc;
       // Off the racing surface the grip goes away, which is the whole penalty
@@ -592,11 +651,43 @@ export class Race {
   // out entirely. That reasoning does not apply to a one-on-one duel or to a
   // police car trying to put you into a wall, so contact is per-race rather
   // than global, and `race` mode never switches it on.
+  // Every pair of cars that could possibly be touching, and no others.
+  //
+  // This was every pair full stop — fine for sixteen cars, which is a hundred
+  // and twenty tests, and not fine for three hundred and sixty-eight, which is
+  // sixty-seven thousand of them, every step, a hundred and twenty times a
+  // second. The broad-phase distance check inside `_resolvePair` does not help:
+  // the cost is in reaching it.
+  //
+  // Cars are on a road, so their positions along it are a single number, and
+  // two cars twenty metres apart along it cannot be touching whatever else is
+  // true. Bucketed by that number, each car is compared with the handful in
+  // its own bucket and the one ahead — which is a few hundred tests rather
+  // than sixty-seven thousand, and is exactly the same answer.
   _carContact() {
     if (!this.contact) return;
-    for (let i = 0; i < this.cars.length; i++) {
-      for (let j = i + 1; j < this.cars.length; j++) {
-        this._resolvePair(this.cars[i], this.cars[j]);
+    const cars = this.cars;
+    if (cars.length < CONTACT_BUCKET_FROM) {
+      for (let i = 0; i < cars.length; i++) {
+        for (let j = i + 1; j < cars.length; j++) this._resolvePair(cars[i], cars[j]);
+      }
+      return;
+    }
+    const bins = new Map();
+    for (const c of cars) {
+      if (!c.loc) continue;
+      const k = Math.floor(c.loc.s / CONTACT_BIN);
+      let list = bins.get(k);
+      if (!list) { list = []; bins.set(k, list); }
+      list.push(c);
+    }
+    for (const [k, list] of bins) {
+      for (let i = 0; i < list.length; i++) {
+        for (let j = i + 1; j < list.length; j++) this._resolvePair(list[i], list[j]);
+        // ...and the next bin along, so a pair straddling a boundary is not
+        // missed. Only the next one: the bin is wider than any car is long.
+        const next = bins.get(k + 1);
+        if (next) for (const o of next) this._resolvePair(list[i], o);
       }
     }
   }

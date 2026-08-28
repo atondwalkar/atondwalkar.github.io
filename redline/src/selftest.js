@@ -484,36 +484,72 @@ function checkBridge(game) {
   // pairs a step rather than the hundred and twenty a sixteen-car race does.
   let stepMs = 0;
   {
-    const all = f.cars.map((spec, i) => {
-      const p2 = t.atDistance(200 + i * 60);
+    // Through the REAL `Race.update`, not a hand-rolled loop over the cars.
+    //
+    // A loop of its own measures what a car costs; it does not measure what
+    // the game pays, and the two stopped being the same the moment distant
+    // traffic began being stepped less often. A benchmark that cannot see an
+    // optimisation is a benchmark that will not notice it being removed.
+    const bench = Object.create(Object.getPrototypeOf(game.race));
+    Object.assign(bench, {
+      game, track: t, cars: [], contact: true, state: 'racing', time: 0,
+      laps: 1, route: null, limit: null, leash: null, intercept: null,
+      trafficSpecs: [], trafficEvery: 0, formation: 'pursuit', results: [],
+      endOnFirst: false, lights: 0, countdown: 0,
+    });
+    // Spread over the ROAD, not at a fixed sixty-metre pitch from the start.
+    // Three hundred and sixty-eight cars at sixty metres is twenty-two
+    // kilometres of them on an eleven-kilometre bridge, and `atDistance`
+    // clamps — so half the field was stacked in a heap at the far end, which
+    // is a benchmark of the contact resolver untangling a pile-up rather than
+    // of a stage.
+    bench.cars = f.cars.map((spec, i) => {
+      const p2 = t.atDistance(((i + 0.5) / f.cars.length) * (t.length - 200) + 100);
       const lat = spec.lane || 0;
-      const car = { vehicle: new Vehicle(CAR), loc: null, traffic: !!spec.traffic };
+      const car = {
+        vehicle: new Vehicle(CAR), loc: null, traffic: !!spec.traffic,
+        pursuer: !!spec.opts, isPlayer: !!spec.isPlayer, contactT: 0,
+        lap: 0, lastS: 0, progress: 0, finished: false, position: i + 1,
+        livery: SELECTABLE[0], model: null, offTrackT: 0,
+        capture() {}, syncModel() {},
+      };
       car.vehicle.reset(p2.x + p2.nx * lat, p2.z + p2.nz * lat, Math.atan2(p2.dirX, p2.dirZ));
       car.vehicle.autoShift = true;
       car.vehicle.surfaceGrip = 1;
       car.vehicle.setSpeed(spec.speed || 40);
       car.loc = t.locate(car.vehicle.x, car.vehicle.z);
+      car.lastS = car.loc.s;
       car.driver = spec.traffic
         ? new Cruiser(car, t, lat, spec.speed || 14)
         : new Driver(car, t, 0.9, spec.opts || {});
       return car;
     });
-    for (const c of all) if (c.driver instanceof Driver && c.driver.opts.chase > 0) c.driver.quarry = all[0];
-    const bench = { contact: true, cars: all, track: t, game: { onImpact() {} } };
-    bench._resolvePair = game.race._resolvePair.bind(bench);
-    bench._carContact = game.race._carContact.bind(bench);
+    bench.player = bench.cars.find((c) => c.isPlayer) || bench.cars[0];
+    for (const c of bench.cars) {
+      if (c.driver instanceof Driver && c.driver.opts.chase > 0) c.driver.quarry = bench.player;
+    }
     const steps = Math.round(2 / FIXED);
     const t0 = performance.now();
-    for (let i = 0; i < steps; i++) {
-      for (const c of all) {
-        c.driver.drive(FIXED, all);
-        c.vehicle.update(FIXED, 2);
-        c.loc = t.locate(c.vehicle.x, c.vehicle.z, c.loc.index);
-      }
-      bench._carContact();
-    }
+    for (let i = 0; i < steps; i++) bench.update(FIXED);
     stepMs = (performance.now() - t0) / steps;
   }
+
+  // And what is DRAWN, which is a different budget from what is stepped.
+  {
+    const bench2 = Object.create(Object.getPrototypeOf(game.race));
+    Object.assign(bench2, { track: t, cars: [], player: null, time: 0 });
+    const mk = (at, traffic) => ({
+      traffic, model: { visible: true, userData: {} },
+      loc: t.locate(t.atDistance(at).x, t.atDistance(at).z),
+      vehicle: { x: 0, z: 0 }, syncModel() {},
+    });
+    bench2.cars = [mk(1000, false), mk(1200, true), mk(4000, true), mk(9000, true)];
+    bench2.player = bench2.cars[0];
+    bench2.sync(1);
+    const drawn = bench2.cars.filter((c) => c.model.visible).length;
+    if (drawn !== 2) bad.push(`${drawn} of 4 cars drawn — traffic across the bay is being submitted`);
+  }
+
   // Two milliseconds a step is a quarter of a 120 Hz budget and an eighth of a
   // frame at sixty. Past that the traffic is what the player notices about the
   // frame rate rather than about the bridge.

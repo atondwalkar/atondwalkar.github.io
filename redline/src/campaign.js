@@ -48,7 +48,7 @@ export const STAGES = [
     // the move, which happens behind you, but that they are still there.
     leash: 340,
     // And fresh ones cutting in ahead, so a lead is not the end of the stage.
-    intercept: { every: 16, from: 260, to: 520, max: 6 },
+    intercept: { every: 8, from: 260, to: 520, max: 10 },
     rival: null,
     onWin: 'ESCAPE',
     onLose: 'PULLED_OVER',
@@ -70,7 +70,7 @@ export const STAGES = [
     limit: 190,
     police: 3,
     leash: 380,
-    intercept: { every: 14, from: 300, to: 620, max: 7 },
+    intercept: { every: 7, from: 300, to: 620, max: 12 },
     // Traffic as a SPACING, not as a count.
     //
     // It was a count, and a count does not survive the road changing length:
@@ -79,7 +79,7 @@ export const STAGES = [
     // eighteen cars parked on it. What matters is how often you have to go
     // round something, so that is the number that gets written down and the
     // count is worked out from whatever the deck measures.
-    trafficEvery: 60,
+    trafficEvery: 30,
     rival: null,
     onWin: 'ACROSS',
     onLose: 'PULLED_OVER',
@@ -130,7 +130,12 @@ export function trafficCount(stage, track) {
   return Math.min(TRAFFIC_CAP, Math.round(track.length / stage.trafficEvery));
 }
 
-const TRAFFIC_CAP = 220;
+// A backstop against a layout change producing a thousand cars, not a tuning
+// knob — the number that matters is the spacing. Raised with the density,
+// because a cap below what the spacing asks for silently makes the spacing a
+// lie: at one car every thirty metres an eleven-kilometre bridge wants three
+// hundred and sixty-four of them.
+const TRAFFIC_CAP = 420;
 
 export class Campaign {
   constructor(game) {

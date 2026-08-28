@@ -7773,6 +7773,16 @@ async function exportWav(){
   const mm=rng.trim().match(/^(\d+)\s*[-–]\s*(\d+)$/);
   const b0=mm?parseInt(mm[1],10):0, b1=mm?parseInt(mm[2],10):0;
   if(!mm || b0<1 || b1<b0){ fileFlash('Export range must look like "1-8".'); return; }
+  const wavName=safeProjectFile()+'-bars'+b0+'-'+b1+'-'+state.bpm+'bpm.wav';
+  let wavHandle=null;
+  if(window.showSaveFilePicker){                          // choose where the WAV goes (Chrome/Edge); elsewhere it downloads
+    try{
+      wavHandle=await showSaveFilePicker({suggestedName:wavName, types:[{description:'WAV audio',accept:{'audio/wav':['.wav']}}]});
+    }catch(e){
+      if(e && e.name==='AbortError'){ fileSay(''); return; }   // cancelled
+      wavHandle=null;                                          // picker unavailable → download instead
+    }
+  }
   const expStart=(b0-1)*barSec(), expEnd=b1*barSec();
   exportBtn.disabled=true;
   fileSay('Rendering…');
@@ -7930,12 +7940,20 @@ async function exportWav(){
 
     const rendered=await off.startRendering();
     const blob=encodeWav(rendered);
-    const url=URL.createObjectURL(blob);
-    const a=document.createElement('a');
-    a.href=url; a.download='signal16-bars'+b0+'-'+b1+'-'+state.bpm+'bpm.wav';
-    document.body.appendChild(a); a.click(); a.remove();
-    setTimeout(()=>URL.revokeObjectURL(url),4000);
-    fileSay('');
+    if(wavHandle){
+      const w=await wavHandle.createWritable();
+      await w.write(blob); await w.close();
+      const onDisk=await wavHandle.getFile().then(f2=>f2.size).catch(()=>-1);
+      if(onDisk>=0 && onDisk!==blob.size) throw new Error('written file is '+onDisk+' bytes, expected '+blob.size);
+      fileSay(''); fileFlash('Exported '+wavHandle.name+' ('+(blob.size/1048576).toFixed(1)+' MB)');
+    }else{
+      const url=URL.createObjectURL(blob);
+      const a=document.createElement('a');
+      a.href=url; a.download=wavName;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(()=>URL.revokeObjectURL(url),4000);
+      fileSay('');
+    }
   }catch(e){
     fileFlash('Render failed: '+(e&&e.message||e));
   }

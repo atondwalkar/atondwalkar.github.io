@@ -1796,7 +1796,8 @@ process(inputs,outputs,params){
   if(this.active||this.rel>0){
    let wl=xl,wr=xr;
    if(!this.first){
-    const ratio=Math.pow(2,pitch*this.rep*Lsec/12);
+    let ratio=Math.pow(2,pitch*this.rep*Lsec/12);
+    if(!isFinite(ratio)) ratio=pitch>0?64:1/64; ratio=Math.max(1/64,Math.min(64,ratio));
     const rp=(this.pos*ratio)%L, i0=Math.floor(rp), fr=rp-i0;
     const a=(this.cap0+i0)%R, bb=(i0+1>=L)?this.cap0:(this.cap0+i0+1)%R;
     wl=(b0[a]+(b0[bb]-b0[a])*fr)*this.g; wr=(b1[a]+(b1[bb]-b1[a])*fr)*this.g;
@@ -1807,7 +1808,7 @@ process(inputs,outputs,params){
    if(gate<1){ const gEnd=L*gate; if(p>gEnd) env=0; else if(p>gEnd-gateN) env*=(gEnd-p)/gateN; }
    wl*=env; wr*=env;
    this.pos++;
-   if(this.pos>=L){ this.pos=0; this.rep++; this.g*=(1-decay*0.5); if(this.first){ this.first=false; this.frozen=true; } }
+   if(this.pos>=L){ this.pos=0; this.rep=Math.min(this.rep+1,4096); this.g*=(1-decay*0.5); if(this.first){ this.first=false; this.frozen=true; } }
    if(!this.active) this.rel=Math.max(0,this.rel-relStep);
    const k=this.rel; yl=wl*k+xl*(1-k); yr=wr*k+xr*(1-k);
   }
@@ -1916,7 +1917,8 @@ process(inputs,outputs,params){
  this.wasLearn=learn;
  const n0=inp&&inp[0], n1=(inp&&inp[1])||n0, L=out[0].length;
  for(let n=0;n<L;n++){ const p=this.t&M; this.inL[p]=n0?n0[n]:0; this.inR[p]=n1?n1[n]:0; this.t++; }
- while(this.t>=this.nf*R+N){ this.frame((this.nf*R)&~0,learn,reduct,sens,B,aa,ar); this.nf++; }
+ while(this.t>=this.nf*R+N){ this.frame((this.nf%16)*R,learn,reduct,sens,B,aa,ar); this.nf++; }
+ if(this.t>1e9){ const K=8192*4096; this.t-=K; this.nf-=K/R; }         // keep counters small: ring math uses int32 masks
  for(let n=0;n<L;n++){
   const q=this.t-L+n-N;                                   // constant N-sample latency
   const p=q&M, dl=q>=0?this.inL[p]:0, dr=q>=0?this.inR[p]:0;
@@ -1941,7 +1943,7 @@ constructor(){super();
  const N=this.N=1<<Math.ceil(Math.log2(this.D*2+256));
  this.M=N-1;
  this.dl=[new Float32Array(N),new Float32Array(N)]; this.w=0;
- this.qV=new Float32Array(N); this.qI=new Int32Array(N); this.qh=0; this.qt=0;   // monotonic deque: sliding max of |x| over the lookahead window
+ this.qV=new Float32Array(N); this.qI=new Float64Array(N); this.qh=0; this.qt=0;   // Float64: indices stay exact for years, not 12 h   // monotonic deque: sliding max of |x| over the lookahead window
  this.g=1; this.n=0;
 }
 process(inputs,outputs,params){
@@ -1969,6 +1971,7 @@ process(inputs,outputs,params){
   out[0][i]=yl; if(out[1]) out[1][i]=yr;
   this.w++; this.n++;
  }
+ if(this.w>1073741824){ this.w-=1073741824; }                          // re-base the ring pointer (multiple of every power-of-two N) before int32 masks lie
  return true}}
 registerProcessor('s16-limit',S16Limit);`;
 
@@ -2035,7 +2038,8 @@ function ensureSamples(){
 }
 function initAudio(){
   if(ctx) return;
-  ctx = new (window.AudioContext||window.webkitAudioContext)({latencyHint:0});
+  ctx = new (window.AudioContext||window.webkitAudioContext)({latencyHint:'interactive'});   // 0 = minimum buffer = maximum underruns
+  ctx.onstatechange=()=>diagLog('ctx','state '+ctx.state);
   if(outId && ctx.setSinkId) ctx.setSinkId(outId).catch(()=>{});
 
   master = ctx.createGain(); master.gain.value = parseFloat(mvol.value);
@@ -2168,7 +2172,7 @@ function buildFxCore(fx,c,useWorklet){
   if(FX_DEFS[t].inst) return null;              // instruments are markers, no audio nodes
   if(t==='gate'){
     if(useWorklet){
-      const node=new AudioWorkletNode(c,'s16-gate');
+      const node=watchProcessor(new AudioWorkletNode(c,'s16-gate'),fx,'gate');
       return {in:node, out:node, isWorklet:true, worklet:node};
     }
     if(c===ctx){                                 // live fallback: control-rate gate
@@ -2292,7 +2296,7 @@ function buildFxCore(fx,c,useWorklet){
   }
   if(t==='limit'){
     if(useWorklet){
-      const node=new AudioWorkletNode(c,'s16-limit',{outputChannelCount:[2]});
+      const node=watchProcessor(new AudioWorkletNode(c,'s16-limit',{outputChannelCount:[2]}),fx,'limit');
       return {in:node, out:node, limNode:node};
     }
     const cp=c.createDynamicsCompressor();
@@ -2324,7 +2328,7 @@ function buildFxCore(fx,c,useWorklet){
     const dry=c.createGain(), wet=c.createGain();
     inN.connect(dry); dry.connect(out);
     if(useWorklet){
-      const node=new AudioWorkletNode(c,'s16-pitch',{outputChannelCount:[2]});
+      const node=watchProcessor(new AudioWorkletNode(c,'s16-pitch',{outputChannelCount:[2]}),fx,'pitch');
       inN.connect(node); node.connect(wet); wet.connect(out);
       return {in:inN, out, dry, wet, pitchNode:node};
     }
@@ -2338,7 +2342,7 @@ function buildFxCore(fx,c,useWorklet){
     if(useWorklet){
       const wkOpts={outputChannelCount:[2]};
       if(t==='denoise' && fx.noiseProfile) wkOpts.processorOptions={profile:fx.noiseProfile, fftSize:fx.profN||2048, sampleRate:fx.profSr||c.sampleRate};
-      const node=new AudioWorkletNode(c,'s16-'+t,wkOpts);
+      const node=watchProcessor(new AudioWorkletNode(c,'s16-'+t,wkOpts),fx,t);
       inN.connect(node); node.connect(wet); wet.connect(out);
       if(t==='tune' && c===ctx){
         node.port.onmessage=e=>{ fx._tune=e.data; if(fx.tuneLab && fx.tuneLab.isConnected) fx.tuneLab.textContent=tuneReadout(e.data); };
@@ -2474,6 +2478,16 @@ function dnReadout(fx){
   if(fx._learn) return 'learning\u2026 '+((fx.noiseSec||0).toFixed(1))+' s \u2014 play the noise-only part';
   if(fx.noiseProfile) return (fx.noiseSec>0) ? 'profile: '+((+fx.noiseSec).toFixed(1))+' s of noise' : 'hand-drawn profile';
   return 'no profile \u2014 play the noisy gap and press Learn';
+}
+function fxTrackOf(fx){ return allTracks().find(t=>t.fx.includes(fx))||null; }
+function watchProcessor(node,fx,name){
+  node.onprocessorerror=e=>{
+    diagLog('error','worklet '+name+' died'+(fx?' on '+(fxTrackOf(fx)||{}).name:'')+' — rebuilding chain');
+    if(!fx) return;
+    const tr=fxTrackOf(fx); if(!tr) return;
+    clearTimeout(fx._rebuildT); fx._rebuildT=setTimeout(()=>{ try{ rebuildChain(tr); }catch(err){ diagLog('error','rebuild failed: '+err.message); } },50);
+  };
+  return node;
 }
 function applyFxTo(fx,n){
   const p=fx.params;
@@ -2725,22 +2739,29 @@ function rebuildChain(track){
   const tr=state.tracks[track.id];
   if(!tr.input || !tr.gain) return;
   tr.input.disconnect();
-  track.fx.forEach(fx=>{ if(fx.nodes && fx.nodes.out) try{fx.nodes.out.disconnect();}catch(e){} fx.nodes=null; });
+  track.fx.forEach(fx=>{ if(fx.nodes){ ['out','in','preAn','postAn'].forEach(k=>{ try{ fx.nodes[k]&&fx.nodes[k].disconnect(); }catch(e){} }); } fx.nodes=null; });
   let prev=tr.input;
   track.fx.forEach(fx=>{
     if(fx.bypass || tr.fxBypass){ fx.nodes=null; return; }
-    fx.nodes=buildFxNodes(fx,ctx,liveWorklet);
-    if(!fx.nodes) return;
-    applyFx(fx);
-    if(fx.type==='duck') wireDucker(fx);
-    // level taps for the FX rack meters
-    fx.nodes.preAn=ctx.createAnalyser(); fx.nodes.preAn.fftSize=2048;
-    fx.nodes.postAn=ctx.createAnalyser(); fx.nodes.postAn.fftSize=2048;
-    fx.nodes.preBuf=new Float32Array(256); fx.nodes.postBuf=new Float32Array(256);
-    prev.connect(fx.nodes.preAn);
-    fx.nodes.out.connect(fx.nodes.postAn);
-    prev.connect(fx.nodes.in);
-    prev=fx.nodes.out;
+    try{
+      fx.nodes=buildFxNodes(fx,ctx,liveWorklet);
+      if(!fx.nodes) return;
+      applyFx(fx);
+      if(fx.type==='duck') wireDucker(fx);
+      // level taps for the FX rack meters
+      fx.nodes.preAn=ctx.createAnalyser(); fx.nodes.preAn.fftSize=2048;
+      fx.nodes.postAn=ctx.createAnalyser(); fx.nodes.postAn.fftSize=2048;
+      fx.nodes.preBuf=new Float32Array(256); fx.nodes.postBuf=new Float32Array(256);
+      prev.connect(fx.nodes.preAn);
+      fx.nodes.out.connect(fx.nodes.postAn);
+      prev.connect(fx.nodes.in);
+      prev=fx.nodes.out;
+      fx._broken=false;
+    }catch(e){                                             // a broken unit is skipped, the track keeps passing audio
+      diagLog('error',(FX_DEFS[fx.type]||{}).name+' on '+track.name+' failed to build: '+(e&&e.message||e)+' — bypassed');
+      try{ if(fx.nodes){ ['out','in'].forEach(k=>{ try{ fx.nodes[k]&&fx.nodes[k].disconnect(); }catch(_){} }); } }catch(_){}
+      fx.nodes=null; fx._broken=true;
+    }
   });
   prev.connect(tr.gain);
 }
@@ -3277,7 +3298,7 @@ function wavetableVoice(t,k,dur,dest,p,c,tap,vel,fx,fromK,legato){
   let node;
   try{ node=new AudioWorkletNode(c,'s16-wtvoice',{numberOfInputs:0,numberOfOutputs:1,outputChannelCount:[2],processorOptions:spec}); }
   catch(e){ console.warn('wtvoice node failed, falling back to graph voice',e); return wavetableVoiceGraph(t,k,dur,dest,p,c,tap,vel,fx,fromK,legato); }
-  node.onprocessorerror=e=>console.warn('wtvoice processor error',e);
+  node.onprocessorerror=e=>{ diagLog('error','wavetable voice processor died'); try{ node.disconnect(); }catch(_){} };
   node.connect(dest);
   if(tap) node.connect(tap);
   if(fx && c===ctx && spec.usesMacros){
@@ -3576,6 +3597,17 @@ function refreshMix(){
 /* ============================== transport ============================== */
 let nextTime=0, timerId=null;
 const LOOKAHEAD=0.2, TICK=25;
+/* diagnostics ring: every engine anomaly lands here (read by the Diagnostics panel; errors also reach the console) */
+const DIAG={events:[],max:4000,counts:{}};
+function diagLog(kind,msg,data){
+  const e={t:Date.now(), a:(typeof ctx!=='undefined'&&ctx)?+ctx.currentTime.toFixed(3):null, kind, msg};
+  if(data!==undefined) e.data=data;
+  DIAG.events.push(e); if(DIAG.events.length>DIAG.max) DIAG.events.splice(0,DIAG.events.length-DIAG.max);
+  DIAG.counts[kind]=(DIAG.counts[kind]||0)+1;
+  if(kind==='error'){ console.warn('[SHEESH]',msg,data||''); if(!diagLog._flashAt||Date.now()-diagLog._flashAt>5000){ diagLog._flashAt=Date.now(); if(typeof flash==='function') flash('Engine error logged (Diagnostics): '+String(msg).slice(0,80)); } }
+}
+window.addEventListener('error',e=>diagLog('error',(e.message||'error')+' @'+(e.filename||'').split('/').pop()+':'+e.lineno));
+window.addEventListener('unhandledrejection',e=>diagLog('error','unhandled: '+(e.reason&&e.reason.message||e.reason)));
 const drawQueue=[];
 
 function curPos(){ return state.playing ? startPos + (ctx.currentTime - startCtx) : startPos; }
@@ -3611,21 +3643,31 @@ function scheduleStep(step,t){
   if(step%3===0) drawQueue.push({step,time:t});
 }
 function tickFn(){
+  if(!ctx) return;
   const sd=stepDur();
+  // after a main-thread stall, skip the missed steps instead of firing them all at once (machine-gun burst)
+  if(ctx.currentTime-nextTime > 2*LOOKAHEAD){
+    const missed=Math.floor((ctx.currentTime-nextTime)/sd);
+    if(missed>0){ nextTime+=missed*sd; absStep+=missed; diagLog('sched','resync: skipped '+missed+' steps after a '+Math.round((missed*sd)*1000)+' ms stall'); }
+  }
+  const wrapEnd=loopRegion?loopRegion.end:songSteps();     // once per tick, not per step
+  const wrapStart=loopRegion?loopRegion.start:0;
   while(nextTime < ctx.currentTime + LOOKAHEAD){
-    const wrapEnd=loopRegion?loopRegion.end:songSteps();
-    const wrapStart=loopRegion?loopRegion.start:0;
-    if(loopOn && absStep>=wrapEnd){
-      absStep=wrapStart;
-      scheduleClips(wrapStart*sd, nextTime);
-      pendingAnchors.push({pos:wrapStart*sd, at:nextTime});
-    }
-    let t=nextTime;
-    if(absStep%12===6) t += sd*T16*state.swing;          // swing delays the off-16ths
-    scheduleStep(absStep,t);
+    try{
+      if(loopOn && absStep>=wrapEnd){
+        absStep=wrapStart;
+        scheduleClips(wrapStart*sd, nextTime);
+        pendingAnchors.push({pos:wrapStart*sd, at:nextTime});
+      }
+      let t=nextTime;
+      if(absStep%12===6) t += sd*T16*state.swing;          // swing delays the off-16ths
+      scheduleStep(absStep,t);
+    }catch(e){ diagLog('error','scheduler step '+absStep+': '+(e&&e.message||e)); }   // one bad step never freezes the transport
     nextTime += sd;
     absStep++;
   }
+  if(drawQueue.length>1500) drawQueue.splice(0,drawQueue.length-1500);      // hidden-tab backlog cap
+  if(pendingAnchors.length>200) pendingAnchors.splice(0,pendingAnchors.length-200);
 }
 function scheduleClips(pos, at){
   // inside an active loop region, clips must stop at the region's end
@@ -3638,9 +3680,10 @@ function scheduleClips(pos, at){
     const dest=state.tracks[tr.id].input;
     const fades=clipFades(tr);
     tr.clips.forEach(c=>{
+      if(!c.buffer || !(c.buffer.duration>0) || !(c.dur>0)) return;   // empty / missing audio: skip, don't throw
       const rate=clipRate(c), tlDur=clipTlDur(c);
       const end=c.start+tlDur;
-      if(end<=pos+0.001 || c.start>=cap) return;
+      if(!(tlDur>0) || end<=pos+0.001 || c.start>=cap) return;
       const when=at + Math.max(0,c.start-pos);
       const srcOff=wrapOff(c, c.offset + Math.max(0,pos-c.start)*rate);
       const f0=fades.get(c)||{};

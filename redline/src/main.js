@@ -18,6 +18,7 @@ import { Driver } from './ai.js';
 import { Cutscene, SCRIPTS } from './cutscene.js';
 import { Campaign, STAGES } from './campaign.js';
 import { findCheat } from './cheats.js';
+import { TouchControls, looksLikeTouch } from './touch.js';
 import { ACTIONS, actionFor, codesFor, isBound, rebind, resetBinds, label } from './keybinds.js';
 import { clamp, lerp, approach, lapTime, ordinal, dist2D } from './utils.js';
 import { Post } from './post.js';
@@ -78,6 +79,8 @@ class Game {
     this.time = 0;
     this.accumulator = 0;
     this.keys = new Set();
+    // Actions currently held by a finger on the screen.
+    this.touch = new Set();
     this.fastestLap = { time: Infinity, car: null };
     this.raceEnded = false;
 
@@ -309,6 +312,8 @@ class Game {
     });
     document.getElementById('campaign-btn').addEventListener('click', () => this.startCampaign());
     this._cheatPanel();
+    this.touchUI = new TouchControls(this);
+    this._touchSetting();
     this._settingsTabs();
     this._bindPanel();
     const nameBox = document.getElementById('name');
@@ -357,7 +362,7 @@ class Game {
       if (isBound('standings', e.code)) this.hud.showAll = false;
       if (isBound('lookBack', e.code)) this.chase.lookBack = false;
     });
-    window.addEventListener('blur', () => this.keys.clear());
+    window.addEventListener('blur', () => { this.keys.clear(); this.touch.clear(); });
   }
 
   _press(code) {
@@ -381,11 +386,20 @@ class Game {
       else if (code === 'KeyK') this.debugCutscene();
       return;
     }
+    const act = actionFor(code);
+    if (act) { this.doAction(act); return; }
+    this.doAction(null, code);
+  }
+
+  // What an action DOES, separated from what pressed it.
+  //
+  // Every one of these used to be a `case` on a key literal. Routing them
+  // through the action name let the settings screen rebind them; routing them
+  // through one method lets a thumb on a screen do the same thing a key does,
+  // rather than the touch controls growing a second copy of the gearbox.
+  doAction(id, code = null) {
     const v = this.race.player.vehicle;
-    // By ACTION, not by key code. Every one of these used to be a `case` on a
-    // literal, in a switch that a rebinding screen would have had no way to
-    // reach — so the settings would have moved the label and not the key.
-    switch (actionFor(code)) {
+    switch (id) {
       case 'shiftUp':
         if (!v.autoShift && v.shiftUp()) this.audio.shift(true);
         break;
@@ -404,6 +418,7 @@ class Game {
       case 'restart': this.restart(); break;
       case 'mute': this.audio.setVolume(this.audio.volume > 0 ? 0 : 0.75); break;
       default: {
+        if (!code) break;
         // Number keys go straight to a gear, which is what a sequential box
         // with paddles does not let you do — but a keyboard should.
         const n = ['Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5', 'Digit6'].indexOf(code);
@@ -438,7 +453,9 @@ class Game {
     // are on separate paths anyway — a shift is an event, fired once on the
     // key going down, while a pedal is a state read every frame.
     const k = this.keys;
-    const held = (id) => codesFor(id).some((c) => k.has(c));
+    // A thumb on the screen holds an ACTION; a finger on a keyboard holds a
+    // KEY that maps to one. Both end up here.
+    const held = (id) => this.touch.has(id) || codesFor(id).some((c) => k.has(c));
     const gas = held('throttle');
     const brake = held('brake');
     const left = held('left');
@@ -721,6 +738,25 @@ class Game {
     this._placeLamps();
     this.fx.update(dt);
     this.chase.cinematic(dt, this._star, this.time);
+  }
+
+  // The touch-controls setting: auto, on, off.
+  //
+  // Auto is a guess and guesses are wrong sometimes — a tablet with a keyboard
+  // wants none of this, a desktop being tested for a phone wants all of it —
+  // so the guess is a default and not a decision. Remembered, because a player
+  // who had to turn it on once should not have to again.
+  _touchSetting() {
+    const sel = document.getElementById('set-touch');
+    if (!sel) return;
+    let saved = 'auto';
+    try { saved = localStorage.getItem('redline.touch') || 'auto'; } catch (e) { /* private window */ }
+    sel.value = saved;
+    this.touchUI.set(saved);
+    sel.addEventListener('change', (e) => {
+      this.touchUI.set(e.target.value);
+      try { localStorage.setItem('redline.touch', e.target.value); } catch (err) { /* not fatal */ }
+    });
   }
 
   _settingsTabs() {

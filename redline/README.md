@@ -708,6 +708,28 @@ it, because two actions sharing a key means one of them silently stops working
 and the one that stops is whichever comes later in a list nobody can see.
 Escape, Enter and the browser's own keys are refused.
 
+## On a phone
+
+**SETTINGS → GRAPHICS → TOUCH CONTROLS**: auto, on, off. Auto turns them on for
+a coarse pointer with no hover, which is the pair that actually means a finger
+— either on its own catches a laptop with a touchscreen, which has a keyboard
+and does not want half its screen covered in buttons. The choice is remembered.
+
+Steering goes under the left thumb, the pedals under the right, and the gearbox
+between them so neither has to leave the wheel to change gear. A pad captures
+the pointer, so sliding a thumb off the throttle still releases it — without
+that there is no `pointerup` to come and the throttle stays open for ever.
+
+What a pad does not have is its own copy of the driving. A held pad holds an
+ACTION — the same action a key holds — and a tapped one calls the same
+`doAction` a key press calls, so the two cannot drift apart. The smoke test
+drives the car with a pad and with a key and compares.
+
+Below 900 px, or on any coarse pointer, the panels shrink from their own
+corners rather than moving, so what is where does not change between a laptop
+and a phone; the order list goes altogether. In portrait it asks for the phone
+to be turned rather than squeezing a landscape game into a strip.
+
 ## Cheats
 
 Three codes, one per campaign stage, typed into the CHEATS box on the title

@@ -24,6 +24,7 @@ import { PORTRAITS, portraitFor } from './portraits.js';
 import { Campaign, STAGES, laneCentres, trafficCount } from './campaign.js';
 import { CHEATS, findCheat, normalise, unresolved } from './cheats.js';
 import { ACTIONS, actionFor, codesFor, isBound, rebind, resetBinds, label } from './keybinds.js';
+import { PADS, looksLikeTouch } from './touch.js';
 
 const FIXED = 1 / 120;
 
@@ -955,6 +956,89 @@ function checkKeybinds(game) {
     `${ACTIONS.length} actions over ${seen.size} keys in ${tabs} tabs and ${cols} columns; ` +
     `moved the throttle to T and W went from ${before.toFixed(2)} to ${oldKey.toFixed(2)} ` +
     `while T gave ${newKey.toFixed(2)}`;
+}
+
+// Touch controls.
+//
+// The point of the check is that a thumb reaches the SAME code a key does. A
+// touch layer that grew its own copy of the throttle would work on the day it
+// was written and drift from the keyboard's version thereafter — which is the
+// failure mode of every on-screen control ever bolted onto a game.
+function checkTouch(game) {
+  const bad = [];
+  const el = (id) => document.getElementById(id);
+  const sel = el('set-touch');
+  if (!sel) return 'WRONG — there is no touch setting';
+  if (![...sel.options].map((o) => o.value).includes('auto')) bad.push('there is no AUTO');
+
+  const was = game.touchUI.mode;
+  game.touchUI.set('on');
+  if (!document.body.classList.contains('touch')) bad.push('turning it on showed nothing');
+  const pads = [...document.querySelectorAll('#touch .pad')];
+  if (pads.length !== PADS.length) bad.push(`${pads.length} pads drawn of ${PADS.length}`);
+  // Every pad has to be reachable: on screen, and big enough for a thumb.
+  const vmin = Math.min(window.innerWidth, window.innerHeight);
+  let smallest = Infinity;
+  for (const p of pads) {
+    const r = p.getBoundingClientRect();
+    smallest = Math.min(smallest, r.width);
+    if (r.left < -4 || r.top < -4 || r.right > window.innerWidth + 4
+      || r.bottom > window.innerHeight + 4) bad.push(`the ${p.dataset.id} pad is off screen`);
+  }
+  // Nine millimetres is about the smallest target a thumb hits reliably; on a
+  // phone that is roughly a tenth of the short side.
+  if (smallest < vmin * 0.07) bad.push(`the smallest pad is ${smallest.toFixed(0)} px`);
+
+  // No two pads overlap, or one of them cannot be pressed.
+  for (let i = 0; i < pads.length; i++) {
+    for (let j = i + 1; j < pads.length; j++) {
+      const a = pads[i].getBoundingClientRect(), b = pads[j].getBoundingClientRect();
+      if (a.right > b.left && b.right > a.left && a.bottom > b.top && b.bottom > a.top) {
+        bad.push(`the ${pads[i].dataset.id} and ${pads[j].dataset.id} pads overlap`);
+      }
+    }
+  }
+
+  // A held pad drives the car through the same path a key does.
+  const v = game.race.player.vehicle;
+  const keptPhase = game.phase, keptState = game.race.state;
+  game.phase = 'racing';
+  game.race.state = 'racing';
+  game.race.player.finished = false;
+  game.keys.clear();
+  game.touch.clear();
+  v.throttle = 0;
+  for (let i = 0; i < 30; i++) game._drivePlayer(1 / 60);
+  const idle = v.throttle;
+  game.touch.add('throttle');
+  for (let i = 0; i < 30; i++) game._drivePlayer(1 / 60);
+  const pressed = v.throttle;
+  game.touch.delete('throttle');
+  for (let i = 0; i < 40; i++) game._drivePlayer(1 / 60);
+  const released = v.throttle;
+  game.phase = keptPhase;
+  game.race.state = keptState;
+  if (idle > 0.05) bad.push('the throttle was open before anything was pressed');
+  if (pressed < 0.7) bad.push(`a held pad gave ${pressed.toFixed(2)} throttle`);
+  if (released > 0.05) bad.push(`letting go left ${released.toFixed(2)} throttle`);
+
+  // A one-shot pad fires the same action a key does.
+  const before = v.gear;
+  v.autoShift = false;
+  v.shiftT = 0;
+  v.setSpeed(30);
+  game.doAction('shiftUp');
+  if (v.gear === before) bad.push('the shift pad did nothing');
+
+  game.touchUI.set('off');
+  if (document.body.classList.contains('touch')) bad.push('turning it off left the pads up');
+  game.touchUI.set(was || 'auto');
+
+  const ok = bad.length === 0;
+  return `${ok ? 'a thumb reaches what a key reaches' : `WRONG — ${bad[0]}`} — ` +
+    `${pads.length} pads, none overlapping, smallest ${smallest.toFixed(0)} px; ` +
+    `held gives ${pressed.toFixed(2)} throttle and letting go ${released.toFixed(2)}; ` +
+    `auto/on/off, and auto reads this machine as ${looksLikeTouch() ? 'touch' : 'keyboard'}`;
 }
 
 // The settings that change what you see.
@@ -3060,6 +3144,7 @@ function assertions(game) {
     guard('full race      ', () => checkRace(game)),
     guard('hud            ', () => checkHud(game)),
     guard('settings       ', () => checkSettings(game)),
+    guard('touch          ', () => checkTouch(game)),
     guard('keybinds       ', () => checkKeybinds(game)),
     guard('chase rules    ', () => checkChaseRules(game)),
   ];

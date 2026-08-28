@@ -109,6 +109,62 @@
   #grip { font-size: 9px; letter-spacing: 1px; opacity: 0.6; }
   #grip.slide { color: var(--amber); opacity: 1; }
 
+  /* ------------------------------ touch ---------------------------------- */
+  /* Off unless the game turns them on. A phone gets thumb-sized targets over
+     the picture; a desktop gets none of it, because a keyboard is better and
+     half the screen is worth more than a button. */
+  #touch { display: none; }
+  body.touch #touch { display: block; }
+  #touch .pad {
+    position: absolute; z-index: 12; border-radius: 50%;
+    background: rgba(12, 16, 22, 0.5); color: rgba(244, 246, 248, 0.85);
+    border: 2px solid rgba(232, 236, 240, 0.3);
+    font: inherit; letter-spacing: 2px;
+    display: flex; align-items: center; justify-content: center;
+    touch-action: none; user-select: none; -webkit-user-select: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  #touch .pad.on { background: var(--hot); border-color: var(--hot); color: #0a0c10; }
+  /* Steering under the left thumb, pedals under the right, gearbox between —
+     so neither thumb has to leave the wheel to change gear. */
+  #touch .steer { width: 21vmin; height: 21vmin; bottom: 4vmin; font-size: 5vmin; }
+  #touch .steer.l { left: 3vmin; }
+  #touch .steer.r { left: 26vmin; }
+  #touch .pedal { width: 21vmin; height: 21vmin; bottom: 4vmin; font-size: 3vmin; }
+  #touch .pedal.go { right: 3vmin; background: rgba(20, 60, 32, 0.5); }
+  #touch .pedal.stop { right: 26vmin; background: rgba(70, 22, 16, 0.5); }
+  #touch .small { width: 12vmin; height: 12vmin; font-size: 2.6vmin; }
+  #touch .small.up { right: 4vmin; bottom: 27vmin; }
+  #touch .small.down { right: 18vmin; bottom: 27vmin; }
+  #touch .small.hand { left: 4vmin; bottom: 27vmin; }
+  #touch .small.cam { left: 18vmin; bottom: 27vmin; }
+
+  /* On a small screen the panels have to give way to the road. Everything
+     shrinks from its own corner rather than being repositioned, so what is
+     where does not change between a laptop and a phone. */
+  @media (max-width: 900px), (pointer: coarse) {
+    #map { width: 132px; height: 132px; left: 10px; top: 10px; }
+    #dash, #dash-l { transform: scale(0.62); }
+    #dash { transform-origin: bottom right; right: 8px; bottom: 8px; }
+    #dash-l { transform-origin: bottom left; left: 8px; bottom: 8px; }
+    #inputs { transform: scale(0.8); transform-origin: bottom center; bottom: 6px; }
+    #top { font-size: 11px; }
+    #standings { display: none; }
+    #select .grid, #settings, #cheats, #name { font-size: 12px; }
+    #menu button, #settings button, #cheats button { padding: 12px 22px; letter-spacing: 4px; }
+    #binds { grid-template-columns: auto auto; }
+  }
+  /* And in portrait there is no room for any of it: ask for the phone to be
+     turned rather than shrinking a landscape game into a strip. */
+  @media (orientation: portrait) and (pointer: coarse) {
+    #rotate { display: flex; }
+  }
+  #rotate {
+    position: absolute; inset: 0; z-index: 60; display: none;
+    align-items: center; justify-content: center; flex-direction: column; gap: 14px;
+    background: #05070b; font-size: 13px; letter-spacing: 6px; text-align: center;
+  }
+
   /* ------------------------------ minimap -------------------------------- */
   /* A run is not a race. There is no position to hold, no lap to time and
      nobody to be ahead of — three police cars are not an order of finish — so
@@ -455,7 +511,10 @@
     </div>
   </div>
 
-  <div id="lights"><i></i><i></i><i></i><i></i><i></i></div>
+  <div id="touch"></div>
+<div id="rotate"><div>TURN THE PHONE</div><div style="font-size:10px;opacity:.5">REDLINE IS PLAYED IN LANDSCAPE</div></div>
+
+<div id="lights"><i></i><i></i><i></i><i></i><i></i></div>
   <div id="message"><div class="main"></div><div class="sub"></div></div>
   <div id="flash-lap"></div>
 </div>
@@ -530,6 +589,9 @@
     </select></label>
     <label>BLOOM<select id="set-bloom">
       <option value="1.15">ON</option><option value="0">OFF</option>
+    </select></label>
+    <label>TOUCH CONTROLS<select id="set-touch">
+      <option value="auto">AUTO</option><option value="on">ON</option><option value="off">OFF</option>
     </select></label>
   </div>
 

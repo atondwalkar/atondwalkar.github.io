@@ -2029,6 +2029,7 @@ function ensureSamples(){
       await Promise.all(Object.entries(EB_SAMPLES).map(([root,b64])=>
         ctx.decodeAudioData(b64ToArrayBuffer(b64)).then(buf=>{ ebBufs[root]=buf; })
       ));
+      try{ trapKit(ctx.sampleRate); }catch(_){}               // synthesize the 808 kit now, not inside the scheduler on first hit
       liveWorklet=await ensureWorklet(ctx);
       ctx._s16wk=liveWorklet;
       if(liveWorklet) tracksAll.forEach(rebuildChain);   // upgrade gates to sample-accurate
@@ -2076,6 +2077,7 @@ function makeImpulse(decay,room,c){
   room=room??0.3;
   const cache=c._s16ir||(c._s16ir={}), ckey=Math.round(decay*100)+':'+Math.round(room*100);
   if(cache[ckey]) return cache[ckey];
+  { const keys=Object.keys(cache); if(keys.length>=8) delete cache[keys[0]]; }   // LRU-ish cap: impulses are MBs each
   const rnd=seededRand(0x51617+Math.round(decay*100)*997+Math.round(room*100));
   const len=Math.max(256,Math.floor(c.sampleRate*decay));
   const buf=c.createBuffer(2,len,c.sampleRate);
@@ -2092,7 +2094,7 @@ function makeImpulse(decay,room,c){
   return buf;
 }
 const CURVE_CACHE=new Map();          // context-free Float32Array shaper curves, keyed by quantised params
-function curveMemo(key,make){ let c=CURVE_CACHE.get(key); if(!c){ c=make(); CURVE_CACHE.set(key,c); } return c; }
+function curveMemo(key,make){ let c=CURVE_CACHE.get(key); if(!c){ c=make(); if(CURVE_CACHE.size>=64) CURVE_CACHE.delete(CURVE_CACHE.keys().next().value); CURVE_CACHE.set(key,c); } return c; }
 function ampStageCurve(drive,asym,hard){
   return curveMemo('amp:'+drive.toFixed(4)+':'+asym+':'+(hard?1:0),()=>ampStageCurveRaw(drive,asym,hard));
 }
@@ -2507,7 +2509,14 @@ function applyFxTo(fx,n){
       const g=(p['x'+i]===0)?0:(p['b'+i]||0), f=p['f'+i]||EQ_FREQS[i], q=p['q'+i]||bandQDefault(fx,i);
       if(EQ_IIR_TYPES[ty]){
         const sk=ty+'|'+f+'|'+((ty==='lowpass'||ty==='highpass')?0:g)+'|'+q;
-        if(!b.isShelf || b.shelfKey!==sk){ try{ b.disconnect(); }catch(e){} b=n.bands[i]=shelfNode(n.ctxRef||ctx,ty,f,g,q); rewire=true; }
+        if(!b.isShelf || b.shelfKey!==sk){
+          const now=performance.now();
+          if(b.isShelf && now-(b._swapAt||0)<60){                 // knob drag / automation: coalesce swaps, re-apply the final value shortly
+            clearTimeout(fx._eqReapply); fx._eqReapply=setTimeout(()=>{ fx._eqReapply=null; if(fx.nodes===n) applyFxTo(fx,n); },70);
+          }else{
+            try{ b.disconnect(); }catch(e){} b=n.bands[i]=shelfNode(n.ctxRef||ctx,ty,f,g,q); b._swapAt=now; rewire=true;
+          }
+        }
       }else{
         if(b.isShelf){ try{ b.disconnect(); }catch(e){} b=n.bands[i]=(n.ctxRef||ctx).createBiquadFilter(); rewire=true; }
         if(b.type!==ty) b.type=ty;
@@ -2536,8 +2545,13 @@ function applyFxTo(fx,n){
     n.damp.frequency.value=p.damp??16000;
     const room=p.room??0.3;
     if(Math.abs(n.builtDecay-p.decay)>0.05 || Math.abs((n.builtRoom??-1)-room)>0.02){
-      n.conv.buffer=makeImpulse(p.decay,room,n.ctxRef);
-      n.builtDecay=p.decay; n.builtRoom=room;
+      const now=performance.now();
+      if(now-(n._irAt||0)<150){                                    // debounce during knob drags / automation
+        clearTimeout(fx._irReapply); fx._irReapply=setTimeout(()=>{ fx._irReapply=null; if(fx.nodes===n) applyFxTo(fx,n); },160);
+      }else{
+        n.conv.buffer=makeImpulse(p.decay,room,n.ctxRef);
+        n.builtDecay=p.decay; n.builtRoom=room; n._irAt=now;
+      }
     }
   }else if(fx.type==='delay'){
     n.dl.delayTime.value=p.time; n.fb.gain.value=p.feedback;
@@ -3599,7 +3613,22 @@ function refreshMix(){
 
 /* ============================== transport ============================== */
 let nextTime=0, timerId=null;
-const LOOKAHEAD=0.2, TICK=25;
+const LOOKAHEAD=0.45, TICK=25;
+/* the sequencer tick comes from a Worker: unthrottled in background tabs and unaffected by rAF/timer clamping */
+let tickWorker=null;
+function startTicker(){
+  if(!tickWorker){
+    try{
+      const src='let id=null;onmessage=e=>{ if(e.data==="start"&&!id) id=setInterval(()=>postMessage(1),'+TICK+'); if(e.data==="stop"){ clearInterval(id); id=null; } };';
+      try{ tickWorker=new Worker(URL.createObjectURL(new Blob([src],{type:'application/javascript'}))); }
+      catch(_){ tickWorker=new Worker('data:application/javascript,'+encodeURIComponent(src)); }
+      tickWorker.onmessage=()=>{ if(timerId) tickFn(); };
+    }catch(e){ tickWorker=null; diagLog('sched','Worker clock unavailable, using setInterval'); }
+  }
+  if(tickWorker){ tickWorker.postMessage('start'); return 'worker'; }
+  return setInterval(tickFn,TICK);
+}
+function stopTicker(){ if(timerId==='worker'){ try{ tickWorker.postMessage('stop'); }catch(_){} } else if(timerId) clearInterval(timerId); timerId=null; }
 /* diagnostics ring: every engine anomaly lands here (read by the Diagnostics panel; errors also reach the console) */
 const DIAG={events:[],max:4000,counts:{}};
 function diagLog(kind,msg,data){
@@ -3619,17 +3648,16 @@ function scheduleStep(step,t){
   tracksAll.forEach(tr=>{
     if(!tr.items.length) return;
     const dest=state.tracks[tr.id].input;
+    let mfx,wfx,cfx,instLooked=false;                        // per-track instrument lookup, once per step
     tr.items.forEach(it=>{
-      if(!trackHasInst(tr,it.kind)) return;
       const rel=step-it.startStep;
       if(rel<0 || rel>=it.lenSteps) return;
+      if(!trackHasInst(tr,it.kind)) return;
       if(it.kind==='drums'){
         const kit=drumKitOf(tr);
-        DRUMS.forEach(d=>{ const v=it.pat[d.id][rel]; if(v) playDrum(d.id,t,drumDest(tr,d.id),ctx,{kit,vel:v/127,semi:hitPitch(it,d.id,rel)}); });
+        DRUMS.forEach(d=>{ const lane=it.pat[d.id]; const v=lane&&lane[rel]; if(v) playDrum(d.id,t,drumDest(tr,d.id),ctx,{kit,vel:v/127,semi:hitPitch(it,d.id,rel)}); });
       }else if(it.kind==='piano'){
-        const mfx=tr.fx.find(f=>f.type==='sampler');
-        const wfx=mfx?null:tr.fx.find(f=>f.type==='wt');
-        const cfx=(mfx||wfx)?null:tr.fx.find(f=>f.type==='choir');
+        if(!instLooked){ instLooked=true; mfx=tr.fx.find(f=>f.type==='sampler'); wfx=mfx?null:tr.fx.find(f=>f.type==='wt'); cfx=(mfx||wfx)?null:tr.fx.find(f=>f.type==='choir'); }
         it.pat.forEach(nn=>{
           if(nn.s!==rel) return;
           if(mfx) samplerVoice(t, nn.k, nn.l*stepDur(), dest, mfx.params, ctx, synthAn(mfx), noteVel(nn), mfx);
@@ -3722,7 +3750,7 @@ function playFrom(pos){
   nextTime=startCtx + (k*sd - startPos);
   absStep=k;
   scheduleClips(startPos, startCtx);
-  timerId=setInterval(tickFn,TICK);
+  timerId=startTicker();
   state.playing=true;
   if(autoTracks().some(t=>t.autoMode==='write' && t.autos && t.autos.length)) pushHistory();
   applyAutomation(startPos/stepDur());
@@ -3731,7 +3759,7 @@ function playFrom(pos){
 function haltPlayback(){
   if(state.playing) startPos=userPos;        // stop returns to where the user placed the playhead
   autoStopWrites();
-  clearInterval(timerId); timerId=null;
+  stopTicker();
   activeSources.forEach(s=>{try{s.stop()}catch(e){}});
   activeSources.clear();
   killVoices();
@@ -4192,6 +4220,10 @@ function setAutoHidden(track,a,h){
   updateAutoBtn(track);
 }
 function drawAuto(track,a){
+  if(!a || !a.laneEl) return;
+  const nowT=performance.now();
+  if(nowT-(a._drawAt||0)<33){ if(!a._drawT) a._drawT=setTimeout(()=>{ a._drawT=null; a._drawAt=0; drawAuto(track,a); },40); return; }   // ≤30 Hz per lane, trailing redraw
+  a._drawAt=nowT;
   const cv=a.cv; if(!cv||!cv.isConnected||a.hidden) return;
   const w=Math.min(32000,parseInt(tlInner.style.width)||800), h=AUTO_H;
   const dpr=w>12000?1:Math.min(2,window.devicePixelRatio||1);
@@ -4713,7 +4745,7 @@ function dragGroupMove(G,primary,dSec,targetTrack){
     else{ const ns=Math.max(0,Math.round(g.start+d/sd)); if(ns!==g.o.startStep){ g.o.startStep=ns; moved=true; } g.o.el.style.left=Math.round(g.o.startStep*stepPx())+'px'; }
     const tt=tracksAll[g.tIdx+dT];
     if(tt && moveToTrack(g.o,g.audio?'clips':'items',tt)) moved=true;
-    if(g.audio) renderClip(g.o); else renderItem(g.o);
+    if(g.audio){ g.o.el.style.left=Math.round(g.o.start*PPS)+'px'; g.o._dirty=true; } else renderItem(g.o);   // full waveform redraw waits for release
   });
   return moved;
 }
@@ -4730,7 +4762,7 @@ function bindClipPointer(clip){
   clip.el.addEventListener('pointerdown',e=>{
     if(e.button!==undefined && e.button!==0) return;
     e.preventDefault();
-    pendingSnap=snapState();
+    pendingSnap=null;
     const px0=e.clientX, add=e.ctrlKey||e.metaKey, range=e.shiftKey, wasSel=selHas(clip);
     const o={start:clip.start,offset:clip.offset,dur:clip.dur,stretch:clip.stretch||1};
     const r=clip.el.getBoundingClientRect(), x=e.clientX-r.left, yy=e.clientY-r.top;
@@ -4747,6 +4779,7 @@ function bindClipPointer(clip){
       G=dragGroupBegin(clip);
     }
     const move=ev=>{
+      if(!pendingSnap) pendingSnap=snapState();                 // undo snapshot only once a drag really starts
       const dx=(ev.clientX-px0)/PPS;
       if(Math.abs(ev.clientX-px0)>4) moved=true;
       if(mode==='m'){ if(dragGroupMove(G,clip,dx,laneTrackAt(ev.clientY))) moved=true; return; }
@@ -4793,7 +4826,7 @@ function bindClipPointer(clip){
         else if(range) selectRange(sl);
         else if(wasSel && selSet.length===1) selectObj(null);
         else selectObj(sl);
-      }else{ commitPending(); layoutTimeline(); queueGhosts(); rescheduleIfPlaying(); }
+      }else{ if(G) G.forEach(g=>{ if(g.audio && g.o._dirty){ g.o._dirty=false; renderClip(g.o); } }); commitPending(); layoutTimeline(); queueGhosts(); rescheduleIfPlaying(); }
     };
     document.addEventListener('pointermove',move);
     document.addEventListener('pointerup',up);
@@ -4968,7 +5001,7 @@ function bindItemPointer(it){
   it.el.addEventListener('pointerdown',e=>{
     if(e.button!==undefined && e.button!==0) return;
     e.preventDefault();
-    pendingSnap=snapState();
+    pendingSnap=null;
     const px0=e.clientX, add=e.ctrlKey||e.metaKey, range=e.shiftKey, wasSel=selHas(it);
     const o={start:it.startStep,len:it.lenSteps};
     const r=it.el.getBoundingClientRect(), x=e.clientX-r.left;
@@ -4979,6 +5012,7 @@ function bindItemPointer(it){
       G=dragGroupBegin(it);
     }
     const move=ev=>{
+      if(!pendingSnap) pendingSnap=snapState();
       const dSteps=(ev.clientX-px0)/stepPx();
       if(Math.abs(ev.clientX-px0)>4) moved=true;
       if(mode==='m'){ if(dragGroupMove(G,it,dSteps*stepDur(),laneTrackAt(ev.clientY))) moved=true; return; }
@@ -5661,11 +5695,13 @@ function setZoom(pps, anchorPx){
 }
 document.getElementById('zoom-in').onclick=()=>setZoom(PPS*1.4);
 document.getElementById('zoom-out').onclick=()=>setZoom(PPS/1.4);
+let zoomPending=1, zoomRaf=0, zoomAnchor=0;
 tlScroll.addEventListener('wheel',e=>{
   if(!e.ctrlKey && !e.metaKey) return;
   e.preventDefault();
   const r=tlScroll.getBoundingClientRect();
-  setZoom(PPS*(e.deltaY<0?1.25:0.8), e.clientX-r.left);
+  zoomPending*=(e.deltaY<0?1.25:0.8); zoomAnchor=e.clientX-r.left;
+  if(!zoomRaf) zoomRaf=requestAnimationFrame(()=>{ zoomRaf=0; const f=zoomPending; zoomPending=1; setZoom(PPS*f, zoomAnchor); });   // one re-render per frame, not per wheel event
 },{passive:false});
 
 /* ============================== FX rack UI ============================== */
@@ -7672,7 +7708,7 @@ function frame(now){
   if(fxOpen && selectedTrack){
     selectedTrack.fx.forEach(fx=>{
       if(fx.type==='eq'){ if(tick2 && fx.eqCv && fx.eqCv.isConnected) drawEq(fx); }
-      else if(fx.type==='wt'){ if(fx.wtRoot && fx.wtRoot.isConnected){ drawWt(fx,'A'); drawWt(fx,'B'); drawWt(fx,'C'); drawWtFilter(fx,''); drawWtFilter(fx,'2'); drawWtMod(fx); if(tick2 && fx.synthCv) drawSynthScope(fx); } }
+      else if(fx.type==='wt'){ if(tick2 && fx.wtRoot && fx.wtRoot.isConnected){ drawWt(fx,'A'); drawWt(fx,'B'); drawWt(fx,'C'); drawWtFilter(fx,''); drawWtFilter(fx,'2'); drawWtMod(fx); if(tick2 && fx.synthCv) drawSynthScope(fx); } }
       else if(fx.type==='sampler'){ if(fx.smpCv && fx.smpCv.isConnected) drawSampler(fx); }
       else if(tick2){ if(fx.scopeCv && fx.scopeCv.isConnected) drawScope(fx); if(fx.dnCv && fx.dnCv.isConnected) drawDnChart(fx); }
     });
@@ -7702,8 +7738,7 @@ function frame(now){
     recLiveCv._drawnW=w;
   }
   if(!ctx) return;
-  processGates();
-  processDynEq();
+  if(tick2){ processGates(); processDynEq(); }
   if(fxOpen && tick2) updateFxMeters();
   while(pendingAnchors.length && pendingAnchors[0].at<=ctx.currentTime){
     const a=pendingAnchors.shift();

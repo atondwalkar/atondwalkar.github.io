@@ -144,6 +144,18 @@ export const RIVAL = {
   },
 };
 
+// The Estuary field: three rivals, each a different problem.
+//
+// One quick and clean, one aggressive blocker, one who drifts and runs wide —
+// so the race changes depending on which of them you are behind. None is as
+// hard as KESTREL: this is the stage where you learn to race a pack, not the
+// one where you are beaten by an individual.
+export const PACK = [
+  { name: 'MARLOWE', skill: 0.96, opts: { cornerMargin: 0.94, aggression: 0.9 } },
+  { name: 'OKONKWO', skill: 0.93, opts: { aggression: 1.0, block: 0.9 } },
+  { name: 'VESZPREMI', skill: 0.94, opts: { drift: 0.3, cornerMargin: 0.92 } },
+];
+
 // Car-to-car contact.
 //
 // A car is two discs, at the axles, not an oriented box. An OBB needs a

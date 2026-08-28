@@ -220,6 +220,12 @@ export class Race {
     // race tops the road up ahead of the player from them as it goes.
     this.trafficSpecs = (plan.cars || []).filter((c) => c.traffic);
     this.trafficEvery = plan.trafficEvery || 0;
+    // Checkpoints on a route: fractions of it that, crossed, add seconds to
+    // the clock. The classic sprint shape — the clock is always about to run
+    // out and never quite does, as long as you keep making the line.
+    this.checkpoints = plan.checkpoints
+      ? plan.checkpoints.at.map((f) => ({ s: f * this.track.length, bonus: plan.checkpoints.bonus, taken: false }))
+      : null;
     // The stage is over the moment the result is decided, rather than when the
     // last car is home. In a duel that is the first car across the line —
     // whoever it is, the other one has lost and there is nothing left to watch.
@@ -809,6 +815,16 @@ export class Race {
     // that has not crossed yet reads a whole lap lower than one that just
     // has. That offset cancels for the ordering this number was written for
     // and does not cancel here.
+    // Checkpoints, before the finish: crossing one buys time.
+    if (this.checkpoints && car.isPlayer) {
+      const along = this.distanceAlong(car);
+      for (const cp of this.checkpoints) {
+        if (cp.taken || along < cp.s) continue;
+        cp.taken = true;
+        this.limit += cp.bonus;
+        this.game.onCheckpoint(cp.bonus);
+      }
+    }
     if (this.route !== null && !car.pursuer && !car.traffic
         && this.distanceAlong(car) >= this.route && !car.finished) {
       car.finished = true;

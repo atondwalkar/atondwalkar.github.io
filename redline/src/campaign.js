@@ -9,7 +9,7 @@
 // for good is a pink-slip race you save-scum, and the wager is there to give
 // the first corner some weight, not to end the evening.
 
-import { RIVAL, POLICE, TRAFFIC, SELECTABLE, LIVERIES } from './defs.js';
+import { RIVAL, PACK, POLICE, TRAFFIC, SELECTABLE, LIVERIES } from './defs.js';
 
 export const STAGES = [
   {
@@ -92,6 +92,46 @@ export const STAGES = [
     rival: null,
     onWin: 'ACROSS',
     onLose: 'PULLED_OVER',
+    next: 'estuary',
+  },
+  {
+    id: 'estuary',
+    name: 'THE ESTUARY',
+    blurb: 'THREE LAPS. FOUR CARS. TRAFFIC.',
+    layout: 'estuary',
+    before: 'THE_YARDS',
+    laps: 3,
+    contact: true,
+    // The first stage that is a RACE and has traffic in it at once — which is
+    // what the composable field was built for. Sparse: the traffic is a hazard
+    // to thread, not a wall, and it is the rivals you are racing.
+    rivals: PACK,
+    trafficEvery: 150,
+    endOnFirst: true,
+    onWin: 'YARDS_WON',
+    onLose: 'YARDS_LOST',
+    next: 'skyline',
+  },
+  {
+    id: 'skyline',
+    name: 'SKYLINE',
+    blurb: 'FIRST LIGHT. MAKE EVERY LINE.',
+    layout: 'run_rev',
+    before: 'FIRST_LIGHT',
+    routeFraction: 1,
+    laps: 1,
+    contact: true,
+    // The clock is short on purpose and the checkpoints keep buying it back:
+    // the classic sprint shape, where the stage is always nearly lost. One
+    // rival runs the same road — beating the clock is surviving; beating him
+    // is winning.
+    rival: RIVAL,
+    endOnFirst: false,
+    formation: 'grid',
+    limit: 55,
+    checkpoints: { at: [0.22, 0.44, 0.66, 0.86], bonus: 30 },
+    onWin: 'SKYLINE_WON',
+    onLose: 'OUT_OF_TIME',
     next: null,
   },
 ];
@@ -260,6 +300,7 @@ export class Campaign {
       // A fraction of whatever the layout came out at, so a change to the loop
       // moves the finish with it instead of stranding it inside a block.
       route: s.routeFraction && track ? s.routeFraction * track.length : null,
+      checkpoints: s.checkpoints ?? null,
       // Metres between cars of traffic — carried through so the race can keep
       // topping it up ahead of the player rather than laying it out once.
       trafficEvery: s.trafficEvery || null,

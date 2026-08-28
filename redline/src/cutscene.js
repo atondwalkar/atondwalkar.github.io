@@ -273,6 +273,37 @@ export const SCRIPTS = {
     { t: 2.4, shot: 'wheelArch', subject: 'player', who: 'YOU', say: 'MARIN OR NOTHING.' },
   ],
 
+  // Stage four: the morning after the bridge, in the Oakland yards.
+  THE_YARDS: [
+    { t: 2.6, shot: 'highWide', subject: 'player', who: '', say: 'OAKLAND. THE CONTAINER YARDS, JUST BEFORE FOUR.',
+      act: faceOff },
+    { t: 2.8, shot: 'twoShot', subject: 'player', at: 'rival',
+      who: 'MARLOWE', say: 'THE ONE WHO CROSSED THE BRIDGE WITH THE HEAT ON. THREE OF US SAY IT WAS LUCK.' },
+    { t: 2.4, shot: 'closeFront', subject: 'player', who: 'YOU', say: 'THREE LAPS SAYS IT WAS NOT.' },
+  ],
+  YARDS_WON: [
+    { t: 2.6, shot: 'orbit', subject: 'player', who: 'MARLOWE', say: 'NOT LUCK, THEN.' },
+    { t: 2.6, shot: 'lowRear', subject: 'player', who: '', say: 'WORD MOVES FAST ON THIS SIDE OF THE BAY.' },
+  ],
+  YARDS_LOST: [
+    { t: 2.4, shot: 'closeFront', subject: 'rival', who: 'MARLOWE', say: 'LUCK.' },
+    { t: 2.2, shot: 'highWide', subject: 'player', who: '', say: 'RUN IT BACK.' },
+  ],
+
+  // Stage five: back over the hills at dawn, against the clock.
+  FIRST_LIGHT: [
+    { t: 2.8, shot: 'highWide', subject: 'player', who: '', say: 'FIRST LIGHT. THE CITY THE OTHER WAY, BEFORE IT WAKES.' },
+    { t: 2.6, shot: 'closeFront', subject: 'rival', who: 'KESTREL', say: 'EVERY LINE BUYS YOU SECONDS. MISS ONE AND IT IS OVER.' },
+  ],
+  SKYLINE_WON: [
+    { t: 2.6, shot: 'orbit', subject: 'player', who: '', say: 'EVERY LINE MADE, WITH THE SUN COMING UP.' },
+    { t: 2.4, shot: 'lowRear', subject: 'player', who: 'KESTREL', say: 'ONE MORE THING TO SETTLE.' },
+  ],
+  OUT_OF_TIME: [
+    { t: 2.4, shot: 'closeFront', subject: 'player', who: '', say: 'THE CLOCK RAN OUT FIRST.' },
+    { t: 2.2, shot: 'highWide', subject: 'player', who: '', say: 'AGAIN, BEFORE THE STREETS FILL.' },
+  ],
+
   ACROSS: [
     { t: 2.8, shot: 'lowRear', subject: 'player', who: '', say: 'MARIN COUNTY. THE LIGHTS BEHIND YOU STOP AT THE COUNTY LINE.' },
     { t: 3.0, shot: 'highWide', subject: 'player', who: 'YOU', say: 'THAT IS TWO CARS I DID NOT LOSE TONIGHT.' },

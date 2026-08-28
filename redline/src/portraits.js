@@ -55,6 +55,13 @@ export const PORTRAITS = {
   }),
 };
 
+// The Oakland pack's spokesman. Speaks for the three of them, so the three of
+// them do not each need a face for one line apiece.
+PORTRAITS.MARLOWE = head({
+  skin: '#8a5c3a', hair: '#0f1216', hairShape: CROPPED,
+  collar: '#233430', accent: '#35d06a', shades: false, jaw: 3,
+});
+
 // Nothing for an unattributed line. Narration — "SIRENS. FOUR BLOCKS OUT." —
 // is not somebody speaking, and giving it a face would make it one.
 export function portraitFor(who) {

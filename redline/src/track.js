@@ -265,6 +265,25 @@ export const LAYOUTS = {
       { at: 1, r: 900, town: 1.0, tall: 0.22 },
     ],
   },
+
+  // Stage four: a circuit down in the Oakland container yards.
+  //
+  // Squared-off and flat-ish, with one long drag down the water side —
+  // a working harbour, not a hill city. Between folsom and run in size.
+  estuary: {
+    id: 'estuary',
+    name: 'THE ESTUARY',
+    loop: [
+      [0, 0], [8, 0], [8, 3], [5, 3], [5, 6], [9, 6],
+      [9, 9], [2, 9], [2, 6], [-2, 6], [-2, 2], [0, 2],
+    ],
+    // Nearly flat. A harbour is; what little rise there is comes off the
+    // container cranes' end of the yard.
+    elevation: [
+      [0.00, 1.2], [0.20, 2.0], [0.42, 6.5], [0.60, 8.0],
+      [0.78, 4.0], [0.92, 1.6],
+    ],
+  },
 };
 
 // Every layout, and every layout driven the other way.
@@ -282,6 +301,14 @@ for (const id of Object.keys(LAYOUTS)) {
     reverse: !base.reverse,
   };
 }
+
+// Stage five drives the crosstown route the other way, at first light. The
+// reverse is generated above; the dawn is layered on here rather than inside
+// the generator, because it belongs to the STAGE's version of the road, not to
+// reversal in general.
+LAYOUTS.run_rev.name = 'SKYLINE';
+LAYOUTS.run_rev.sky = { top: 0x1a2a45, mid: 0x4a4a68, low: 0xb0685a, glow: 0xd88a4e };
+LAYOUTS.run_rev.fog = { near: 120, far: 1100, colour: 0x554455 };
 
 // Give a built track back.
 //

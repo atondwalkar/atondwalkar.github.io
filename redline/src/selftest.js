@@ -1169,6 +1169,133 @@ function checkChaseRules(game) {
     `${(speed * 3.6).toFixed(0)} km/h, and one already close was left alone`;
 }
 
+// Stages four and five: the pack race and the checkpoint sprint.
+//
+// Both driven rather than inspected. The estuary is the first stage where the
+// composable field earns its keep — rivals AND traffic in one race — and the
+// skyline is the first where the clock is an opponent with an economy: it has
+// to be UNWINNABLE without the checkpoints and winnable with them, or the
+// mechanic is decoration.
+function checkNewStages(game) {
+  const bad = [];
+
+  // --- the estuary field: three rivals ahead of you, traffic among you.
+  const est = STAGES.find((q) => q.id === 'estuary');
+  {
+    const t = new Track(LAYOUTS.estuary);
+    const c = new Campaign({ playerName: 'X' });
+    c.index = STAGES.indexOf(est);
+    c.car = SELECTABLE[0];
+    const f = c.field(t);
+    const rivals = f.cars.filter((q) => q.opts && !q.pursuer && !q.traffic && !q.isPlayer);
+    const traffic = f.cars.filter((q) => q.traffic);
+    if (rivals.length !== 3) bad.push(`the estuary fields ${rivals.length} rivals, not 3`);
+    if (!traffic.length) bad.push('the estuary has no traffic to thread');
+    if (f.cars.findIndex((q) => q.isPlayer) !== 3) bad.push('the player does not start behind the pack');
+    if (!f.endOnFirst) bad.push('the estuary does not end on the flag');
+    if (f.formation !== 'grid') bad.push(`the estuary lines up as a ${f.formation}`);
+    const names = new Set(rivals.map((q) => q.livery.name));
+    if (names.size !== rivals.length) bad.push('two rivals share a livery');
+    // And the pack can race it: a short sim, all three rivals plus the player
+    // slot driven by AI, nobody stranded or off the road for long.
+    const cars = f.cars.filter((q) => !q.traffic).map((spec, i) => {
+      const slot = t.gridSlots[i];
+      const car = { vehicle: new Vehicle(CAR), loc: null };
+      car.vehicle.reset(slot.x, slot.z, slot.yaw);
+      car.vehicle.autoShift = true;
+      car.vehicle.surfaceGrip = 1;
+      car.loc = t.locate(car.vehicle.x, car.vehicle.z);
+      car.driver = new Driver(car, t, spec.skill ?? 0.9, spec.opts || {});
+      return car;
+    });
+    let offT = 0;
+    for (let i = 0; i < Math.round(50 / FIXED); i++) {
+      for (const car of cars) {
+        car.driver.drive(FIXED, cars);
+        car.vehicle.update(FIXED, 2);
+        car.loc = t.locate(car.vehicle.x, car.vehicle.z, car.loc.index);
+        const over = Math.abs(car.loc.lateral) - car.loc.width / 2;
+        car.vehicle.surfaceGrip = over <= 0 ? 1 : over < 1.6 ? 0.92 : 0.55;
+        if (over > 2) offT += FIXED;
+      }
+    }
+    if (offT > 6) bad.push(`the pack spent ${offT.toFixed(1)} car-seconds off the estuary`);
+  }
+
+  // --- the skyline economy.
+  const sky = STAGES.find((q) => q.id === 'skyline');
+  let crossT = 0;
+  {
+    const t = new Track(LAYOUTS.run_rev);
+    // The dawn is real: this layout's sky is not the night sky.
+    if (!LAYOUTS.run_rev.sky) bad.push('the skyline has no dawn');
+
+    // Cross it clean and time it.
+    const car = { vehicle: new Vehicle(CAR), loc: null };
+    const p0 = t.atDistance(4);
+    car.vehicle.reset(p0.x, p0.z, Math.atan2(p0.dirX, p0.dirZ));
+    car.vehicle.autoShift = true;
+    car.vehicle.setSpeed(30);
+    car.loc = t.locate(car.vehicle.x, car.vehicle.z);
+    const d = new Driver(car, t, 0.95);
+    car.driver = d;
+    const solo = [car];
+    for (let i = 0; i < Math.round(400 / FIXED); i++) {
+      d.drive(FIXED, solo);
+      car.vehicle.update(FIXED, 2);
+      car.loc = t.locate(car.vehicle.x, car.vehicle.z, car.loc.index);
+      const over = Math.abs(car.loc.lateral) - car.loc.width / 2;
+      car.vehicle.surfaceGrip = over <= 0 ? 1 : over < 1.6 ? 0.92 : 0.55;
+      crossT += FIXED;
+      if (car.loc.s >= t.length - 8) break;
+    }
+    const bank = sky.limit + sky.checkpoints.at.length * sky.checkpoints.bonus;
+    // Unwinnable without the checkpoints, winnable with all of them: that gap
+    // IS the mechanic. If the base clock covers the drive, the checkpoints are
+    // confetti; if the full bank does not, the stage is a wall.
+    if (sky.limit >= crossT) bad.push(`the base clock (${sky.limit}s) covers the ${crossT.toFixed(0)}s drive`);
+    if (bank < crossT * 1.15) bad.push(`all checkpoints banked (${bank}s) is not enough for ${crossT.toFixed(0)}s`);
+    // And each line is makeable: time to reach each checkpoint at the clean
+    // pace must be inside the clock as extended by the ones before it.
+    let have = sky.limit;
+    for (const f2 of sky.checkpoints.at) {
+      const need = crossT * f2;
+      if (need > have) bad.push(`the ${(f2 * 100).toFixed(0)}% line needs ${need.toFixed(0)}s of ${have}s`);
+      have += sky.checkpoints.bonus;
+    }
+
+    // The mechanic itself, driven through the real `_progress`: crossing a
+    // checkpoint adds to the limit, once.
+    const race = Object.create(Object.getPrototypeOf(game.race));
+    let flashed = 0;
+    Object.assign(race, {
+      game: { onCheckpoint: () => flashed++, onLap() {}, onFinish() {} },
+      track: t, cars: [], laps: 1, time: 0, state: 'racing',
+      route: t.length, limit: sky.limit,
+      checkpoints: sky.checkpoints.at.map((f2) => ({ s: f2 * t.length, bonus: sky.checkpoints.bonus, taken: false })),
+    });
+    const pc = { vehicle: car.vehicle, loc: null, isPlayer: true, traffic: false, pursuer: false,
+      lap: 0, lastS: 0, progress: 0, finished: false, lapTimes: [], bestLap: Infinity };
+    const at = t.atDistance(sky.checkpoints.at[0] * t.length + 5);
+    pc.vehicle.reset(at.x, at.z, Math.atan2(at.dirX, at.dirZ));
+    pc.loc = t.locate(pc.vehicle.x, pc.vehicle.z);
+    pc.lastS = pc.loc.s;
+    race._progress(pc, FIXED);
+    race._progress(pc, FIXED);           // crossing again must not pay again
+    if (race.limit !== sky.limit + sky.checkpoints.bonus) {
+      bad.push(`crossing a line paid ${race.limit - sky.limit}s, not ${sky.checkpoints.bonus}`);
+    }
+    if (flashed !== 1) bad.push(`the checkpoint flashed ${flashed} times`);
+  }
+
+  const ok = bad.length === 0;
+  return `${ok ? 'a pack to race and a clock to feed' : `WRONG — ${bad[0]}`} — ` +
+    `the estuary fields 3 rivals plus traffic and the pack stays on the road; ` +
+    `the skyline takes ${crossT.toFixed(0)}s against a ${sky.limit}s clock plus ` +
+    `${sky.checkpoints.at.length}×${sky.checkpoints.bonus}s in lines, each one makeable, ` +
+    `paid once each`;
+}
+
 // The keybinds.
 //
 // The thing worth checking is not that the table can be edited — it is that
@@ -1905,12 +2032,26 @@ function checkCampaign() {
       }
     }
     if (!(s.laps > 0)) bad.push(`${s.id} runs ${s.laps} laps`);
-    // Every stage needs somebody else on the road: a rival to race, or police
+    // Every stage needs somebody else on the road: rivals to race, or police
     // to get away from. A stage with neither is a stage you cannot lose.
-    if (s.rival) {
-      if (!s.rival.opts) bad.push(`${s.id}'s rival has no character`);
-    } else if (!(s.police > 0)) {
+    const rivals2 = s.rivals || (s.rival ? [s.rival] : []);
+    for (const r of rivals2) {
+      if (!r.opts) bad.push(`${s.id}'s rival ${r.name || '?'} has no character`);
+      if (!r.name) bad.push(`${s.id} has an unnamed rival`);
+    }
+    if (!rivals2.length && !(s.police > 0)) {
       bad.push(`${s.id} has nobody else on the road`);
+    }
+    // Checkpoints only mean something against a clock, and they have to be in
+    // order and inside the route — one past the finish is one never crossed.
+    if (s.checkpoints) {
+      if (!(s.limit > 0)) bad.push(`${s.id} has checkpoints and no clock to extend`);
+      if (!(s.checkpoints.bonus > 0)) bad.push(`${s.id}'s checkpoints buy nothing`);
+      let prev2 = 0;
+      for (const f of s.checkpoints.at) {
+        if (f <= prev2 || f >= (s.routeFraction || 1)) bad.push(`${s.id} has a checkpoint at ${f}`);
+        prev2 = f;
+      }
     }
     if (s.layout && !LAYOUTS[s.layout]) bad.push(`${s.id} wants a layout called "${s.layout}"`);
     if (s.routeFraction !== undefined) {
@@ -3543,6 +3684,7 @@ function assertions(game) {
     guard('touch          ', () => checkTouch(game)),
     guard('keybinds       ', () => checkKeybinds(game)),
     guard('chase rules    ', () => checkChaseRules(game)),
+    guard('new stages     ', () => checkNewStages(game)),
   ];
 }
 
@@ -3913,6 +4055,54 @@ function dumpFrames(game) {
     dump.push(`the bridge is ${(br.length / 1000).toFixed(2)} km, `
       + `${plan3.cars.filter((q) => q.traffic).length} cars of traffic on it`);
   } catch (e) { console.log(`bridge dump failed: ${e.message}`); }
+
+  // Stages four and five, built for real: the estuary circuit, and the
+  // crosstown road reversed under a dawn sky. The sky swap is what most needs
+  // a photograph — a palette is exactly the kind of change that passes every
+  // numeric check and comes out looking like mud.
+  try {
+    disposeTrack(game.scene, game.track);
+    const est = new Track(LAYOUTS.estuary);
+    for (const _ of est.build(game.scene)) { /* off the clock */ }
+    game.track = est;
+    const e0 = est.atDistance(30);
+    shot('estuary', [e0.x, e0.y + 2.6, e0.z],
+      [e0.x + e0.dirX * 150, e0.y + 4, e0.z + e0.dirZ * 150], 60);
+    const fogE = game.scene.fog;
+    game.scene.fog = null;
+    shot('estuary-map', [0, 900, 60], [0, 0, 30], 52);
+    game.scene.fog = fogE;
+    disposeTrack(game.scene, est);
+
+    const skyl = new Track(LAYOUTS.run_rev);
+    for (const _ of skyl.build(game.scene)) { /* off the clock */ }
+    game.track = skyl;
+    // The dawn palette, applied the way `buildTrack` applies it.
+    const skyDef = LAYOUTS.run_rev.sky;
+    const u = game.sky.material.uniforms;
+    const wasSky = {
+      top: u.top.value.getHex(), mid: u.mid.value.getHex(),
+      low: u.low.value.getHex(), glow: u.glow.value.getHex(),
+      fog: game.scene.fog.color.getHex(), near: game.scene.fog.near, far: game.scene.fog.far,
+    };
+    u.top.value.setHex(skyDef.top); u.mid.value.setHex(skyDef.mid);
+    u.low.value.setHex(skyDef.low); u.glow.value.setHex(skyDef.glow);
+    const fogDef = LAYOUTS.run_rev.fog;
+    game.scene.fog.color.setHex(fogDef.colour);
+    game.scene.fog.near = fogDef.near; game.scene.fog.far = fogDef.far;
+    const s0 = skyl.atDistance(400);
+    shot('skyline', [s0.x, s0.y + 2.8, s0.z],
+      [s0.x + s0.dirX * 180, s0.y + 10, s0.z + s0.dirZ * 180], 58);
+    const s1 = skyl.atDistance(skyl.length * 0.45);
+    shot('skyline-hill', [s1.x - s1.dirX * 30, s1.y + 8, s1.z - s1.dirZ * 30],
+      [s1.x + s1.dirX * 120, s1.y, s1.z + s1.dirZ * 120], 55);
+    u.top.value.setHex(wasSky.top); u.mid.value.setHex(wasSky.mid);
+    u.low.value.setHex(wasSky.low); u.glow.value.setHex(wasSky.glow);
+    game.scene.fog.color.setHex(wasSky.fog);
+    game.scene.fog.near = wasSky.near; game.scene.fog.far = wasSky.far;
+    disposeTrack(game.scene, skyl);
+    dump.push(`the estuary is ${(est.length / 1000).toFixed(2)} km, the skyline ${(skyl.length / 1000).toFixed(2)}`);
+  } catch (e) { console.log(`stage 4/5 dump failed: ${e.message}`); }
 
   // Stage two, built for real. Last of all, and it replaces the world: the
   // circuit every frame above was taken on is gone by the time this returns,

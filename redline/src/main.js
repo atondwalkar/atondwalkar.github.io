@@ -39,6 +39,9 @@ const FIXED = 1 / 120;              // the physics runs at a fixed 120 Hz
 const SLOWMO_TIME = 1.6;
 const SLOWMO_MIN = 0.32;
 
+// The night sky the game has always had, as data so a layout can override it.
+const SKY_NIGHT = { top: 0x05070f, mid: 0x101a2e, low: 0x3a3040, glow: 0x6b4a32 };
+
 const SKY_R = 2400;
 const STAR_R = 2200;
 
@@ -143,6 +146,14 @@ class Game {
     this.scene.fog.near = f.near;
     this.scene.fog.far = f.far;
     this.scene.fog.color.setHex(f.colour ?? 0x141a26);
+    // The sky is a property of the place too. The shader has always taken
+    // exactly these four colours; they were simply hard-coded to night.
+    const skyC = layout.sky || SKY_NIGHT;
+    const u = this.sky.material.uniforms;
+    u.top.value.setHex(skyC.top);
+    u.mid.value.setHex(skyC.mid);
+    u.low.value.setHex(skyC.low);
+    u.glow.value.setHex(skyC.glow);
     if (say) await say('the ground', 0.15);
 
     const stages = this.track.build(this.scene);
@@ -170,10 +181,10 @@ class Game {
         side: THREE.BackSide,
         depthWrite: false,
         uniforms: {
-          top: { value: new THREE.Color(0x05070f) },
-          mid: { value: new THREE.Color(0x101a2e) },
-          low: { value: new THREE.Color(0x3a3040) },
-          glow: { value: new THREE.Color(0x6b4a32) },
+          top: { value: new THREE.Color(SKY_NIGHT.top) },
+          mid: { value: new THREE.Color(SKY_NIGHT.mid) },
+          low: { value: new THREE.Color(SKY_NIGHT.low) },
+          glow: { value: new THREE.Color(SKY_NIGHT.glow) },
         },
         vertexShader: `varying vec3 vP; void main(){ vP = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0);} `,
         fragmentShader: `
@@ -520,6 +531,13 @@ class Game {
       this.hud.message('CHEQUERED FLAG', `${ordinal(car.position)} PLACE`, 4);
     }
     if (!this.raceEnded && this.race.order[0] === car) this.raceEnded = true;
+  }
+
+  // A checkpoint bought some time. Loud, because the whole mechanic is the
+  // clock nearly running out: the player has to see the purchase land.
+  onCheckpoint(bonus) {
+    this.hud.flashLap(`CHECKPOINT · +${bonus} SECONDS`, 1.6);
+    this.audio.light();
   }
 
   onImpact(car, force) {

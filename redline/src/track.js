@@ -70,6 +70,13 @@ const JUNCTION_TAPER = 14;
 // on purpose, so the 3x3 block around a point covers exactly the radius.
 const GROUND_R = 40;
 
+// How far below the road the ground sits at the kerb, and how far the wider
+// field sits below the road it is averaged from. Both were a metre or more,
+// which put the whole road on a plinth; a kerb is fifteen centimetres and the
+// land beyond a pavement is not much further down than that.
+const KERB_DROP = 0.18;
+const GROUND_FALL = 0.34;
+
 // The freeway ramp: how the deck climbs and how far it reaches.
 const RAMP = { segments: 14, seg: 22, rise: 0.075, bend: 0.055, width: 11 };
 
@@ -2054,12 +2061,25 @@ export class Track {
     // Swell out over the water, fading in as the land runs out. Colouring a
     // flat plane as if it had waves on it works until the light rakes across
     // it, at which point it is a painting of the sea.
-    const wide = (near - 1.1) + hill * fall * fall * (1 - bay)
+    const wide = (near - GROUND_FALL) + hill * fall * fall * (1 - bay)
       - bay * (near + 6) + bay * swell(x, z);
 
     // Close in, follow the road rather than the field. Blended out over the
     // twenty-two metres from the kerb, by which point the two agree anyway.
-    const under = this.locate(x, z).y - 1.0;
+    //
+    // A KERB below it, not a metre.
+    //
+    // A metre is what it was, and a metre is a plinth: the pavement is a flat
+    // ribbon at road height reaching nine metres from the kerb, the buildings
+    // start where it ends, and what stood between them was a metre-high step
+    // down to bare ground running the length of every street. From inside the
+    // city the road is on a plateau — which is exactly what "the road
+    // levitates above the ground" means.
+    //
+    // The drop only ever needed to be enough that a coarse ground mesh cannot
+    // interpolate its way up through the asphalt between two vertices, and
+    // that is centimetres, not metres.
+    const under = this.locate(x, z).y - KERB_DROP;
     const w = clamp((dist - 12) / 22, 0, 1);
     const blended = lerp(under, wide, w);
 

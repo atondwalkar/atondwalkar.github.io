@@ -1155,14 +1155,45 @@ function checkGroundField(track) {
       above = Math.max(above, track.groundAt(gx, gz) - p.y);
     }
   }
-  if (above > -0.2) bad.push(`the ground reaches ${above.toFixed(2)} m of the road surface`);
+  // Still under the asphalt — but only just, now. The margin has to cover what
+  // a coarse ground mesh can interpolate to between two vertices, which is
+  // centimetres, and nothing more: every centimetre past that is a step the
+  // road stands on.
+  if (above > -0.06) bad.push(`the ground reaches ${above.toFixed(2)} m of the road surface`);
+
+  // The profile out from the kerb, which is what "the road levitates" means
+  // when somebody says it: how far below the road surface the terrain sits at
+  // each distance out. The pavement is a flat ribbon at road height reaching
+  // nine metres from the kerb, and the buildings start where it ends — so
+  // whatever the drop is at nine metres is the height of the ledge the road
+  // appears to be standing on.
+  const profile = [];
+  for (const out of [6, 10, 16, 24, 40]) {
+    let worst2 = 0, n2 = 0, sum2 = 0;
+    for (let i = 0; i < track.samples.length; i += 23) {
+      const p = track.samples[i];
+      for (const sd of [-1, 1]) {
+        const gx = p.x + p.nx * sd * out, gz = p.z + p.nz * sd * out;
+        const d = p.y - track.groundAt(gx, gz);
+        sum2 += d; n2++;
+        if (d > worst2) worst2 = d;
+      }
+    }
+    profile.push({ out, mean: sum2 / n2, worst: worst2 });
+  }
+  const ledge = profile.find((q) => q.out === 10);
+  if (ledge.mean > 0.35) {
+    bad.push(`the ground sits ${ledge.mean.toFixed(2)} m below the road at the building line`);
+  }
 
   const ok = bad.length === 0;
-  return `${ok ? 'continuous, and under the road' : `WRONG — ${bad[0]}`} — ` +
+  return `${ok ? 'continuous, under the road, and up against it' : `WRONG — ${bad[0]}`} — ` +
     `worst step ${(worst * 100).toFixed(0)} cm per ${STEP} m overall` +
     (at ? ` (at ${at[0].toFixed(0)}, ${at[1].toFixed(0)})` : '') +
     `, ${(worstFar * 100).toFixed(0)} cm of it away from the road, ` +
-    `and it sits ${(-above).toFixed(2)} m below the kerb at its highest`;
+    `and it sits ${(-above).toFixed(2)} m below the kerb at its highest; ` +
+    `drop from the road at ` +
+    profile.map((q) => `${q.out}m:${q.mean.toFixed(2)}`).join(' ');
 }
 
 // Cutscenes. Every script, played through at 1/60 with a stand-in cast and a

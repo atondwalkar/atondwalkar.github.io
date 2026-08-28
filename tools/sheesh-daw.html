@@ -30,12 +30,14 @@
   html,body{background:var(--bg);color:var(--ink);font-family:'Chakra Petch',sans-serif}
   body{padding:14px}
 
-  #tabbar{display:flex;align-items:flex-end;gap:4px;padding:6px 8px 0}
+  #tabbar{display:flex;align-items:flex-end;gap:4px;padding:10px 8px 0;margin-bottom:-1px;position:relative;z-index:1}
+  #tabbar+section.panel{margin-top:0}
   #tabs{display:flex;gap:4px;flex-wrap:wrap;align-items:flex-end}
   .ptab{display:flex;align-items:center;gap:6px;padding:4px 9px;border:1px solid var(--line);border-bottom:none;border-radius:6px 6px 0 0;
-    background:var(--panel);color:var(--ink-dim);font-size:11px;letter-spacing:.04em;cursor:pointer;max-width:220px;user-select:none}
+    background:var(--panel-2);color:var(--ink-dim);font-size:11px;letter-spacing:.04em;cursor:pointer;max-width:220px;user-select:none;touch-action:none}
+  .ptab.dragging{opacity:.75;transform:translateY(-2px);cursor:grabbing}
   .ptab span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .ptab.active{color:var(--amber);background:var(--panel-2);border-color:var(--amber)}
+  .ptab.active{color:var(--amber);background:var(--panel);border-color:var(--amber)}
   .ptab .dirty{color:#ffd166;font-size:9px}
   .ptab .x{opacity:.55;font-size:10px;padding:0 2px;border-radius:3px}
   .ptab .x:hover{opacity:1;color:#ff6b6b}
@@ -8112,7 +8114,7 @@ function serFx(f,ref){
 /* ---- project name: shown in the header, click to rename, used as the Save filename ---- */
 const projNameEl=document.getElementById('proj-name');
 /* ---- project tabs: several projects open at once; inactive tabs hold a snapshot (project + buffers + history) ---- */
-const TABS=[]; let activeTab=null, tabCounter=0;
+const TABS=[]; let activeTab=null, tabCounter=0, tabDrag=null;
 function tabLabel(t){ return t.name||'Untitled'; }
 function renderTabs(){
   const host=document.getElementById('tabs'); if(!host) return;
@@ -8125,7 +8127,22 @@ function renderTabs(){
     const x=document.createElement('span'); x.className='x'; x.textContent='\u2715'; x.title='Close tab'; x.setAttribute('role','button'); x.setAttribute('aria-label','Close '+tabLabel(t));
     x.onclick=e=>{ e.stopPropagation(); closeTab(t); };
     el.append(nm,d,x);
-    el.onclick=()=>switchTab(t);
+    el.onpointerdown=e=>{ if(e.button!==0||e.target===x) return; tabDrag={t,el,x0:e.clientX,moved:false}; el.setPointerCapture(e.pointerId); };
+    el.onpointermove=e=>{
+      if(!tabDrag||tabDrag.el!==el) return;
+      if(!tabDrag.moved){ if(Math.abs(e.clientX-tabDrag.x0)<5) return; tabDrag.moved=true; el.classList.add('dragging'); }
+      const sibs=[...host.children], i=sibs.indexOf(el); let target=i;
+      for(let k=0;k<sibs.length;k++){
+        if(k===i) continue; const r=sibs[k].getBoundingClientRect(), mid=r.left+r.width/2;
+        if(k<i && e.clientX<mid) target=Math.min(target,k); else if(k>i && e.clientX>mid) target=Math.max(target,k);
+      }
+      if(target!==i){
+        const ti=TABS.indexOf(t); TABS.splice(ti,1); TABS.splice(target,0,t);   // model + DOM reordered live, no re-render, no switch
+        if(target<i) host.insertBefore(el,sibs[target]); else host.insertBefore(el,sibs[target].nextSibling);
+      }
+    };
+    el.onpointerup=el.onpointercancel=e=>{ if(!tabDrag||tabDrag.el!==el) return; const moved=tabDrag.moved; tabDrag=null; el.classList.remove('dragging'); if(moved) el._skipClick=true; };
+    el.onclick=()=>{ if(el._skipClick){ el._skipClick=false; return; } switchTab(t); };
     el.ondblclick=()=>{ if(t!==activeTab) switchTab(t); renameProject(); };
     el.onauxclick=e=>{ if(e.button===1){ e.preventDefault(); closeTab(t); } };
     host.appendChild(el);
@@ -8696,7 +8713,7 @@ const HK_ROWS=`    <div><span class="hk"><kbd>Space</kbd></span>play / stop</div
     <div><span class="hk"><kbd>Ctrl</kbd>+<kbd>C</kbd> <kbd>X</kbd> <kbd>V</kbd></span>copy / cut / paste selection at playhead</div>
     <div><span class="hk"><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>C</kbd> / <kbd>V</kbd></span>copy / paste whole tracks</div>
     <div><span class="hk"><kbd>G</kbd></span>group / ungroup selection (selecting one selects all)</div>
-    <div><span class="hk"><kbd>Tabs</kbd></span>several projects open at once (bar under the header): + or New opens a tab, Open loads into a new tab, dbl-click renames, ✕ / middle-click closes</div>
+    <div><span class="hk"><kbd>Tabs</kbd></span>several projects open at once (bar under the header): + or New opens a tab, Open loads into a new tab, drag to reorder, dbl-click renames, ✕ / middle-click closes</div>
     <div><span class="hk"><kbd>K</kbd></span>marker at the playhead (press on a marker's spot to remove \u00b7 click jumps \u00b7 drag moves \u00b7 dbl-click deletes)</div>
     <div><span class="hk"><kbd>M</kbd></span>mute / unmute the selected track</div>
     <div><span class="hk"><kbd>MIDI</kbd></span>a connected keyboard plays the selected track's instrument (velocity, sustain pedal); MIDI REC + play writes notes into its items</div>

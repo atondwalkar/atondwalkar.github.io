@@ -270,18 +270,34 @@ export const LAYOUTS = {
   //
   // Squared-off and flat-ish, with one long drag down the water side —
   // a working harbour, not a hill city. Between folsom and run in size.
+  // Stage four: across the bridge, and a different city.
+  //
+  // The East Bay does not look like downtown, so its circuit must not drive
+  // like downtown: smaller blocks on a tighter grid, narrower streets, and a
+  // loop that is mostly diagonals — fourteen of its sixteen corners are
+  // forty-odd-degree bends, so the road WINDS rather than turning in right
+  // angles. The first version of this was a rectilinear harbour loop on the
+  // downtown pitch, which was the same city with a different name on it.
   estuary: {
     id: 'estuary',
     name: 'THE ESTUARY',
+    pitch: { x: 46, z: 42 },
+    // Narrower than downtown's 11.6 — but not by as much as first tried.
+    // At 9.6 a lone driver was fine and the four-car pack was not: racing
+    // side-by-side into forty-degree bends needs somewhere for the loser of
+    // the corner to go, and on 9.6 metres that somewhere was the pavement,
+    // 24 car-seconds a race. The width has to fit the field, not just a car.
+    width: 10.6,
+    fillet: 14,                  // and tighter into the corners
     loop: [
-      [0, 0], [8, 0], [8, 3], [5, 3], [5, 6], [9, 6],
-      [9, 9], [2, 9], [2, 6], [-2, 6], [-2, 2], [0, 2],
+      [0, 0], [3, 0], [4, 1], [6, 1], [7, 2], [7, 4],
+      [6, 5], [6, 7], [4, 8], [2, 8], [1, 7], [-1, 7],
+      [-2, 6], [-2, 4], [-1, 3], [-1, 1],
     ],
-    // Nearly flat. A harbour is; what little rise there is comes off the
-    // container cranes' end of the yard.
+    // Low and rolling — East Bay flats with one rise, not a hill city.
     elevation: [
-      [0.00, 1.2], [0.20, 2.0], [0.42, 6.5], [0.60, 8.0],
-      [0.78, 4.0], [0.92, 1.6],
+      [0.00, 1.2], [0.22, 2.4], [0.45, 7.5], [0.62, 9.0],
+      [0.80, 4.5], [0.93, 1.8],
     ],
   },
 };
@@ -359,7 +375,13 @@ export class Track {
     // Centred on the origin. The ground plane, the fog, the sky dome and the
     // landmarks across the bay are all built around 0,0, and a grid written
     // from a corner is not — so move the grid rather than every one of them.
-    const raw = layout.loop.map(([c, r]) => ({ x: c * PITCH_X, z: r * PITCH_Z }));
+    // The grid the loop is written on. Per-layout, because block size is most
+    // of what makes one city feel like another: downtown San Francisco is long
+    // rectilinear blocks, and the East Bay side is smaller, tighter, and cut
+    // through with diagonals.
+    const px = (layout.pitch && layout.pitch.x) || PITCH_X;
+    const pz = (layout.pitch && layout.pitch.z) || PITCH_Z;
+    const raw = layout.loop.map(([c, r]) => ({ x: c * px, z: r * pz }));
     const cx = (Math.min(...raw.map((j) => j.x)) + Math.max(...raw.map((j) => j.x))) / 2;
     const cz = (Math.min(...raw.map((j) => j.z)) + Math.max(...raw.map((j) => j.z))) / 2;
     const off = layout.offset || { x: 0, z: 0 };
@@ -519,7 +541,7 @@ export class Track {
       }
       // Never eat more than four tenths of a leg, or two corners on a short
       // block run into each other and the street between them disappears.
-      const r = Math.min(FILLET, 0.42 * l1, 0.42 * l2);
+      const r = Math.min(this.layout.fillet || FILLET, 0.42 * l1, 0.42 * l2);
       const t = r * Math.abs(Math.tan(turn / 2));
       const sx = b.x - u1x * t, sz = b.z - u1z * t;
       const ex = b.x + u2x * t, ez = b.z + u2z * t;

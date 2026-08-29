@@ -301,17 +301,24 @@ export class Race {
   // begin with rather than a scrum.
   _slots() {
     const t = this.track;
-    if (this.formation !== 'pursuit') return this.cars.map((c, i) => t.gridSlots[i]);
-    const base = t.gridSlots[0].s;
     this.trafficCount = this.cars.filter((c) => c.traffic).length;
-    // Traffic is not on the grid. It is spread up the road ahead, in its own
-    // lane, already moving — which is what makes it traffic rather than a row
-    // of parked cars you happen to be able to hit.
+    // Traffic is NEVER on the grid, whatever the formation.
+    //
+    // This used to be checked only on the pursuit path, and the grid path
+    // simply indexed `gridSlots` by car number — sixteen slots, indexed by an
+    // eighteen-car field the moment a race stage carried traffic, which is an
+    // undefined slot and a stage that dies on its first frame. The composable
+    // field made rivals-plus-traffic expressible; this is the other half of
+    // expressing it.
     let nth = 0;
+    let gridN = 0;
     // On a route the run-up in front of the line is short, so a pursuer put
     // fifty-five metres behind the start would be off the end of the road.
     // Clamped to what there is, which is why the run-up is as long as it is.
+    const base = t.gridSlots[0].s;
     return this.cars.map((car, i) => {
+      void i;
+      if (!car.traffic && this.formation !== 'pursuit') return t.gridSlots[gridN++];
       if (car.traffic) {
         // Spread over the WHOLE road from close to the line, not from two
         // hundred and sixty metres up it: the first thing the stage does is
@@ -332,14 +339,16 @@ export class Race {
           yaw: Math.atan2(p.dirX, p.dirZ), s,
         };
       }
-      // The player at the front; the units at 55 m and then 18 m apart, which
-      // is far enough back to be got away from and close enough to see in the
-      // mirror from the first corner.
-      // Thirteen metres apart rather than eighteen. The two flankers have to
-      // get past the car on the bumper and out to a door before there is a box
-      // at all, and starting them nearly a hundred metres back meant that
-      // happened, when it happened, in the last third of the stage.
-      const back = i === 0 ? 0 : PURSUIT_GAP + (i - 1) * 13;
+      // The player at the front; the units at 55 m and then 13 m apart —
+      // close enough together that the flankers reach their doors early.
+      //
+      // Counted by PURSUIT CAR, not by field index. The field orders traffic
+      // between the player and the police, so on the bridge the first unit's
+      // raw index was 365 and `back` was four and a half kilometres — clamped
+      // to the start of the road, which happened to land them close enough
+      // that nobody noticed the arithmetic was nonsense.
+      const k2 = gridN++;
+      const back = k2 === 0 ? 0 : PURSUIT_GAP + (k2 - 1) * 13;
       const s = t.closed ? base - back : Math.max(4, base - back);
       const p = t.atDistance(s);
       const off = i === 0 ? 0 : ((i % 2) ? 2.6 : -2.6);
@@ -597,7 +606,12 @@ export class Race {
       const p2 = this.player;
       let nearest = Infinity;
       for (const c of this.cars) {
-        if (!c.pursuer || !c.loc || !p2.loc) continue;
+        // Roadblocks do not count as heat. They are parked — they cannot
+        // chase, and they spawn AHEAD every few seconds, so counting them held
+        // `nearest` inside the clear radius for the whole stage and the meter
+        // never moved: the win condition was unreachable by construction.
+        // What a roadblock threatens is your bodywork, not your escape.
+        if (!c.pursuer || c.roadblock || !c.loc || !p2.loc) continue;
         nearest = Math.min(nearest, dist2D(p2.vehicle.x, p2.vehicle.z, c.vehicle.x, c.vehicle.z));
       }
       this.coolT = nearest > this.escape.clear ? (this.coolT || 0) + dt : 0;

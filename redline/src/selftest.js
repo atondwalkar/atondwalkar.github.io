@@ -1200,28 +1200,49 @@ function checkNewStages(game) {
     if (names.size !== rivals.length) bad.push('two rivals share a livery');
     // And the pack can race it: a short sim, all three rivals plus the player
     // slot driven by AI, nobody stranded or off the road for long.
-    const cars = f.cars.filter((q) => !q.traffic).map((spec, i) => {
-      const slot = t.gridSlots[i];
-      const car = { vehicle: new Vehicle(CAR), loc: null };
-      car.vehicle.reset(slot.x, slot.z, slot.yaw);
-      car.vehicle.autoShift = true;
-      car.vehicle.surfaceGrip = 1;
-      car.loc = t.locate(car.vehicle.x, car.vehicle.z);
-      car.driver = new Driver(car, t, spec.skill ?? 0.9, spec.opts || {});
-      return car;
-    });
-    let offT = 0;
-    for (let i = 0; i < Math.round(50 / FIXED); i++) {
-      for (const car of cars) {
-        car.driver.drive(FIXED, cars);
-        car.vehicle.update(FIXED, 2);
-        car.loc = t.locate(car.vehicle.x, car.vehicle.z, car.loc.index);
-        const over = Math.abs(car.loc.lateral) - car.loc.width / 2;
-        car.vehicle.surfaceGrip = over <= 0 ? 1 : over < 1.6 ? 0.92 : 0.55;
-        if (over > 2) offT += FIXED;
+    //
+    // SEEDED, and averaged over three seeds — the same lesson the rival check
+    // learned. Drivers roll reaction times, mistakes and drift commitments
+    // from Math.random, and one roll of a four-car contact race swung this
+    // number from six car-seconds to nine and a half with identical code. One
+    // seeded run of a chaotic system is a coin flip about a threshold; three
+    // is a measurement.
+    const packRun = () => {
+      const cars = f.cars.filter((q) => !q.traffic).map((spec, i) => {
+        const slot = t.gridSlots[i];
+        const car = { vehicle: new Vehicle(CAR), loc: null };
+        car.vehicle.reset(slot.x, slot.z, slot.yaw);
+        car.vehicle.autoShift = true;
+        car.vehicle.surfaceGrip = 1;
+        car.loc = t.locate(car.vehicle.x, car.vehicle.z);
+        car.driver = new Driver(car, t, spec.skill ?? 0.9, spec.opts || {});
+        return car;
+      });
+      let off2 = 0;
+      for (let i = 0; i < Math.round(50 / FIXED); i++) {
+        for (const car of cars) {
+          car.driver.drive(FIXED, cars);
+          car.vehicle.update(FIXED, 2);
+          car.loc = t.locate(car.vehicle.x, car.vehicle.z, car.loc.index);
+          const over = Math.abs(car.loc.lateral) - car.loc.width / 2;
+          car.vehicle.surfaceGrip = over <= 0 ? 1 : over < 1.6 ? 0.92 : 0.55;
+          if (over > 2) off2 += FIXED;
+        }
       }
+      return off2;
+    };
+    const realRandom = Math.random;
+    let offSum = 0;
+    for (const s0 of [0x2f6e2b1, 0x51f3a9d, 0x13c7e05]) {
+      let seed = s0;
+      Math.random = () => {
+        seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+        return seed / 0x7fffffff;
+      };
+      try { offSum += packRun(); } finally { Math.random = realRandom; }
     }
-    if (offT > 6) bad.push(`the pack spent ${offT.toFixed(1)} car-seconds off the estuary`);
+    const offT = offSum / 3;
+    if (offT > 7) bad.push(`the pack spent ${offT.toFixed(1)} car-seconds off the estuary`);
   }
 
   // --- the skyline economy.
@@ -1466,6 +1487,17 @@ function checkWetAndEscape(game) {
     // stages alive.
     if (last.leash) bad.push('the escape stage has a leash — escaping empties the meter');
     if (last.intercept) bad.push('the escape stage spawns interceptors faster than the hold');
+    // And a roadblock parked ahead is not heat. The stage DROPS roadblocks
+    // ahead of the player every few seconds; counting them held the meter at
+    // zero for the whole stage.
+    const parked = mk(400 + 100, true);
+    parked.roadblock = true;
+    parked.vehicle.setSpeed(0);
+    race.cars.push(parked);
+    race.coolT = 1;
+    race.update(FIXED);
+    if (race.coolT === 0) bad.push('a parked roadblock a hundred metres ahead reset the meter');
+    race.cars.pop();
   }
 
   const ok = bad.length === 0;
@@ -2364,6 +2396,50 @@ function checkCampaign() {
       bad.push(`${s.id} leads to "${s.next}", which is not a stage`);
     }
   }
+  // Every stage's field lines up — a REAL slot for every car, on the road.
+  //
+  // This is the check that would have caught map four: the composable field
+  // let a race stage carry traffic, the grid path indexed sixteen slots by an
+  // eighteen-car field, and slot seventeen was undefined. The stage died on
+  // its first frame, and nothing here noticed because the field was validated
+  // as DATA and never asked to line up.
+  for (const st of STAGES) {
+    const t2 = new Track(LAYOUTS[st.layout]);
+    const c2 = new Campaign({ playerName: 'X' });
+    c2.index = STAGES.indexOf(st);
+    c2.car = SELECTABLE[0];
+    const f2 = c2.field(t2);
+    const shadow2 = Object.create(Race.prototype);
+    Object.assign(shadow2, {
+      track: t2,
+      formation: f2.formation,
+      cars: f2.cars.map((spec) => ({
+        traffic: !!spec.traffic,
+        driver: spec.traffic ? { lane: spec.lane } : null,
+      })),
+    });
+    const slots = shadow2._slots();
+    slots.forEach((slot, i2) => {
+      if (!slot || !Number.isFinite(slot.x) || !Number.isFinite(slot.s)) {
+        bad.push(`${st.id} has no slot for car ${i2 + 1} of ${slots.length}`);
+        return;
+      }
+      const loc2 = t2.locate(slot.x, slot.z);
+      if (Math.abs(loc2.lateral) > loc2.width / 2 + 1) {
+        bad.push(`${st.id} lines car ${i2 + 1} up ${Math.abs(loc2.lateral).toFixed(1)} m off centre`);
+      }
+    });
+    // And no two non-traffic cars share a slot.
+    const starts = slots.filter((q, i2) => q && !shadow2.cars[i2].traffic);
+    for (let a2 = 0; a2 < starts.length; a2++) {
+      for (let b2 = a2 + 1; b2 < starts.length; b2++) {
+        if (dist2D(starts[a2].x, starts[a2].z, starts[b2].x, starts[b2].z) < 3) {
+          bad.push(`${st.id} lines two cars up on the same spot`);
+        }
+      }
+    }
+  }
+
   const scripted = STAGES.reduce(
     (a, s) => a + ['before', 'onWin', 'onLose'].filter((k) => s[k]).length, 0);
   const ok = bad.length === 0;
@@ -3885,6 +3961,35 @@ function checkHud(game) {
     pv.x = at.x; pv.z = at.z; pv.yaw = at.yaw;
     race.player.loc = race.track.locate(pv.x, pv.z);
     notes.push(m0 !== m1 ? 'and the map moves with the car' : 'THE MAP DOES NOT FOLLOW THE CAR');
+
+    // Nothing at the top of the screen overlaps, in any of the special modes.
+    // The heat bar and the drift score are centred like the top strip is, and
+    // both spent a while drawn straight through the middle of the clock.
+    {
+      const hudEl = el('hud');
+      // Restored afterwards, because this runs in the middle of the run-mode
+      // checks and blowing their class away fails THEM, not this.
+      const wasClass = hudEl.className;
+      for (const mode of ['escape', 'drift']) {
+        hudEl.classList.add('run', mode);
+        const boxes = ['top', 'heat', 'drift', 'map']
+          .map((id) => el(id))
+          .filter((n) => n && getComputedStyle(n).display !== 'none')
+          .map((n) => ({ id: n.id, r: n.getBoundingClientRect() }))
+          .filter((b) => b.r.width > 0);
+        for (let a2 = 0; a2 < boxes.length; a2++) {
+          for (let b2 = a2 + 1; b2 < boxes.length; b2++) {
+            const A = boxes[a2].r, B = boxes[b2].r;
+            if (A.right > B.left && B.right > A.left && A.bottom > B.top && B.bottom > A.top) {
+              notes.push(`${boxes[a2].id} AND ${boxes[b2].id} OVERLAP IN ${mode.toUpperCase()}`);
+            }
+          }
+        }
+        hudEl.classList.remove('run', mode);
+      }
+      hudEl.className = wasClass;
+      if (!notes.some((n) => n.includes('OVERLAP'))) notes.push('nothing at the top overlaps');
+    }
 
     // And the race furniture is gone: no position, no timing strip, no order.
     const gone = ['pos-cell', 'timing', 'standings']

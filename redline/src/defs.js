@@ -152,8 +152,12 @@ export const RIVAL = {
 // one where you are beaten by an individual.
 export const PACK = [
   { name: 'MARLOWE', skill: 0.96, opts: { cornerMargin: 0.94, aggression: 0.9 } },
-  { name: 'OKONKWO', skill: 0.93, opts: { aggression: 1.0, block: 0.9 } },
-  { name: 'VESZPREMI', skill: 0.94, opts: { drift: 0.3, cornerMargin: 0.92 } },
+  { name: 'OKONKWO', skill: 0.93, opts: { aggression: 1.0, block: 0.85 } },
+  // Less drift than KESTREL carries, because of where this pack races: the
+  // estuary is ten and a half metres wide and winds, and a slide that looks
+  // committed on a downtown boulevard is a trip across the pavement here.
+  // The drivers have to fit the city they drive in.
+  { name: 'VESZPREMI', skill: 0.94, opts: { drift: 0.12, driftMinTurn: 0.05, cornerMargin: 0.92 } },
 ];
 
 // Car-to-car contact.

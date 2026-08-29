@@ -173,8 +173,11 @@
   #hud.run #pos-cell, #hud.run #timing, #hud.run #standings { display: none; }
   /* The heat meter: the escape stage's whole scoreboard. Fills while nobody is
      close, empties the moment anybody is. */
+  /* Below the top strip, not under it: the strip is centred at the top of the
+     screen and about forty pixels tall, and both of these used to sit at
+     sixteen — a bar drawn through the middle of the clock. */
   #heat {
-    position: absolute; left: 50%; top: 16px; transform: translateX(-50%);
+    position: absolute; left: 50%; top: 56px; transform: translateX(-50%);
     width: min(46vw, 420px); display: none;
   }
   #hud.escape #heat { display: block; }
@@ -187,7 +190,7 @@
   /* The drift score: total banked, and the chain riding on the current slide.
      The chain is the risk, so it is the loud one. */
   #drift {
-    position: absolute; left: 50%; top: 16px; transform: translateX(-50%);
+    position: absolute; left: 50%; top: 56px; transform: translateX(-50%);
     display: none; text-align: center;
   }
   #hud.drift #drift { display: block; }

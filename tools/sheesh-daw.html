@@ -8772,7 +8772,7 @@ const HK_ROWS=`    <div><span class="hk"><kbd>Space</kbd></span>play / stop</div
     <div><span class="hk"><kbd>K</kbd></span>marker at the playhead (press on a marker's spot to remove \u00b7 click jumps \u00b7 drag moves \u00b7 dbl-click deletes)</div>
     <div><span class="hk"><kbd>M</kbd></span>mute / unmute the selected track</div>
     <div><span class="hk"><kbd>MIDI</kbd></span>a connected keyboard plays the selected track's instrument (velocity, sustain pedal); MIDI REC + play writes notes into its items</div>
-    <div><span class="hk"><kbd>LEARN</kbd></span>MIDI Learn: click a knob / fader / transport button, then move a knob or press a pad on the controller to bind it (Shift-click unbinds; bindings save with the project)</div>
+    <div><span class="hk"><kbd>LEARN</kbd></span>MIDI Learn: click a knob / fader / transport button, then move a knob or press a pad on the controller to bind it (Shift-click unbinds, Alt-click forces absolute/relative for endless encoders; bindings save with the project)</div>
     <div><span class="hk"><kbd>Y</kbd></span>merge selected clips or MIDI items</div>
     <div><span class="hk"><kbd>Click</kbd></span>select clip / item / note · <kbd>Ctrl</kbd>+click toggles · <kbd>Shift</kbd>+click selects the range</div>
     <div><span class="hk"><kbd>Drag</kbd></span>move selection (across tracks) · edges trim (clips &amp; MIDI items, on the timeline grid) · <kbd>Ctrl</kbd>+drag right edge stretches clips</div>
@@ -9331,7 +9331,35 @@ function midiTargetLabel(m){
   return MIDI_BTN_LABEL[m.id]||m.id;
 }
 function midiSameTarget(a,b){ return a.kind===b.kind && a.fx===b.fx && a.key===b.key && a.track===b.track && a.id===b.id; }
-function midiBindControl(m,ctl){ midiMap=midiMap.filter(b=>b.ctl!==ctl && !midiSameTarget(b,m)); midiMap.push({ctl,kind:m.kind,fx:m.fx,key:m.key,track:m.track,id:m.id}); midiLearnRefreshMarks(); }
+function midiBindControl(m,ctl,mode){ midiMap=midiMap.filter(b=>b.ctl!==ctl && !midiSameTarget(b,m)); midiMap.push({ctl,kind:m.kind,fx:m.fx,key:m.key,track:m.track,id:m.id,mode:mode||'abs',_hist:[]}); midiLearnRefreshMarks(); }
+/* Endless encoders send steps, not positions: 'rel' = 1..63 up / 65..127 down (two's complement or signed-bit), 'rel64' = 65.. up / ..63 down.
+   Detected automatically from the first few messages (repeated or direction-changing small steps); Alt-click a bound control in learn mode to override. */
+const MIDI_MODES=['abs','rel','rel64'], MIDI_MODE_NAME={abs:'absolute',rel:'relative (1 up / 127 down)',rel64:'relative (65 up / 63 down)'};
+function midiRelClass(v){ return (v>=1&&v<=15)?'lo+':(v>=113&&v<=127)?'lo-':(v>=65&&v<=79)?'hi+':(v>=49&&v<=63)?'hi-':null; }
+function midiDetectMode(b,v){
+  if(b.mode!=='abs') return;
+  const h=(b._hist=b._hist||[]); h.push(v); if(h.length>8) h.shift();
+  if(h.length<4) return;
+  const cls=h.map(midiRelClass); if(cls.some(c=>!c)) return;                 // a value outside the step ranges = a real pot position
+  let reps=0; for(let i=1;i<h.length;i++) if(h[i]===h[i-1]) reps++;
+  const dirs=new Set(cls.map(c=>c[2]));
+  if(reps<2 && !(dirs.size===2 && reps>=1)) return;                        // pots never repeat a value; a sweep 8→60 is not a direction change
+  b.mode=cls.some(c=>c[0]==='l')?'rel':'rel64';
+  flash('Encoder detected: '+midiCtlName(b.ctl)+' now nudges '+midiTargetLabel(b)+' ('+MIDI_MODE_NAME[b.mode]+')');
+  midiLearnRefreshMarks();
+}
+function midiRelDelta(b,v){
+  if(b.mode==='rel64') return v-64;
+  if(v===64||v===0) return 0;
+  return v<64 ? v : -Math.min(128-v, v-64);
+}
+function midiCurFr(b){
+  if(b.kind==='fx'){ const p=FX_DEFS[b.fx.type].params[b.key]; return (b.fx.params[b.key]-p.min)/(p.max-p.min); }
+  if(b.kind==='mvol') return +mvol.value;
+  const ts=state.tracks[b.track&&b.track.id]; if(!ts) return 0;
+  return b.kind==='vol'?ts.vol:(ts.pan+1)/2;
+}
+function midiCycleMode(b){ b.mode=MIDI_MODES[(MIDI_MODES.indexOf(b.mode||'abs')+1)%MIDI_MODES.length]; b._hist=[]; flash(midiTargetLabel(b)+': '+MIDI_MODE_NAME[b.mode]); midiLearnRefreshMarks(); }
 function midiUnbind(m){ midiMap=midiMap.filter(b=>!midiSameTarget(b,m)); midiLearnRefreshMarks(); }
 function midiElOf(m){
   if(m.kind==='fx'){ const w=m.fx._knobs&&m.fx._knobs[m.key]; return (w&&w.isConnected)?w.querySelector('.knob'):null; }
@@ -9343,7 +9371,7 @@ function midiElOf(m){
 function midiLearnRefreshMarks(){
   document.querySelectorAll('.midi-bound,.midi-pending').forEach(el=>{ el.classList.remove('midi-bound','midi-pending'); el.removeAttribute('data-mctl'); });
   if(!midiLearn) return;
-  midiMap.forEach(b=>{ const el=midiElOf(b); if(el){ el.classList.add('midi-bound'); el.setAttribute('data-mctl',midiCtlShort(b.ctl)); } });
+  midiMap.forEach(b=>{ const el=midiElOf(b); if(el){ el.classList.add('midi-bound'); el.setAttribute('data-mctl',midiCtlShort(b.ctl)+(b.mode&&b.mode!=='abs'?'±':'')); } });
   if(midiLearnPending){ const el=midiElOf(midiLearnPending); if(el) el.classList.add('midi-pending'); }
 }
 function setMidiLearn(on){
@@ -9351,13 +9379,14 @@ function setMidiLearn(on){
   document.body.classList.toggle('midi-learn',midiLearn);
   const b=document.getElementById('midi-learn'); if(b){ b.classList.toggle('on',midiLearn); b.setAttribute('aria-pressed',String(midiLearn)); }
   midiLearnRefreshMarks();
-  if(midiLearn) flash('MIDI Learn: click a knob, fader or button in the DAW, then move a knob / press a pad on your controller. Shift-click removes a binding; Esc or LEARN finishes.');
+  if(midiLearn) flash('MIDI Learn: click a knob, fader or button in the DAW, then move a knob / press a pad on your controller. Shift-click removes a binding, Alt-click switches absolute/relative; Esc or LEARN finishes.');
 }
 document.addEventListener('pointerdown',e=>{
   if(!midiLearn) return;
   const el=e.target.closest('.knob,.fader,.pan,button'); const m=el&&el._midi; if(!m) return;
   e.preventDefault(); e.stopPropagation();
   if(e.shiftKey||e.button===2){ midiUnbind(m); flash('Unbound '+midiTargetLabel(m)); return; }
+  if(e.altKey){ const b=midiMap.find(x=>midiSameTarget(x,m)); if(b && b.kind!=='btn') midiCycleMode(b); else flash('Bind the control first, then Alt-click to switch absolute / relative.'); return; }
   midiLearnPending=m; midiLearnRefreshMarks();
   flash('Now move a knob / press a pad or button on the controller for \u201c'+midiTargetLabel(m)+'\u201d\u2026');
 },true);
@@ -9393,7 +9422,7 @@ function midiApplyControl(b,fr,pressed){
 function serMidiMap(){
   const out=[];
   midiMap.forEach(b=>{
-    const o={ctl:b.ctl,kind:b.kind};
+    const o={ctl:b.ctl,kind:b.kind}; if(b.mode&&b.mode!=='abs') o.mode=b.mode;
     if(b.kind==='fx'){ const tr=midiTrackOfFx(b.fx); if(!tr) return; o.tr=tr.isMaster?-1:tracksAll.indexOf(tr); o.fx=tr.fx.indexOf(b.fx); o.key=b.key; }
     else if(b.kind==='vol'||b.kind==='pan'){ const i=tracksAll.indexOf(b.track); if(i<0) return; o.tr=i; }
     else if(b.kind==='btn') o.id=b.id;
@@ -9404,10 +9433,11 @@ function serMidiMap(){
 function deserMidiMap(list){
   midiMap=[];
   (list||[]).forEach(o=>{ try{
-    if(o.kind==='fx'){ const tr=o.tr===-1?MASTER_TRACK:tracksAll[o.tr]; const fx=tr&&tr.fx[o.fx]; if(!fx||!FX_DEFS[fx.type].params[o.key]) return; midiMap.push({ctl:o.ctl,kind:'fx',fx,key:o.key}); }
-    else if(o.kind==='vol'||o.kind==='pan'){ const tr=tracksAll[o.tr]; if(!tr) return; midiMap.push({ctl:o.ctl,kind:o.kind,track:tr}); }
-    else if(o.kind==='mvol') midiMap.push({ctl:o.ctl,kind:'mvol'});
-    else if(o.kind==='btn' && MIDI_BTN_LABEL[o.id]) midiMap.push({ctl:o.ctl,kind:'btn',id:o.id});
+    const mode=MIDI_MODES.includes(o.mode)?o.mode:'abs';
+    if(o.kind==='fx'){ const tr=o.tr===-1?MASTER_TRACK:tracksAll[o.tr]; const fx=tr&&tr.fx[o.fx]; if(!fx||!FX_DEFS[fx.type].params[o.key]) return; midiMap.push({ctl:o.ctl,kind:'fx',fx,key:o.key,mode,_hist:[]}); }
+    else if(o.kind==='vol'||o.kind==='pan'){ const tr=tracksAll[o.tr]; if(!tr) return; midiMap.push({ctl:o.ctl,kind:o.kind,track:tr,mode,_hist:[]}); }
+    else if(o.kind==='mvol') midiMap.push({ctl:o.ctl,kind:'mvol',mode,_hist:[]});
+    else if(o.kind==='btn' && MIDI_BTN_LABEL[o.id]) midiMap.push({ctl:o.ctl,kind:'btn',id:o.id,mode:'abs'});
   }catch(_){} });
   midiLearnRefreshMarks();
 }
@@ -9426,7 +9456,14 @@ function onMidiMessage(e){
       flash('Bound '+midiCtlName(ctl)+' \u2192 '+midiTargetLabel(m)); return;
     }
     const b=midiMap.find(x=>x.ctl===ctl);
-    if(b){ if(!noteOff) midiApplyControl(b,fr,pressed); return; }        // bound controls are consumed (a bound pad never plays a note)
+    if(b){
+      if(noteOff) return;
+      if(type===0xB0 && b.kind!=='btn'){
+        midiDetectMode(b,d2);
+        if(b.mode!=='abs'){ const dl=midiRelDelta(b,d2); if(dl) midiApplyControl(b,midiCurFr(b)+dl/127,true); return; }
+      }
+      midiApplyControl(b,fr,pressed); return;                              // bound controls are consumed (a bound pad never plays a note)
+    }
   }
   if(type===0x90 && d2>0) midiNoteOn(d1, d2/127);
   else if(type===0x80 || (type===0x90 && d2===0)) midiNoteOff(d1);

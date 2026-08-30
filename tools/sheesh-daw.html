@@ -189,6 +189,9 @@
   }
   .row .name .sw{width:10px;height:10px;border-radius:3px;flex:none}
   .row .name .label{font-size:11px;font-weight:600;letter-spacing:.06em;width:46px}
+  .chip .midi-in{font:inherit;font-size:9px;letter-spacing:.04em;height:16px;padding:0 1px;background:#161a22;color:var(--ink-dim);border:1px solid var(--line);border-radius:3px;max-width:60px;cursor:pointer}
+  .chip .midi-in.on{color:var(--amber);border-color:var(--amber)}
+  #midi-target{font-size:9px;letter-spacing:.04em;color:var(--ink-dim);max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .chip .routes{display:inline-flex;gap:3px;align-items:center}
   input.rename{
     width:92px;background:#161a22;border:1px solid var(--amber);color:var(--ink);
@@ -705,6 +708,7 @@
         <button id="midi-rec" aria-pressed="false" title="Record MIDI: while playing (Space), notes from the keyboard are written into the selected track's MIDI items (tick resolution — snap them afterwards if you like)">REC</button>
         <button id="midi-learn" aria-pressed="false" title="MIDI Learn: click a knob, fader or transport button in the DAW, then move a knob / press a pad on your controller to bind it. Shift-click a control to unbind. Bindings are saved with the project.">LEARN</button>
         <i id="midi-led" title="MIDI activity"></i>
+        <span id="midi-target" title="Tracks receiving the keyboard — set each track's MIDI input on its chip (off / any / channel)"></span>
       </div>
     </div>
     <div class="lcd io-lcd">
@@ -4172,8 +4176,15 @@ function addTrack(after){
   const al=document.createElement('button'); al.className='mini alanes'; al.textContent='≋';
   al.setAttribute('aria-label','Show or hide automation lanes of '+track.name);
   al.onclick=e=>{ e.stopPropagation(); toggleAutoLanes(track); };
-  cbtns.append(m,s,au,al,kill);
-  track.chipM=m; track.chipS=s; track.autoBtn=au; track.autoLanesBtn=al; updateAutoBtn(track);
+  const mi=document.createElement('select'); mi.className='midi-in'; mi.setAttribute('aria-label','MIDI input for '+track.name);
+  mi.title='MIDI input: which keyboard channel plays and records into this track (MPK mini: keys = ch 1, pads = ch 10). With every track off, the selected track receives the keyboard.';
+  mi.appendChild(new Option('MIDI','off')); mi.appendChild(new Option('any ch','any'));
+  for(let c=0;c<16;c++) mi.appendChild(new Option('ch '+(c+1),String(c)));
+  mi.value=midiInValue(track); mi.classList.toggle('on',mi.value!=='off');
+  mi.onpointerdown=mi.onclick=mi.ondblclick=e=>e.stopPropagation();
+  mi.onchange=e=>{ e.stopPropagation(); pushHistory(); setTrackMidiIn(track,mi.value); };
+  cbtns.append(m,s,au,al,mi,kill);
+  track.chipM=m; track.chipS=s; track.autoBtn=au; track.autoLanesBtn=al; track.midiSel=mi; updateAutoBtn(track);
 
   chip.addEventListener('click',e=>chipClick(track,e));
 
@@ -5181,6 +5192,7 @@ function selectTrack(track){
   if(track && track.chipEl) track.chipEl.classList.add('sel-track');
   renderFxPanel();
   syncMixer();
+  if(typeof midiRefreshTarget==="function") midiRefreshTarget();
 }
 function selObjOf(sl){ return sl.kind==='audio'?sl.clip:sl.item; }
 function selHas(obj){ return selSet.some(sl=>selObjOf(sl)===obj); }
@@ -5409,7 +5421,7 @@ function pasteItems(){
 function serTrackData(t){
   const ts=state.tracks[t.id];
   return {name:t.name, compact:t.laneEl.classList.contains('compact'), vol:ts.vol, mute:!!ts.mute, solo:!!ts.solo, pan:ts.pan||0, fxBypass:!!ts.fxBypass,
-    autoMode:t.autoMode||'read', busId:t.busId||null,
+    autoMode:t.autoMode||'read', busId:t.busId||null, midiIn:t.midiIn??null,
     fx:t.fx.map(f=>({type:f.type, params:{...f.params}, bypass:!!f.bypass, irBuffer:f.irBuffer||null, irName:f.irName||null, keyTrackId:f.keyTrackId||null, sampleBuffer:f.sampleBuffer||null, sampleName:f.sampleName||null, noiseProfile:f.noiseProfile||null, profSr:f.profSr||null, profN:f.profN||null, noiseSec:f.noiseSec||0})),
     items:t.items.map(it=>({kind:it.kind, startStep:it.startStep, lenSteps:it.lenSteps, name:it.name, scale:it.scale||'', grp:it.grp??null, pat:serPat(it), pt:serPitch(it)})),
     clips:t.clips.map(c=>({buffer:c.buffer, start:c.start, offset:c.offset, dur:c.dur, name:c.name, nativeBpm:c.nativeBpm, stretch:c.stretch||1, grp:c.grp??null, gain:c.gain||0, fadeIn:c.fadeIn||0, fadeOut:c.fadeOut||0, semis:c.semis||0, rev:!!c.rev})),
@@ -5440,6 +5452,7 @@ function pasteTrackData(d,after){
   if(bt && bt!==tr && !busWouldLoop(tr,bt)){ tr.busId=bt.id; applyBusRouting(tr); }
   rebuildChain(tr);
   tr.autoMode=AUTO_MODES.includes(d.autoMode)?d.autoMode:'read';
+  tr.midiIn=(d.midiIn==='any'||(Number.isInteger(d.midiIn)&&d.midiIn>=0&&d.midiIn<16))?d.midiIn:null;
   (d.autos||[]).forEach(sa=>{
     const target={kind:sa.kind};
     if(sa.kind==='fx'){ const fx=tr.fx[sa.fxIdx]; if(!fx) return; target.fxId=fx.id; target.key=sa.key; }
@@ -8269,7 +8282,7 @@ function snapState(){
     master:{mvol:+mvol.value, fxBypass:!!state.tracks.master.fxBypass, fx:MASTER_TRACK.fx.map(f=>serFx(f,ref)), auto:serAutos(MASTER_TRACK), amode:MASTER_TRACK.autoMode||'read'},
     routes:{},
     tracks:tracksAll.map(t=>({
-      name:t.name,
+      name:t.name, midiIn:t.midiIn??null,
       compact:t.laneEl.classList.contains('compact'),
       fold:!!t.folded,
       bus:tracksAll.findIndex(t2=>t2.id===t.busId),
@@ -8478,7 +8491,7 @@ async function saveProject(){
       master:{mvol:+mvol.value, fxBypass:!!state.tracks.master.fxBypass, fx:MASTER_TRACK.fx.map(f=>serFx(f,bufRef)), auto:serAutos(MASTER_TRACK), amode:MASTER_TRACK.autoMode||'read'},
       routes:{},
       tracks:tracksAll.map(t=>({
-        name:t.name,
+        name:t.name, midiIn:t.midiIn??null,
         compact:t.laneEl.classList.contains('compact'),
         fold:!!t.folded,
         bus:tracksAll.findIndex(t2=>t2.id===t.busId),
@@ -8688,6 +8701,7 @@ function applyProject(proj,buffers){
       if(st.bus>=0) pendingBus.push({tr, bus:st.bus});
       rebuildChain(tr);
       tr.autoMode=AUTO_MODES.includes(st.amode)?st.amode:'read';
+      tr.midiIn=(st.midiIn==='any'||(Number.isInteger(st.midiIn)&&st.midiIn>=0&&st.midiIn<16))?st.midiIn:null;
       (st.auto||[]).forEach(sa=>{
         const target={kind:sa.kind};
         if(sa.kind==='fx'){ const fx=tr.fx[sa.fx]; if(!fx) return; target.fxId=fx.id; target.key=sa.key; }
@@ -8751,6 +8765,7 @@ function applyProject(proj,buffers){
     updateChipRoutes();
     renderFxPanel();
     deserMidiMap(proj.midiMap);
+    midiRefreshTarget();
     selectObj(null);
     selectTrack(newTracks[0]||null);
     renderMixer();
@@ -8772,6 +8787,7 @@ const HK_ROWS=`    <div><span class="hk"><kbd>Space</kbd></span>play / stop</div
     <div><span class="hk"><kbd>K</kbd></span>marker at the playhead (press on a marker's spot to remove \u00b7 click jumps \u00b7 drag moves \u00b7 dbl-click deletes)</div>
     <div><span class="hk"><kbd>M</kbd></span>mute / unmute the selected track</div>
     <div><span class="hk"><kbd>MIDI</kbd></span>a connected keyboard plays the selected track's instrument (velocity, sustain pedal); MIDI REC + play writes notes into its items</div>
+    <div><span class="hk"><kbd>MIDI in</kbd></span>each track chip has a MIDI input (off / any / ch 1–16): routed tracks receive and record the keyboard by channel (MPK mini keys = ch 1, pads = ch 10); with none set, the selected track receives it</div>
     <div><span class="hk"><kbd>LEARN</kbd></span>MIDI Learn: click a knob / fader / transport button, then move a knob or press a pad on the controller to bind it (Shift-click unbinds, Alt-click forces absolute/relative for endless encoders; bindings save with the project)</div>
     <div><span class="hk"><kbd>Y</kbd></span>merge selected clips or MIDI items</div>
     <div><span class="hk"><kbd>Click</kbd></span>select clip / item / note · <kbd>Ctrl</kbd>+click toggles · <kbd>Shift</kbd>+click selects the range</div>
@@ -8842,6 +8858,7 @@ masterFxb.onclick=()=>{
   if(selectedTrack===MASTER_TRACK) renderFxPanel();
 };
 function renderMixer(){
+  if(typeof midiRefreshTarget==='function') midiRefreshTarget();
   if(!mixerEl) return;
   mixerEl.innerHTML='';
   tracksAll.forEach(t=>{
@@ -9245,6 +9262,26 @@ const MIDI_LIVE_DUR=60;                                   // sustaining voices r
 const midiWrap=document.getElementById('midi-wrap'), midiSel=document.getElementById('midi-in'), midiRecBtn=document.getElementById('midi-rec'), midiLed=document.getElementById('midi-led');
 function midiBlink(){ if(!midiLed) return; midiLed.classList.add('on'); clearTimeout(midiBlink._t); midiBlink._t=setTimeout(()=>midiLed.classList.remove('on'),90); }
 function midiTrack(){ return (selectedTrack && !selectedTrack.isMaster && tracksAll.includes(selectedTrack)) ? selectedTrack : null; }
+/* ---- MIDI input routing: each track can listen to one channel or any; with no routing set anywhere, the selected track receives everything ---- */
+function midiInValue(t){ return t.midiIn==null?'off':String(t.midiIn); }
+function midiRoutedTracks(){ return tracksAll.filter(t=>t.midiIn!=null); }
+function midiTargets(ch){
+  const routed=midiRoutedTracks();
+  if(!routed.length){ const t=midiTrack(); return t?[t]:[]; }
+  return routed.filter(t=>t.midiIn==='any' || t.midiIn===ch);
+}
+function setTrackMidiIn(track,v){
+  track.midiIn = v==='any' ? 'any' : (v==='off'||v==null||v==='') ? null : Math.max(0,Math.min(15,+v));
+  midiAllOff();
+  midiRefreshTarget();
+}
+function midiRefreshTarget(){
+  tracksAll.forEach(t=>{ if(t.midiSel){ t.midiSel.value=midiInValue(t); t.midiSel.classList.toggle('on',t.midiIn!=null); } });
+  const el=document.getElementById('midi-target'); if(!el) return;
+  const routed=midiRoutedTracks();
+  if(!routed.length){ const t=midiTrack(); el.textContent=t?'\u2192 '+t.name:'\u2192 select a track'; el.title='No track has a MIDI input set, so the keyboard plays the selected track. Set MIDI inputs on the track chips to route channels (MPK mini: keys ch 1, pads ch 10).'; }
+  else { el.textContent='\u2192 '+routed.map(t=>t.name+(t.midiIn==='any'?'':' ch'+(t.midiIn+1))).join(', '); el.title='Keyboard routing: '+routed.map(t=>t.name+' \u2190 '+(t.midiIn==='any'?'any channel':'channel '+(t.midiIn+1))).join('; '); }
+}
 function midiVoiceOn(tr,k,vel){
   const mfx=tr.fx.find(f=>f.type==='sampler' && !f.bypass);
   const wfx=mfx?null:tr.fx.find(f=>f.type==='wt' && !f.bypass);
@@ -9289,9 +9326,11 @@ function midiRecordDrum(tr,id,vel){
   it.pat[id][tick-it.startStep]=Math.max(1,Math.round(vel*127));
   renderItem(it); if(selMidiItem()===it) drawPianoRoll();
 }
-function midiNoteOn(note,vel){
-  const tr=midiTrack(); if(!tr) return;
-  ensureSamples().then(()=>{
+function midiHeldKey(ch,note,tr){ return ch+':'+note+':'+tr.id; }
+function midiNoteOn(note,vel,ch){
+  ch=ch|0;
+  const targets=midiTargets(ch); if(!targets.length) return;
+  ensureSamples().then(()=>targets.forEach(tr=>{
     const inst=trackInstrument(tr); if(!inst || !tracksAll.includes(tr)) return;
     if(inst==='drums'){
       const id=KEY_TO_DRUM[note-21]; if(!id) return;
@@ -9299,21 +9338,25 @@ function midiNoteOn(note,vel){
       midiRecordDrum(tr,id,vel); return;
     }
     const k=note-21; if(k<0||k>87) return;
-    const prev=midiHeld.get(note); if(prev){ releaseVoice(prev.v); midiRecordOff(prev); midiSustained.delete(note); }
-    const h={v:midiVoiceOn(tr,k,vel), tr, rec:null};
-    midiHeld.set(note,h);
+    const key=midiHeldKey(ch,note,tr);
+    const prev=midiHeld.get(key); if(prev){ releaseVoice(prev.v); midiRecordOff(prev); midiSustained.delete(key); }
+    const h={v:midiVoiceOn(tr,k,vel), tr, rec:null, note, ch};
+    midiHeld.set(key,h);
     midiRecordOn(tr,k,vel,h);
-  });
+  }));
 }
-function midiNoteOff(note){
-  const h=midiHeld.get(note); if(!h) return;
-  if(midiSustain){ midiSustained.add(note); return; }
-  midiHeld.delete(note);
-  releaseVoice(h.v); midiRecordOff(h);
+function midiNoteOff(note,ch){
+  ch=ch|0;
+  for(const [key,h] of [...midiHeld]){
+    if(h.note!==note || h.ch!==ch) continue;
+    if(midiSustain){ midiSustained.add(key); continue; }
+    midiHeld.delete(key);
+    releaseVoice(h.v); midiRecordOff(h);
+  }
 }
 function midiSustainSet(on){
   midiSustain=on;
-  if(!on){ [...midiSustained].forEach(n=>{ midiSustained.delete(n); midiNoteOff(n); }); }
+  if(!on){ [...midiSustained].forEach(key=>{ midiSustained.delete(key); const h=midiHeld.get(key); if(!h) return; midiHeld.delete(key); releaseVoice(h.v); midiRecordOff(h); }); }
 }
 function midiAllOff(){ [...midiHeld.keys()].forEach(n=>{ const h=midiHeld.get(n); midiHeld.delete(n); releaseVoice(h.v); midiRecordOff(h); }); midiSustained.clear(); }
 /* ---- MIDI Learn: hardware knobs / pads / buttons → DAW controls. Bindings live in the project (indices, re-resolved on load). ---- */
@@ -9465,8 +9508,8 @@ function onMidiMessage(e){
       midiApplyControl(b,fr,pressed); return;                              // bound controls are consumed (a bound pad never plays a note)
     }
   }
-  if(type===0x90 && d2>0) midiNoteOn(d1, d2/127);
-  else if(type===0x80 || (type===0x90 && d2===0)) midiNoteOff(d1);
+  if(type===0x90 && d2>0) midiNoteOn(d1, d2/127, ch);
+  else if(type===0x80 || (type===0x90 && d2===0)) midiNoteOff(d1, ch);
   else if(type===0xB0 && d1===64) midiSustainSet(d2>=64);
   else if(type===0xB0 && (d1===120||d1===123)) midiAllOff();
 }

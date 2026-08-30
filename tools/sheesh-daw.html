@@ -4131,6 +4131,31 @@ function contentEnd(){
   });
   return end;
 }
+/* last audible event: clip ends and the last note / hit inside MIDI items (an item's empty tail does not count) */
+function audibleEnd(){
+  let end=0; const sd=stepDur();
+  tracksAll.forEach(t=>{
+    t.clips.forEach(c=>end=Math.max(end,c.start+clipTlDur(c)));
+    t.items.forEach(it=>{
+      if(!trackHasInst(t,it.kind)) return;
+      let last=-1;
+      if(it.kind==='drums'){ DRUMS.forEach(d=>{ const lane=it.pat[d.id]; if(!lane) return; for(let i=Math.min(lane.length,it.lenSteps)-1;i>last;i--) if(lane[i]){ last=i; break; } }); if(last>=0) last+=1; }
+      else it.pat.forEach(nn=>{ last=Math.max(last,nn.s+Math.max(1,nn.l)); });
+      if(last>0) end=Math.max(end,(it.startStep+Math.min(last,it.lenSteps))*sd);
+    });
+  });
+  return end;
+}
+/* drop the silent end of a rendered buffer (below thrDb), keeping a short pad; never shorter than 1 s */
+function trimSilence(buf,thrDb,pad){
+  const thr=Math.pow(10,(thrDb==null?-70:thrDb)/20), sr=buf.sampleRate; let last=0;
+  for(let c=0;c<buf.numberOfChannels;c++){ const d=buf.getChannelData(c); for(let i=d.length-1;i>last;i--) if(Math.abs(d[i])>thr){ last=i; break; } }
+  const len=Math.min(buf.length,Math.max(sr,last+1+Math.round((pad==null?0.25:pad)*sr)));
+  if(len>=buf.length) return buf;
+  const out=new AudioBuffer({length:len,sampleRate:sr,numberOfChannels:buf.numberOfChannels});
+  for(let c=0;c<buf.numberOfChannels;c++) out.copyToChannel(buf.getChannelData(c).subarray(0,len),c);
+  return out;
+}
 function timelineSec(){
   const ahead = state.playing ? curPos()+10*barSec() : 0;
   return Math.max(12*barSec(), contentEnd()+10*barSec(), ahead);
@@ -8310,12 +8335,12 @@ async function encodeOpus(buf,o){
   return new Blob(pages,{type:'audio/ogg'});
 }
 /* ---- the dialog ---- */
-const EXP_DEFAULTS={format:'wav', bits:'24', sr:'44100', mono:false, dither:true, norm:'off', bitrate:'128000', range:'song', b0:1, b1:1, t0:0, t1:0, tail:0, stems:false, stemMaster:true};
+const EXP_DEFAULTS={format:'wav', bits:'24', sr:'44100', mono:false, dither:true, norm:'off', bitrate:'128000', range:'song', b0:1, b1:1, t0:0, t1:0, tail:0, trim:true, stems:false, stemMaster:true};
 let expOpt=Object.assign({},EXP_DEFAULTS);
 function fmtClock(s,ms){ s=Math.max(0,s||0); const m=Math.floor(s/60), ss=s-m*60; return m+':'+(ms?ss.toFixed(3).padStart(6,'0'):Math.floor(ss+1e-6).toString().padStart(2,'0')); }
 function parseClock(str){ const m=String(str).trim().match(/^(?:(\d+):)?(\d+(?:\.\d*)?)$/); if(!m) return null; return (+(m[1]||0))*60+parseFloat(m[2]); }
 function expRangeSec(o){
-  const last=Math.max(1,Math.ceil(contentEnd()/barSec()-1e-6));
+  const last=Math.max(1,Math.ceil(audibleEnd()/barSec()-1e-6));
   if(o.range==='loop' && loopRegion) return [loopRegion.start*stepDur(), loopRegion.end*stepDur()];
   if(o.range==='bars') return [(o.b0-1)*barSec(), o.b1*barSec()];
   if(o.range==='time') return [o.t0, o.t1];
@@ -8324,7 +8349,7 @@ function expRangeSec(o){
 function openExportDialog(){
   if(state.playing) stopAll();
   document.querySelectorAll('.exp-pop').forEach(e=>e.remove());
-  const last=Math.max(1,Math.ceil(contentEnd()/barSec()-1e-6));
+  const last=Math.max(1,Math.ceil(audibleEnd()/barSec()-1e-6));
   const o=expOpt; if(o.b1<o.b0 || o.b1>last || o.b1===1){ o.b0=1; o.b1=last; } if(!o.t1){ o.t1=last*barSec(); }
   const pop=document.createElement('div'); pop.className='hk-pop exp-pop'; pop.setAttribute('role','dialog'); pop.setAttribute('aria-label','Export audio');
   const opus=typeof AudioEncoder!=='undefined';
@@ -8339,25 +8364,25 @@ function openExportDialog(){
     <label>Dither</label><div><select id="exp-dither"><option value="1">TPDF (16 / 24-bit)</option><option value="0">None</option></select></div>
     <label>Normalise</label><div><select id="exp-norm"><option value="off">Off</option><option value="-0.1">Peak to −0.1 dBFS</option><option value="-1">Peak to −1 dBFS</option><option value="-3">Peak to −3 dBFS</option><option value="-6">Peak to −6 dBFS</option></select></div>
     <label>Range</label><div class="exp-range">
-      <label><input type="radio" name="exp-range" value="song"> whole song (bars 1–${last})</label>
+      <label><input type="radio" name="exp-range" value="song"> whole song — up to the last note / clip (bars 1–${last}, ${fmtClock(audibleEnd())})</label>
       <label><input type="radio" name="exp-range" value="loop" ${loopRegion?'':'disabled'}> loop region${loopRegion?' (bars '+(Math.floor(loopRegion.start/STEPS)+1)+'–'+Math.ceil(loopRegion.end/STEPS)+')':' — none set'}</label>
       <label><input type="radio" name="exp-range" value="bars"> bars <input id="exp-b0" type="number" min="1" step="1"> – <input id="exp-b1" type="number" min="1" step="1"></label>
       <label><input type="radio" name="exp-range" value="time"> time <input id="exp-t0" type="text" placeholder="m:ss.sss"> – <input id="exp-t1" type="text" placeholder="m:ss.sss"></label>
       <span id="exp-dur" class="exp-note"></span>
     </div>
-    <label>Tail</label><div><input id="exp-tail" type="number" min="0" max="30" step="0.5"> s of reverb / delay tail after the range</div>
+    <label>Tail</label><div class="exp-range"><label><input id="exp-tail" type="number" min="0" max="30" step="0.5"> s of reverb / delay tail after the range</label><label><input id="exp-trim" type="checkbox"> trim trailing silence (below −70 dBFS)</label></div>
     <label>Stems</label><div class="exp-range"><label><input id="exp-stems" type="checkbox"> one file per track</label><label id="exp-stemm-l"><input id="exp-stemm" type="checkbox"> stems go through the master FX</label></div>
   </div>
   <div class="exp-foot"><span id="exp-size" class="exp-note"></span><button id="exp-cancel">Cancel</button><button id="exp-go" class="primary">Export</button></div>`;
   document.body.appendChild(pop);
   const $=id=>pop.querySelector('#'+id);
   $('exp-name').value=safeProjectFile(); $('exp-format').value=o.format; $('exp-bits').value=o.bits; $('exp-bitrate').value=o.bitrate; $('exp-sr').value=o.sr; $('exp-ch').value=o.mono?'mono':'stereo';
-  $('exp-dither').value=o.dither?'1':'0'; $('exp-norm').value=o.norm; $('exp-tail').value=o.tail; $('exp-stems').checked=o.stems; $('exp-stemm').checked=o.stemMaster;
+  $('exp-dither').value=o.dither?'1':'0'; $('exp-norm').value=o.norm; $('exp-tail').value=o.tail; $('exp-trim').checked=o.trim!==false; $('exp-stems').checked=o.stems; $('exp-stemm').checked=o.stemMaster;
   $('exp-b0').value=o.b0; $('exp-b1').value=o.b1; $('exp-t0').value=fmtClock(o.t0,true); $('exp-t1').value=fmtClock(o.t1,true);
   pop.querySelector(`input[name=exp-range][value=${o.range==='loop'&&!loopRegion?'song':o.range}]`).checked=true;
   const read=()=>{
     o.format=$('exp-format').value; o.bits=$('exp-bits').value; o.bitrate=$('exp-bitrate').value; o.sr=$('exp-sr').value; o.mono=$('exp-ch').value==='mono';
-    o.dither=$('exp-dither').value==='1'; o.norm=$('exp-norm').value; o.tail=Math.max(0,+$('exp-tail').value||0); o.stems=$('exp-stems').checked; o.stemMaster=$('exp-stemm').checked;
+    o.dither=$('exp-dither').value==='1'; o.norm=$('exp-norm').value; o.tail=Math.max(0,+$('exp-tail').value||0); o.trim=$('exp-trim').checked; o.stems=$('exp-stems').checked; o.stemMaster=$('exp-stemm').checked;
     o.range=(pop.querySelector('input[name=exp-range]:checked')||{}).value||'song';
     o.b0=Math.max(1,Math.round(+$('exp-b0').value||1)); o.b1=Math.max(o.b0,Math.round(+$('exp-b1').value||o.b0));
     const t0=parseClock($('exp-t0').value), t1=parseClock($('exp-t1').value); if(t0!=null) o.t0=t0; if(t1!=null) o.t1=t1; if(o.t1<=o.t0) o.t1=o.t0+1;
@@ -8450,8 +8475,9 @@ async function runExport(o){
     for(let i=0;i<jobs.length;i++){
       const job=jobs[i]; const jl=job.label?' '+job.label+' ('+(i+1)+'/'+jobs.length+')':'';
       fileSay('Rendering'+jl+'…'); prog.start('Rendering'+jl, expEnd-expStart+o.tail);
-      const buf=await renderRange(expStart,expEnd,{sr, tail:o.tail, solo:job.solo, noMaster:o.stems&&!o.stemMaster, cancel, cols:prog.cols, onProgress:prog.render});
-      if(!buf || cancel.on) throw new Error('cancelled');
+      const raw=await renderRange(expStart,expEnd,{sr, tail:o.tail, solo:job.solo, noMaster:o.stems&&!o.stemMaster, cancel, cols:prog.cols, onProgress:prog.render});
+      if(!raw || cancel.on) throw new Error('cancelled');
+      const buf=o.trim!==false?trimSilence(raw):raw;
       fileSay('Encoding'+jl+'…'); prog.phase('Encoding'+jl);
       const blob=await encodeExport(buf,Object.assign({},o,{onProgress:prog.encode}));
       if(cancel.on) throw new Error('cancelled');

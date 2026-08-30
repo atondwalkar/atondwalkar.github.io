@@ -41,6 +41,9 @@
   body.midi-learn button.midi-bound{position:relative}
   #midi-learn.on{background:var(--amber);color:#111;border-color:var(--amber)}
   .exp-pop{width:min(620px,94vw)}
+  .exp-prog{width:min(680px,94vw)} .exp-prog canvas{display:block;width:100%;height:140px;border:1px solid var(--line);border-radius:4px;margin-top:8px;background:#0f1218}
+  .rv-bar{height:6px;background:#161a22;border:1px solid var(--line);border-radius:3px;margin-top:8px;overflow:hidden} .rv-bar i{display:block;height:100%;width:0;background:var(--amber);transition:width .15s linear}
+  .rv-row{display:flex;align-items:center;gap:10px;margin-top:8px} .rv-row #rv-eta{margin-left:auto}
   .exp-grid{display:grid;grid-template-columns:96px 1fr;gap:8px 12px;align-items:center;font-size:11px;padding:8px 2px 2px}
   .exp-grid>label{font-size:9px;letter-spacing:.2em;text-transform:uppercase;color:var(--ink-dim)}
   .exp-grid select,.exp-grid input[type=text],.exp-grid input[type=number]{font:inherit;font-size:11px;background:#161a22;color:var(--ink);border:1px solid var(--line);border-radius:4px;padding:3px 6px}
@@ -2054,7 +2057,23 @@ class S16Diag extends AudioWorkletProcessor{
   }
   const o=outputs[0]; if(o) for(let c=0;c<o.length;c++) o[c].fill(0);
   return true; }}
-registerProcessor('s16-diag',S16Diag);`;
+registerProcessor('s16-diag',S16Diag);
+class S16Tap extends AudioWorkletProcessor{
+ constructor(o){ super(); const p=(o&&o.processorOptions)||{}; this.N=Math.max(128,p.block|0||1024); this.total=p.total|0; this.cnt=0; this.mn=[1,1]; this.mx=[-1,-1]; this.acc=[]; }
+ process(inputs,outputs){
+  const inp=inputs[0]||[], out=outputs[0]||[];
+  for(let c=0;c<out.length;c++){ const src=inp[Math.min(c,inp.length-1)]; if(src) out[c].set(src); else out[c].fill(0); }
+  const L=inp[0], R=inp[1]||inp[0];
+  for(let i=0;i<128;i++){
+   const a=L?L[i]:0, b=R?R[i]:0;
+   if(a<this.mn[0]) this.mn[0]=a; if(a>this.mx[0]) this.mx[0]=a; if(b<this.mn[1]) this.mn[1]=b; if(b>this.mx[1]) this.mx[1]=b;
+   if(++this.cnt>=this.N){ this.acc.push(this.mn[0],this.mx[0],this.mn[1],this.mx[1]); this.cnt=0; this.mn=[1,1]; this.mx=[-1,-1];
+    if(this.acc.length>=48){ this.port.postMessage({frame:currentFrame+i+1,cols:this.acc}); this.acc=[]; } }
+  }
+  if(this.total && currentFrame+128>=this.total){ this.acc.push(this.mn[0],this.mx[0],this.mn[1],this.mx[1]); this.port.postMessage({frame:this.total,cols:this.acc}); this.acc=[]; this.total=0; }
+  return true; }
+}
+registerProcessor('s16-tap',S16Tap);`;
 
 let WORKLET_SRC_CACHE=null;
 function workletSrc(){
@@ -7998,7 +8017,13 @@ async function renderRange(expStart,expEnd,opt){
   // master chain mirror
   const offFxNodes={};
   const m=off.createGain(); m.gain.value=parseFloat(mvol.value);
-  m.connect(off.destination);
+  if(offWorklet && opt.onProgress){                                // live render view: the tap streams peaks + frame count to the page
+    const block=Math.max(128,Math.ceil(len/Math.max(1,opt.cols||600)/128)*128);
+    const tap=new AudioWorkletNode(off,'s16-tap',{numberOfInputs:1,numberOfOutputs:1,outputChannelCount:[2],processorOptions:{block,total:len}});
+    tap.port.onmessage=e=>{ opt.onProgress(e.data.frame,len,e.data.cols,block); if(opt.cancel&&opt.cancel.on){ const q=128/sr; off.suspend(Math.ceil(off.currentTime/q+2)*q).catch(()=>{}); } };
+    m.connect(tap); tap.connect(off.destination);
+    opt._len=len; opt._block=block; opt.onProgress(0,len,[],block);
+  } else m.connect(off.destination);
   (MASTER_TRACK.autos||[]).forEach(a=>{
     if(a.kind!=='vol') return;
     const sd0=stepDur(), val=v=>autoToVal(MASTER_TRACK,a,v), dur0=expEnd-expStart;
@@ -8140,6 +8165,7 @@ async function renderRange(expStart,expEnd,opt){
     });
   });
 
+  if(opt.cancel){ return Promise.race([off.startRendering(), new Promise(res=>{ const t=setInterval(()=>{ if(opt.cancel.on){ clearInterval(t); res(null); } },100); })]); }
   return off.startRendering();
 }
 /* ---- PCM containers: WAV / AIFF at 16, 24 or 32-bit float; optional TPDF dither; mono mixdown ---- */
@@ -8204,7 +8230,7 @@ function fixedResidual(x,ord,i){
   if(ord===0) return x[i]; if(ord===1) return x[i]-x[i-1]; if(ord===2) return x[i]-2*x[i-1]+x[i-2];
   if(ord===3) return x[i]-3*x[i-1]+3*x[i-2]-x[i-3]; return x[i]-4*x[i-1]+6*x[i-2]-4*x[i-3]+x[i-4];
 }
-function encodeFlac(buf,o){
+async function encodeFlac(buf,o){
   const bits=o.bits===24?24:16, chans=expQuantize(expNormalize(expChannels(buf,o.mono),o.norm),bits,o.dither);
   const ch=chans.length, len=buf.length, sr=buf.sampleRate, BS=4096;
   const w=new BitW(Math.ceil(len*ch*bits/8)+4096);
@@ -8214,6 +8240,7 @@ function encodeFlac(buf,o){
   w.bits(Math.floor(len/4294967296),4); w.bits(len>>>0,32); for(let i=0;i<16;i++) w.bits(0,8);   // total samples (36) + MD5 unknown
   const res=new Int32Array(BS);
   for(let f=0, pos=0; pos<len; f++, pos+=BS){
+    if(o.onProgress && (f&7)===0){ o.onProgress(pos/len); await new Promise(r=>setTimeout(r,0)); }
     const n=Math.min(BS,len-pos);
     const hw=new BitW(64);
     hw.bits(0xFFF8,16); hw.bits(7,4); hw.bits(0,4); hw.bits(ch-1,4); hw.bits(bits===16?4:6,3); hw.bits(0,1);
@@ -8364,9 +8391,39 @@ function openExportDialog(){
   refresh(); $('exp-name').focus();
   return pop;
 }
+/* ---- render view: waveform drawn as the offline render streams in, progress bar, time-left estimate ---- */
+function openRenderView(fileName){
+  document.querySelectorAll('.exp-prog').forEach(e=>e.remove());
+  const pop=document.createElement('div'); pop.className='hk-pop exp-prog'; pop.setAttribute('role','dialog'); pop.setAttribute('aria-label','Rendering');
+  pop.innerHTML=`<div class="hk-head"><span>Rendering</span><span class="exp-note" id="rv-file"></span></div>
+    <canvas id="rv-cv" width="640" height="140"></canvas>
+    <div class="rv-bar"><i id="rv-fill"></i></div>
+    <div class="rv-row"><span id="rv-phase" class="exp-note"></span><span id="rv-eta" class="exp-note"></span><button id="rv-cancel">Cancel</button></div>`;
+  document.body.appendChild(pop);
+  const cv=pop.querySelector('#rv-cv'), g=cv.getContext('2d'), W=cv.width, H=cv.height, fill=pop.querySelector('#rv-fill'), eta=pop.querySelector('#rv-eta'), ph=pop.querySelector('#rv-phase');
+  pop.querySelector('#rv-file').textContent=fileName;
+  const v={cols:W, t0:0, total:0, col:0, secs:0, phaseName:'', p:0};
+  const paint=()=>{ g.fillStyle='#0f1218'; g.fillRect(0,0,W,H); g.strokeStyle='#262c37'; g.beginPath(); g.moveTo(0,H/4); g.lineTo(W,H/4); g.moveTo(0,3*H/4); g.lineTo(W,3*H/4); g.stroke(); };
+  paint();
+  const setP=(p,label)=>{ v.p=Math.max(0,Math.min(1,p)); fill.style.width=(v.p*100).toFixed(1)+'%'; const el=(performance.now()-v.t0)/1000; const left=v.p>0.02?el*(1-v.p)/v.p:NaN; eta.textContent=(v.p*100).toFixed(0)+'%'+(isFinite(left)?' · '+fmtClock(left)+' left':'')+(label?' · '+label:''); };
+  pop.start=(name,secs)=>{ v.t0=performance.now(); v.col=0; v.secs=secs; v.phaseName=name; ph.textContent=name; paint(); setP(0,''); };
+  pop.phase=name=>{ v.t0=performance.now(); v.phaseName=name; ph.textContent=name; setP(0,''); };
+  pop.render=(frame,len,cols,block)=>{                             // called from the tap: cols = [minL,maxL,minR,maxR,…] per block
+    v.total=len; const totalCols=Math.ceil(len/block);
+    for(let i=0;i<cols.length;i+=4){ const x=Math.floor(v.col/totalCols*W); v.col++;
+      g.fillStyle='#ffb347'; const y1=H/4, y2=3*H/4, a=H/4-2;
+      g.fillRect(x,y1-cols[i+1]*a,1,Math.max(1,(cols[i+1]-cols[i])*a)); g.fillRect(x,y2-cols[i+3]*a,1,Math.max(1,(cols[i+3]-cols[i+2])*a)); }
+    setP(frame/len,fmtClock(frame/(len/Math.max(1e-9,v.secs)))+' / '+fmtClock(v.secs));
+  };
+  pop.encode=p=>setP(p,'');
+  pop.onCancel=null; pop.querySelector('#rv-cancel').onclick=()=>{ if(pop.onCancel) pop.onCancel(); ph.textContent='Cancelling…'; };
+  pop.close=()=>pop.remove();
+  return pop;
+}
 const EXP_EXT={wav:'.wav',aiff:'.aiff',flac:'.flac',opus:'.opus'}, EXP_MIME={wav:'audio/wav',aiff:'audio/aiff',flac:'audio/flac',opus:'audio/ogg'};
 async function encodeExport(buf,o){
   const eo={format:o.format, bits:+o.bits, mono:o.mono, dither:o.dither && +o.bits<32, norm:o.norm==='off'?0:+o.norm, bitrate:+o.bitrate};
+  eo.onProgress=o.onProgress;
   if(o.format==='flac') return encodeFlac(buf,eo);
   if(o.format==='opus') return encodeOpus(buf,eo);
   return encodePCM(buf,eo);
@@ -8379,23 +8436,25 @@ async function writeBlob(handle,blob,name){
 async function runExport(o){
   const [expStart,expEnd]=expRangeSec(o); if(!(expEnd>expStart)){ fileFlash('Export range is empty.'); return false; }
   const ext=EXP_EXT[o.format], sr=o.format==='opus'?48000:+o.sr;
-  const rangeTag=o.range==='time'?fmtClock(expStart).replace(':','m')+'s-'+fmtClock(expEnd).replace(':','m')+'s':'bars'+Math.round(expStart/barSec()+1)+'-'+Math.round(expEnd/barSec());
-  const base=(o.name||safeProjectFile())+'-'+rangeTag+'-'+state.bpm+'bpm';
+  const base=String(o.name||safeProjectFile()).replace(/[\\/:*?"<>|]+/g,'-').replace(/\.(wav|aiff?|flac|opus|ogg)$/i,'').trim()||'export';   // exactly the dialog's name
   let handle=null, dir=null;
   try{
     if(o.stems && window.showDirectoryPicker) dir=await showDirectoryPicker({mode:'readwrite'});
     else if(!o.stems && window.showSaveFilePicker) handle=await showSaveFilePicker({suggestedName:base+ext, types:[{description:o.format.toUpperCase()+' audio',accept:{[EXP_MIME[o.format]]:[ext]}}]});
   }catch(e){ if(e && e.name==='AbortError'){ fileSay(''); return false; } handle=null; dir=null; }
   exportBtn.disabled=true; let okAll=false;
+  const prog=openRenderView(base+ext); const cancel={on:false}; prog.onCancel=()=>{ cancel.on=true; };
   try{
     const jobs=o.stems ? tracksAll.map(t=>({label:t.name, solo:new Set([t.id])})) : [{label:null, solo:null}];
     let total=0; const names=[];
     for(let i=0;i<jobs.length;i++){
-      const job=jobs[i];
-      fileSay('Rendering'+(job.label?' '+job.label+' ('+(i+1)+'/'+jobs.length+')':'')+'…');
-      const buf=await renderRange(expStart,expEnd,{sr, tail:o.tail, solo:job.solo, noMaster:o.stems&&!o.stemMaster});
-      fileSay('Encoding'+(job.label?' '+job.label:'')+'…');
-      const blob=await encodeExport(buf,o);
+      const job=jobs[i]; const jl=job.label?' '+job.label+' ('+(i+1)+'/'+jobs.length+')':'';
+      fileSay('Rendering'+jl+'…'); prog.start('Rendering'+jl, expEnd-expStart+o.tail);
+      const buf=await renderRange(expStart,expEnd,{sr, tail:o.tail, solo:job.solo, noMaster:o.stems&&!o.stemMaster, cancel, cols:prog.cols, onProgress:prog.render});
+      if(!buf || cancel.on) throw new Error('cancelled');
+      fileSay('Encoding'+jl+'…'); prog.phase('Encoding'+jl);
+      const blob=await encodeExport(buf,Object.assign({},o,{onProgress:prog.encode}));
+      if(cancel.on) throw new Error('cancelled');
       const fname=(job.label?base+'-'+job.label.replace(/[\\/:*?"<>|]+/g,'-'):base)+ext;
       if(dir){ const fh=await dir.getFileHandle(fname,{create:true}); await writeBlob(fh,blob,fname); }
       else await writeBlob(handle,blob,fname);
@@ -8403,7 +8462,8 @@ async function runExport(o){
     }
     fileSay(''); fileFlash('Exported '+(jobs.length>1?jobs.length+' stems':(handle?handle.name:names[0]))+' ('+(total/1048576).toFixed(1)+' MB)');
     runExport.last={names,total}; okAll=true;
-  }catch(e){ fileSay(''); fileFlash('Export failed: '+(e&&e.message||e)); diagLog('error','export: '+(e&&e.message||e)); }
+  }catch(e){ fileSay(''); if(e&&e.message==='cancelled') fileFlash('Export cancelled.'); else { fileFlash('Export failed: '+(e&&e.message||e)); diagLog('error','export: '+(e&&e.message||e)); } }
+  prog.close();
   exportBtn.disabled=false;
   return okAll;
 }

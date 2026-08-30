@@ -1671,6 +1671,7 @@ class S16WTVoice extends AudioWorkletProcessor{
  process(inputs,outputs){
   const out=outputs[0]; if(!out||!out.length) return true;
   const L=out[0], R=out[1]||out[0], n=L.length, sr=sampleRate, sp=this.sp;
+  if(this.first && currentFrame>this.startF) this.startF=currentFrame;   // node came alive after its start time (live MIDI): begin the envelope now, don't skip the attack
   const nRel=currentFrame-this.startF;
   if(nRel+n<=0){ L.fill(0); R.fill(0); return true; }
   if(this.offReq){ this.offReq=false; if(nRel<this.amp.endN){ this.amp.endN=nRel; this.endN=nRel; this.stopN=Math.min(this.stopN, nRel+Math.round(3*sampleRate)); } }

@@ -9339,26 +9339,32 @@ function midiNoteOn(note,vel,ch){
     }
     const k=note-21; if(k<0||k>87) return;
     const key=midiHeldKey(ch,note,tr);
-    const prev=midiHeld.get(key); if(prev){ releaseVoice(prev.v); midiRecordOff(prev); midiSustained.delete(key); }
-    const h={v:midiVoiceOn(tr,k,vel), tr, rec:null, note, ch};
+    /* Retrigger while the same key is still held (arpeggiators / 100 % gate send the next note-on before the previous
+       note-off): keep the old instance ringing as h.older, so the late note-off releases *it*, not the fresh attack. */
+    const prev=midiHeld.get(key);
+    if(prev && prev.older){ midiRelease(prev.older); prev.older=null; }
+    const h={v:midiVoiceOn(tr,k,vel), tr, rec:null, note, ch, older:prev||null};
     midiHeld.set(key,h);
     midiRecordOn(tr,k,vel,h);
   }));
 }
+function midiRelease(h){ if(!h) return; releaseVoice(h.v); midiRecordOff(h); }
+function midiReleaseKey(key){ const h=midiHeld.get(key); if(!h) return; midiHeld.delete(key); midiRelease(h.older); midiRelease(h); }
 function midiNoteOff(note,ch){
   ch=ch|0;
   for(const [key,h] of [...midiHeld]){
     if(h.note!==note || h.ch!==ch) continue;
     if(midiSustain){ midiSustained.add(key); continue; }
+    if(h.older){ midiRelease(h.older); h.older=null; continue; }        // this note-off belongs to the previous instance
     midiHeld.delete(key);
-    releaseVoice(h.v); midiRecordOff(h);
+    midiRelease(h);
   }
 }
 function midiSustainSet(on){
   midiSustain=on;
-  if(!on){ [...midiSustained].forEach(key=>{ midiSustained.delete(key); const h=midiHeld.get(key); if(!h) return; midiHeld.delete(key); releaseVoice(h.v); midiRecordOff(h); }); }
+  if(!on){ [...midiSustained].forEach(key=>{ midiSustained.delete(key); midiReleaseKey(key); }); }
 }
-function midiAllOff(){ [...midiHeld.keys()].forEach(n=>{ const h=midiHeld.get(n); midiHeld.delete(n); releaseVoice(h.v); midiRecordOff(h); }); midiSustained.clear(); }
+function midiAllOff(){ [...midiHeld.keys()].forEach(midiReleaseKey); midiSustained.clear(); }
 /* ---- MIDI Learn: hardware knobs / pads / buttons → DAW controls. Bindings live in the project (indices, re-resolved on load). ---- */
 var midiMap=[], midiLearn=false, midiLearnPending=null;
 const MIDI_BTN_LABEL={play:'Play / Stop',rec:'Record',loop:'Loop','midi-rec':'MIDI REC','tap-bar':'Tap bar','bpm-lock':'Tempo sync'};

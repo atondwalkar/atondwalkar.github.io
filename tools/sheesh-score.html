@@ -44,8 +44,8 @@
   <div class="hrow">
     <div class="brand"><b>SHEESH&nbsp;SCORE<span class="ver">V0.1</span></b><span>MIDI → sheet music</span></div>
     <div class="lcd"><label>MIDI input</label><div class="row"><select id="midi-in" aria-label="MIDI input"><option value="">connect MIDI…</option></select><i id="led" title="MIDI activity"></i></div></div>
-    <button id="rec" class="rec" title="Arm: recording starts at the first note you play">● Record</button>
-    <button id="stop" disabled>■ Stop</button>
+    <button id="rec" class="rec" title="Arm: recording starts at the first note you play (Space)">● Record</button>
+    <button id="stop" disabled title="Stop recording (Space)">■ Stop</button>
     <button id="load" title="Open a Standard MIDI File (.mid)">Load .mid</button>
     <input id="file" type="file" accept=".mid,.midi,audio/midi" hidden>
     <button id="clear">Clear</button>
@@ -521,7 +521,7 @@ function onMidi(e){
   else if(type===0xB0 && d[1]===64) pianoSustain(vel>=64); else if(type===0xB0 && (d[1]===120||d[1]===123)) pianoAllOff();
   if(!armed && !recording) return;
   const now=e.timeStamp||performance.now();
-  if(type===0x90 && !noteOff){ if(!recording){ recording=true; armed=false; recT0=now-0.05*1000; $('rec').textContent='● Recording'; if(!recCursor) recCursor=requestAnimationFrame(recCursorLoop); } held.set(note,{t0:(now-recT0)/1000, v:vel/127}); liveTranscribe(); }
+  if(type===0x90 && !noteOff){ if(!recording){ recording=true; armed=false; perf=[]; fileInfo=null; model=null; recT0=now-0.05*1000; $('rec').textContent='● Recording'; if(!recCursor) recCursor=requestAnimationFrame(recCursorLoop); } held.set(note,{t0:(now-recT0)/1000, v:vel/127}); liveTranscribe(); }
   else if(noteOff){ const h=held.get(note); if(h){ held.delete(note); perf.push({p:note, t0:h.t0, t1:(now-recT0)/1000, v:h.v}); liveTranscribe(); } }
 }
 /* live transcription while recording: debounced, held notes count up to "now"; the view follows the newest system */
@@ -550,10 +550,12 @@ async function initMidi(){
   say(midiAccess.inputs.size?'MIDI ready — '+[...midiAccess.inputs.values()].map(i=>i.name).join(', ')+'. Press Record, then play.':'MIDI allowed, but no input devices are visible yet.');
 }
 $('midi-in').addEventListener('pointerdown',()=>{ if(!midiAccess) initMidi(); });
+document.addEventListener('keydown',e=>{ if(e.code!=='Space' || e.repeat) return; const t=e.target; if(t && (t.tagName==='INPUT'||t.tagName==='SELECT'||t.tagName==='TEXTAREA'||t.isContentEditable)) return; e.preventDefault(); if(recording||armed) $('stop').click(); else if(playing) $('play').click(); else $('rec').click(); });
 document.addEventListener('pointerdown',()=>{ ensurePiano(); },{capture:true});
 $('mon').onclick=()=>{ monitor=!monitor; $('mon').classList.toggle('on',monitor); if(!monitor) pianoAllOff(); else ensurePiano(); };
-$('rec').onclick=()=>{ ensurePiano(); if(!midiAccess) initMidi(); armed=true; recording=false; perf=[]; held.clear(); fileInfo=null; $('rec').classList.add('on'); $('rec').textContent='● Armed'; $('stop').disabled=false; say('Armed — recording starts with your first note.'); };
-$('stop').onclick=()=>{ clearTimeout(liveTimer); if(recCursor) cancelAnimationFrame(recCursor); recCursor=null; clearPlayhead(); const now=performance.now(); held.forEach((h,note)=>perf.push({p:note, t0:h.t0, t1:(now-recT0)/1000, v:h.v})); held.clear(); recording=false; armed=false; $('rec').classList.remove('on'); $('rec').textContent='● Record'; $('stop').disabled=true; $('tempo-mode').querySelector('[value=file]').disabled=true; if($('tempo-mode').value==='file') $('tempo-mode').value='auto'; transcribe(); };
+$('rec').onclick=()=>{ if(armed||recording) return; ensurePiano(); if(!midiAccess) initMidi(); armed=true; recording=false; held.clear(); $('rec').classList.add('on'); $('rec').textContent='● Armed'; $('stop').disabled=false; say('Armed — recording starts with your first note'+(perf.length?' (the current take is replaced then)':'')+'. Space stops.'); };
+$('stop').onclick=()=>{ clearTimeout(liveTimer); if(recCursor) cancelAnimationFrame(recCursor); recCursor=null; clearPlayhead(); const now=performance.now();
+  if(!recording){ armed=false; $('rec').classList.remove('on'); $('rec').textContent='● Record'; $('stop').disabled=true; say(perf.length?'Disarmed — take kept.':'Disarmed.'); return; } held.forEach((h,note)=>perf.push({p:note, t0:h.t0, t1:(now-recT0)/1000, v:h.v})); held.clear(); recording=false; armed=false; $('rec').classList.remove('on'); $('rec').textContent='● Record'; $('stop').disabled=true; $('tempo-mode').querySelector('[value=file]').disabled=true; if($('tempo-mode').value==='file') $('tempo-mode').value='auto'; transcribe(); };
 $('clear').onclick=()=>{ perf=[]; fileInfo=null; model=null; transcribe(); say('Cleared.'); };
 $('load').onclick=()=>$('file').click();
 $('file').onchange=async()=>{ const f=$('file').files[0]; if(!f) return; try{ const info=parseMidiFile(await f.arrayBuffer()); perf=info.perf; fileInfo=info; $('title').value=f.name.replace(/\.midi?$/i,''); $('tempo-mode').querySelector('[value=file]').disabled=!info.hasTempo; if(info.hasTempo) $('tempo-mode').value='file'; transcribe(); }catch(e){ say('Could not read '+f.name+': '+e.message); } $('file').value=''; };

@@ -9327,6 +9327,7 @@ function midiRecordDrum(tr,id,vel){
   it.pat[id][tick-it.startStep]=Math.max(1,Math.round(vel*127));
   renderItem(it); if(selMidiItem()===it) drawPianoRoll();
 }
+const MIDI_OVERLAP_MS=25;                                  // note-off this soon after a retrigger belongs to the previous instance
 function midiHeldKey(ch,note,tr){ return ch+':'+note+':'+tr.id; }
 function midiNoteOn(note,vel,ch){
   ch=ch|0;
@@ -9344,7 +9345,7 @@ function midiNoteOn(note,vel,ch){
        note-off): keep the old instance ringing as h.older, so the late note-off releases *it*, not the fresh attack. */
     const prev=midiHeld.get(key);
     if(prev && prev.older){ midiRelease(prev.older); prev.older=null; }
-    const h={v:midiVoiceOn(tr,k,vel), tr, rec:null, note, ch, older:prev||null};
+    const h={v:midiVoiceOn(tr,k,vel), tr, rec:null, note, ch, older:prev||null, t:performance.now()};
     midiHeld.set(key,h);
     midiRecordOn(tr,k,vel,h);
   }));
@@ -9356,7 +9357,10 @@ function midiNoteOff(note,ch){
   for(const [key,h] of [...midiHeld]){
     if(h.note!==note || h.ch!==ch) continue;
     if(midiSustain){ midiSustained.add(key); continue; }
-    if(h.older){ midiRelease(h.older); h.older=null; continue; }        // this note-off belongs to the previous instance
+    if(h.older){                                                          // retriggered key: a note-off right after the retrigger is the previous instance's late off;
+      midiRelease(h.older); h.older=null;                                  // a later one is for the key itself (e.g. two note-ons, one note-off) — release everything
+      if(performance.now()-h.t<MIDI_OVERLAP_MS) continue;
+    }
     midiHeld.delete(key);
     midiRelease(h);
   }

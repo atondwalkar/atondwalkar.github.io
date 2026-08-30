@@ -248,7 +248,7 @@ function analyze(perf,opt){
   const staves=[[],[]];
   for(let st=0;st<2;st++){
     const ns=qn.filter(n=>n.staff===st).sort((a,b)=>a.s-b.s||a.p-b.p);
-    const ev=[]; ns.forEach(n=>{ const last=ev[ev.length-1]; if(last && last.s===n.s){ if(!last.p.includes(n.p)) last.p.push(n.p); last.e=Math.max(last.e,n.e); } else ev.push({s:n.s, e:n.e, p:[n.p]}); });
+    const ev=[]; ns.forEach(n=>{ const last=ev[ev.length-1]; if(last && last.s===n.s){ if(!last.p.includes(n.p)) last.p.push(n.p); last.e=Math.max(last.e,n.e); last.v=Math.max(last.v,n.v); } else ev.push({s:n.s, e:n.e, p:[n.p], v:n.v}); });
     for(let i=0;i<ev.length;i++){ const nx=ev[i+1]; if(nx){ if(ev[i].e>nx.s) ev[i].e=nx.s; else if(opt.legato){ const gap=nx.s-ev[i].e, d=ev[i].e-ev[i].s; if(gap<=beatTicks/4 && gap<d*0.5) ev[i].e=nx.s; } } if(ev[i].e<=ev[i].s) ev[i].e=ev[i].s+3; }
     staves[st]=ev;
   }
@@ -272,11 +272,11 @@ function analyze(perf,opt){
     for(let st=0;st<2;st++){
       const items=[]; let pos=m0;
       const evs=staves[st].filter(e=>e.s<m1 && e.e>m0);
-      evs.forEach(e=>{ const s=Math.max(e.s,m0), en=Math.min(e.e,m1); if(s>pos) items.push({rest:true, s:pos, e:s}); items.push({rest:false, s, e:en, p:e.p, tieFrom:e.s<m0, tieTo:e.e>m1}); pos=en; });
+      evs.forEach(e=>{ const s=Math.max(e.s,m0), en=Math.min(e.e,m1); if(s>pos) items.push({rest:true, s:pos, e:s}); items.push({rest:false, s, e:en, p:e.p, v:e.v, tieFrom:e.s<m0, tieTo:e.e>m1}); pos=en; });
       if(pos<m1) items.push({rest:true, s:pos, e:m1});
       const out=[];
       items.forEach(it=>{ const parts=splitDuration(it.s-m0, it.e-it.s, bpb, beatTicks, compound, k=>lattice[Math.max(0,Math.min(nb-1,Math.floor((m0+k)/beatTicks)))]);
-        parts.forEach((pt,i)=>{ out.push({rest:it.rest, pos:pt.pos, dur:pt.dur, trip:pt.trip, p:it.rest?null:it.p.map(p=>spellPitch(p,fifths)), midi:it.rest?null:it.p, tieFrom:!it.rest&&(i===0?it.tieFrom:true), tieTo:!it.rest&&(i<parts.length-1?true:it.tieTo)}); }); });
+        parts.forEach((pt,i)=>{ out.push({rest:it.rest, pos:pt.pos, dur:pt.dur, trip:pt.trip, v:it.v, p:it.rest?null:it.p.map(p=>spellPitch(p,fifths)), midi:it.rest?null:it.p, tieFrom:!it.rest&&(i===0?it.tieFrom:true), tieTo:!it.rest&&(i<parts.length-1?true:it.tieTo)}); }); });
       if(out.length && out.every(x=>x.rest)) M.staves[st]=[{rest:true,pos:0,dur:measTicks,whole:true}]; else M.staves[st]=out;
     }
     measures.push(M);
@@ -490,6 +490,15 @@ function pianoOn(p,vel){
 function pianoRelease(v,rel){ if(!v||!ac) return; const now=ac.currentTime, r=rel||0.3; try{ v.g.gain.cancelScheduledValues(now); v.g.gain.setValueAtTime(Math.max(1e-4,v.g.gain.value),now); v.g.gain.setTargetAtTime(1e-4,now,r/3); }catch(_){} v.srcs.forEach(s=>{ try{ s.stop(now+r*3+0.05); }catch(_){} }); }
 function pianoOff(p){ const v=voices.get(p); if(!v) return; if(sustain){ sustained.add(p); return; } voices.delete(p); pianoRelease(v); }
 function pianoSustain(on){ sustain=on; if(!on){ [...sustained].forEach(p=>{ sustained.delete(p); const v=voices.get(p); if(v){ voices.delete(p); pianoRelease(v); } }); } }
+/* scheduled voice for playback: same layers as monitoring, starts at t, damper release at tEnd, into a bus */
+function pianoNoteAt(p,vel,t,tEnd,bus){
+  if(!ac || !Object.keys(pnBufs).length) return;
+  let root=0,pair=null,bd=1e9; for(const r in pnBufs){ const d=Math.abs(p-+r); if(d<bd){ bd=d; root=+r; pair=pnBufs[r]; } }
+  if(!pair) return; vel=Math.max(0.02,Math.min(1,vel==null?0.8:vel));
+  const lvl=0.8*(0.4+0.6*vel), w=Math.pow(vel,2.2), hardG=Math.sin(w*Math.PI/2), softG=Math.cos(w*Math.PI/2), rate=Math.pow(2,(p-root)/12), rel=0.3;
+  const g=ac.createGain(); g.gain.setValueAtTime(0.0001,t); g.gain.exponentialRampToValueAtTime(lvl,t+0.003); g.gain.setValueAtTime(lvl,tEnd); g.gain.setTargetAtTime(0.0001,tEnd,rel/3); g.connect(bus);
+  [[pair[0],softG],[pair[1],hardG]].forEach(([buf,amp])=>{ if(!buf||amp<0.02) return; const s=ac.createBufferSource(); s.buffer=buf; s.playbackRate.value=rate; const lg=ac.createGain(); lg.gain.value=amp; s.connect(lg); lg.connect(g); s.start(t); s.stop(tEnd+rel*3+0.05); });
+}
 function pianoAllOff(){ voices.forEach((v,p)=>pianoRelease(v,0.1)); voices.clear(); sustained.clear(); }
 /* ============================== UI ============================== */
 const $=id=>document.getElementById(id);
@@ -588,18 +597,24 @@ function clearPlayhead(){ const svg=$('score').querySelector('svg'); if(!svg) re
 let recCursor=null;
 function recCursorLoop(){ if(!recording){ recCursor=null; return; } if(model && model.beats && model.beats.length>1){ const now=(performance.now()-recT0)/1000; const b=model.beats; let beat; if(now>=b[b.length-1]) beat=b.length-1+(now-b[b.length-1])/(b[b.length-1]-b[b.length-2]); else { let k=1; while(k<b.length && b[k]<now) k++; beat=k-1+(now-b[k-1])/(b[k]-b[k-1]); } setPlayhead((beat-model.beatIndex)*model.beatTicks); } recCursor=requestAnimationFrame(recCursorLoop); }
 /* ---- playback of the transcription (simple triangle synth) ---- */
-$('play').onclick=()=>{
-  if(playing){ playing.close(); playing=null; $('play').textContent='▶ Play'; clearPlayhead(); return; }
-  if(!model) return; const pc=new (window.AudioContext||window.webkitAudioContext)(); playing=pc; $('play').textContent='■ Stop';
-  const sc=1; let t=pc.currentTime+0.1; const secPerTick=[]; let bpm=model.marks[0]?model.marks[0].bpm:120;
-  model.measures.forEach((M,mi)=>{ if(M.tempo) bpm=M.tempo; const spt=60/bpm/TPQ/(model.compound?1.5/1.5:1); secPerTick.push(spt); });
-  let mStart=t; model.measures.forEach((M,mi)=>{ const spt=secPerTick[mi];
-    for(let st=0;st<2;st++) M.staves[st].forEach(e=>{ if(e.rest||e.tieFrom) return; let len=e.dur; e.midi.forEach(p=>{ const o=pc.createOscillator(); o.type='triangle'; o.frequency.value=440*Math.pow(2,(p-69)/12); const g=pc.createGain(); const s=mStart+e.pos*spt, en=s+len*spt; g.gain.setValueAtTime(0.0001,s); g.gain.exponentialRampToValueAtTime(0.25,s+0.01); g.gain.setTargetAtTime(0.0001,en,0.05); o.connect(g); g.connect(pc.destination); o.start(s); o.stop(en+0.3); }); });
+$('play').onclick=async()=>{
+  if(playing){ const pl=playing; playing=null; clearTimeout(pl.timer); try{ pl.bus.gain.setTargetAtTime(0.0001,ac.currentTime,0.02); setTimeout(()=>{ try{ pl.bus.disconnect(); }catch(_){} },300); }catch(_){} $('play').textContent='▶ Play'; clearPlayhead(); return; }
+  if(!model) return; await ensurePiano(); if(ac.state==='suspended') await ac.resume().catch(()=>{});
+  const bus=ac.createGain(); bus.gain.value=1; bus.connect(masterGain);
+  const pl={bus, timer:null}; playing=pl; $('play').textContent='■ Stop';
+  const t=ac.currentTime+0.15; const secPerTick=[]; let bpm=model.marks[0]?model.marks[0].bpm:120;
+  model.measures.forEach(M=>{ if(M.tempo) bpm=M.tempo; secPerTick.push(60/(model.compound?bpm*1.5:bpm)/TPQ); });
+  let mStart=t; const mStarts=[];
+  model.measures.forEach((M,mi)=>{ const spt=secPerTick[mi]; mStarts.push(mStart);
+    for(let st=0;st<2;st++) M.staves[st].forEach(e=>{ if(e.rest||e.tieFrom) return;
+      // tied chains: extend to the end of the chain (same pitch, following events / measures)
+      let len=e.dur, cur=e, mj=mi; while(cur.tieTo){ const arr=model.measures[mj].staves[st]; let idx=arr.indexOf(cur)+1; let nx=null; while(idx<arr.length){ if(!arr[idx].rest){ nx=arr[idx]; break; } idx++; } if(!nx){ mj++; if(mj>=model.measures.length) break; nx=model.measures[mj].staves[st].find(x=>!x.rest); } if(!nx||!nx.tieFrom) break; len+=nx.dur; cur=nx; }
+      const s0=mStart+e.pos*spt, en=s0+len*spt; e.midi.forEach(p=>pianoNoteAt(p,e.v==null?0.8:e.v,s0,en,bus)); });
     mStart+=model.measTicks*spt; });
-  const total=mStart-t; const mStarts=[]; { let ms=t; model.measures.forEach((M,mi)=>{ mStarts.push(ms); ms+=model.measTicks*secPerTick[mi]; }); }
-  const loop=()=>{ if(playing!==pc) return; const now=pc.currentTime; let mi=0; while(mi<mStarts.length-1 && mStarts[mi+1]<=now) mi++; const tick=mi*model.measTicks+Math.max(0,(now-mStarts[mi])/secPerTick[mi]); setPlayhead(Math.min(tick,model.measures.length*model.measTicks-1)); requestAnimationFrame(loop); };
+  const total=mStart-t;
+  const loop=()=>{ if(playing!==pl) return; const now=ac.currentTime; let mi=0; while(mi<mStarts.length-1 && mStarts[mi+1]<=now) mi++; const tick=mi*model.measTicks+Math.max(0,(now-mStarts[mi])/secPerTick[mi]); setPlayhead(Math.min(tick,model.measures.length*model.measTicks-1)); requestAnimationFrame(loop); };
   requestAnimationFrame(loop);
-  setTimeout(()=>{ if(playing===pc){ pc.close(); playing=null; $('play').textContent='▶ Play'; clearPlayhead(); } },(total+0.5)*1000);
+  pl.timer=setTimeout(()=>{ if(playing===pl){ playing=null; try{ pl.bus.disconnect(); }catch(_){} $('play').textContent='▶ Play'; clearPlayhead(); } },(total+1.0)*1000);
 };
 window.ScoreEngine={analyze, renderScore, toMusicXML, toMidiFile, parseMidiFile, trackBeats, onsetClusters, detectKey, splitDuration, accents, detectMeter, detectPhase, ensurePiano, pianoOn, pianoOff, pianoSustain, onMidi, liveTranscribe, get voices(){ return voices; }, get pnBufs(){ return pnBufs; }, get model(){ return model; }, get perf(){ return perf; }, get recording(){ return recording; }, setPlayhead, clearPlayhead};
 if(navigator.requestMIDIAccess && navigator.permissions){ navigator.permissions.query({name:'midi'}).then(p=>{ if(p.state==='granted') initMidi(); }).catch(()=>{}); }

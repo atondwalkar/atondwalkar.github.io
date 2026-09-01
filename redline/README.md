@@ -736,6 +736,13 @@ One code per campaign stage, typed into the CHEATS box on the title
 screen. Case, spaces and punctuation are thrown away, because nobody types a
 cheat code carefully — `golden gate`, `Golden-Gate` and `GOLDENGATE` all work.
 
+A stage code **unlocks**, it does not launch: it opens every stage up to and
+including its own on the campaign menu, and then opens that menu so you can see
+what it did. Starting a stage is a choice made on the menu — being teleported
+into stage seven the moment you finish typing is startling, and it skips the
+choice the menu exists for. The ghost codes are the exception: a time trial is
+a mode, not a stage, so those launch it directly.
+
 | | |
 |---|---|
 | `FOLSOMANDSIXTH` | stage one — the duel with KESTREL, three laps, pink slips |

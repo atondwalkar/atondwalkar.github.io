@@ -2220,6 +2220,26 @@ function checkCheats() {
     if (unlockedUpTo() !== 1) bad.push('progress went BACKWARDS');
     unlock(6);
     if (unlockedUpTo() !== 6) bad.push('a cheat to stage seven did not open the road to it');
+    // And a cheat only ever UNLOCKS — it must not launch the stage. The whole
+    // point of the menu is that starting is a choice made on it.
+    {
+      const wasPhase2 = game.phase, wasMode = game.mode, wasCamp = game.campaign;
+      game.phase = 'attract';
+      const panel = document.getElementById('cheats');
+      panel.classList.add('open');
+      const input2 = document.getElementById('cheat-in');
+      input2.value = 'RAINCHECK';
+      input2.dispatchEvent(new KeyboardEvent('keydown', { code: 'Enter', key: 'Enter', bubbles: true, cancelable: true }));
+      if (game.phase !== 'attract') bad.push(`a cheat launched the stage (phase ${game.phase})`);
+      if (game.mode === 'campaign' && game.campaign !== wasCamp) bad.push('a cheat started a campaign');
+      if (!document.getElementById('stagesel').classList.contains('open')) {
+        bad.push('a cheat did not open the stage select to show what it unlocked');
+      }
+      if (unlockedUpTo() !== 6) bad.push(`typing RAINCHECK left progress at ${unlockedUpTo()}`);
+      document.getElementById('stagesel').classList.remove('open');
+      panel.classList.remove('open');
+      game.phase = wasPhase2; game.mode = wasMode; game.campaign = wasCamp;
+    }
     unlock(999);
     if (unlockedUpTo() !== STAGES.length - 1) bad.push('progress ran past the last stage');
     // And the menu obeys it: locked rows are greyed and dead to the pointer.
@@ -2256,8 +2276,8 @@ function checkCheats() {
   const ok = bad.length === 0;
   return `${ok ? 'one word per stage, and nothing on screen says which' : `WRONG — ${bad[0]}`} — ` +
     `${CHEATS.length} codes for ${STAGES.length} stages, wins and cheats both move the ` +
-    `lock ladder, no scene codes, ` +
-    `each playing the scene that leads into it, matched however they are typed`;
+    `lock ladder, a code unlocks and opens the menu rather than launching, ` +
+    `matched however they are typed`;
 }
 
 // The campaign flow, driven end to end without a race being run.

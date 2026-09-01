@@ -684,6 +684,13 @@ class Game {
       return;
     }
     if (this.phase === PHASE.ATTRACT) {
+      // ...unless a stage is building. `beginStage` awaits a track build with
+      // the phase still ATTRACT, and this branch used to run through those
+      // awaits: the attract loop re-armed itself — lent the player's car an AI
+      // driver, hid the field, ran a race — on a track that was half swapped
+      // out under it. It mostly got away with it because the cutscene tears
+      // the attract state down again, which is the worst kind of working.
+      if (this._building) return;
       // The title screen is a cutscene, not a still.
       //
       // The field is already built and the AI already knows how to drive, so
@@ -909,6 +916,17 @@ class Game {
         this.timeTrial(hit.trial);
         return;
       }
+      // Checked HERE, synchronously — `jumpToStage` is async, so its refusal
+      // comes back as a pending promise and an `if (!went)` on it passes a
+      // Promise object, which is truthy, which is the silent failure again
+      // with an extra step.
+      if (!STAGES.some((st) => st.id === hit.stage)) {
+        // The code is right and the stage is missing: the page is running a
+        // mixed set of modules. Say so, and say the fix.
+        said.textContent = 'STALE VERSION — RELOAD THE PAGE';
+        input.select();
+        return;
+      }
       close();
       this.jumpToStage(hit.stage);
     });
@@ -921,7 +939,13 @@ class Game {
   // otherwise reach would be a way of finding bugs that are not there.
   async jumpToStage(id) {
     const i = STAGES.findIndex((s) => s.id === id);
-    if (i < 0 || this.phase === PHASE.RACING) return;
+    // Refusing SILENTLY was a bug with a long reach. A cheat that resolves to
+    // a stage that is not there — which happens for real when a browser holds
+    // a fresh cheats.js against a stale campaign.js, ten minutes of cache on
+    // a twenty-module site — did nothing at all, and "nothing" reads as "the
+    // cheat is broken" or, worse, the player's next press starts stage one
+    // and reads as "the cheat took me to stage one".
+    if (i < 0 || this.phase === PHASE.RACING) return false;
     this.endTrial();
     this.mode = MODE.CAMPAIGN;
     this.campaign = new Campaign(this);
@@ -934,6 +958,7 @@ class Game {
     this.hud.show();
     this.audio.unlock();
     await this.beginStage();
+    return true;
   }
 
   // Step through the scripts in order, one per press.
@@ -986,6 +1011,15 @@ class Game {
   // simply stops responding for two seconds with a race on screen.
   async beginStage() {
     this.endTrial();
+    this._building = true;
+    try {
+      await this._beginStageInner();
+    } finally {
+      this._building = false;
+    }
+  }
+
+  async _beginStageInner() {
     const c = this.campaign;
     c.car = this.playerLivery;
     const want = LAYOUTS[c.stage.layout] || LAYOUTS.folsom;

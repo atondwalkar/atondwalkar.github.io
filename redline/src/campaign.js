@@ -270,6 +270,31 @@ export function trafficCount(stage, track) {
 // hundred and sixty-four of them.
 const TRAFFIC_CAP = 420;
 
+// Which stages the player has earned.
+//
+// One number in storage: the highest stage index that may be started. Winning
+// a stage unlocks the next; a cheat unlocks everything up to where it jumps —
+// the codes are a door, and a door you have walked through has been opened.
+// Losing never locks anything back up.
+const PROGRESS_KEY = 'redline.progress';
+
+export function unlockedUpTo() {
+  try {
+    const v = parseInt(localStorage.getItem(PROGRESS_KEY), 10);
+    return Number.isFinite(v) ? Math.max(0, Math.min(v, STAGES.length - 1)) : 0;
+  } catch (e) {
+    return 0;
+  }
+}
+
+export function unlock(index) {
+  const want = Math.max(0, Math.min(index, STAGES.length - 1));
+  try {
+    if (want > unlockedUpTo()) localStorage.setItem(PROGRESS_KEY, String(want));
+  } catch (e) { /* a private window: this session only */ }
+  return unlockedUpTo();
+}
+
 export class Campaign {
   constructor(game) {
     this.game = game;

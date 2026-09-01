@@ -16,7 +16,7 @@ import { RACE, CAR, AI, SELECTABLE } from './defs.js';
 import { CarSelect } from './carselect.js';
 import { Driver } from './ai.js';
 import { Cutscene, SCRIPTS } from './cutscene.js';
-import { Campaign, STAGES } from './campaign.js';
+import { Campaign, STAGES, unlockedUpTo, unlock } from './campaign.js';
 import { findCheat } from './cheats.js';
 import { TouchControls, looksLikeTouch } from './touch.js';
 import { GhostRecorder, GhostCar, saveIfBest, loadGhost } from './ghost.js';
@@ -325,7 +325,10 @@ class Game {
       this.campaign = null;
       this.openName();
     });
-    document.getElementById('campaign-btn').addEventListener('click', () => this.startCampaign());
+    document.getElementById('campaign-btn').addEventListener('click', () => this.openStageSelect());
+    document.getElementById('stagesel-close').addEventListener('click', () => {
+      document.getElementById('stagesel').classList.remove('open');
+    });
     this._cheatPanel();
     this.touchUI = new TouchControls(this);
     this._touchSetting();
@@ -946,6 +949,9 @@ class Game {
     // cheat is broken" or, worse, the player's next press starts stage one
     // and reads as "the cheat took me to stage one".
     if (i < 0 || this.phase === PHASE.RACING) return false;
+    // A cheat unlocks the road to where it goes: the codes are a door, and a
+    // door you have walked through has been opened.
+    unlock(i);
     this.endTrial();
     this.mode = MODE.CAMPAIGN;
     this.campaign = new Campaign(this);
@@ -996,10 +1002,37 @@ class Game {
 
   // --- campaign flow
 
-  startCampaign() {
+  // The campaign menu: every stage on one card, in order, with everything
+  // past your progress greyed out. Winning unlocks the next; a cheat unlocks
+  // the way to wherever it jumped.
+  openStageSelect() {
+    if (this.phase !== PHASE.ATTRACT) return;
+    const rows = document.getElementById('stage-rows');
+    const open = unlockedUpTo();
+    rows.innerHTML = '';
+    STAGES.forEach((st, i) => {
+      const b = document.createElement('button');
+      b.className = `stage${i > open ? ' locked' : ''}`;
+      b.innerHTML = `<span class="n">${String(i + 1).padStart(2, '0')}</span>`
+        + `<span class="nm">${st.name}</span>`
+        + `<span class="b">${i > open ? 'LOCKED' : st.blurb}</span>`;
+      if (i <= open) {
+        b.addEventListener('click', () => {
+          document.getElementById('stagesel').classList.remove('open');
+          this.startCampaign(i);
+        });
+      }
+      rows.appendChild(b);
+    });
+    document.getElementById('stagesel').classList.add('open');
+    this.audio.unlock();
+  }
+
+  startCampaign(index = 0) {
     if (this.phase === PHASE.RACING) return;
     this.mode = MODE.CAMPAIGN;
     this.campaign = new Campaign(this);
+    this.campaign.index = index;
     this.openName();
   }
 
@@ -1101,6 +1134,9 @@ class Game {
       rival: this.race.cars.find((x) => !x.isPlayer),
     };
     if (won && c.wagered) c.won.push(c.wagered);
+    // Progress is earned the moment the stage is won, not when the next one
+    // starts — quitting at the victory scene must not cost the unlock.
+    if (won) unlock(c.index + 1);
     this.playCutscene(won ? c.stage.onWin : c.stage.onLose, cast, () => {
       if (won && c.advance()) {
         this.beginStage();

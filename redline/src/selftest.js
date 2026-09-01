@@ -21,7 +21,7 @@ import { clamp, lerp, lapTime, dist2D, angleDiff } from './utils.js';
 import { SHOTS, cameraFrame } from './camera.js';
 import { Cutscene, SCRIPTS } from './cutscene.js';
 import { PORTRAITS, portraitFor } from './portraits.js';
-import { Campaign, STAGES, laneCentres, laneSpeed, trafficCount } from './campaign.js';
+import { Campaign, STAGES, laneCentres, laneSpeed, trafficCount, unlockedUpTo, unlock } from './campaign.js';
 import { CHEATS, findCheat, normalise, unresolved } from './cheats.js';
 import { ACTIONS, actionFor, codesFor, isBound, rebind, resetBinds, label } from './keybinds.js';
 import { PADS, looksLikeTouch } from './touch.js';
@@ -1245,6 +1245,64 @@ function checkNewStages(game) {
     if (offT > 7) bad.push(`the pack spent ${offT.toFixed(1)} car-seconds off the estuary`);
   }
 
+  // --- traffic on a loop is a fixed population.
+  //
+  // The estuary is the first CLOSED stage with traffic, and the top-up that
+  // keeps an open route full was spawning on it unboundedly: its window is
+  // written in monotonic distances, and on a lap shorter than the look-ahead
+  // it swallowed its own tail, matched nothing, and added three cars a step.
+  // Three seconds of that is a thousand cars nose to tail on the grid.
+  {
+    const t = new Track(LAYOUTS.estuary);
+    const c = new Campaign({ playerName: 'X' });
+    c.index = STAGES.indexOf(est);
+    c.car = SELECTABLE[0];
+    const f = c.field(t);
+    const race = Object.create(Object.getPrototypeOf(game.race));
+    Object.assign(race, {
+      game: { onLap() {}, onFinish() {}, onCheckpoint() {}, onImpact() {}, scene: { add() {}, remove() {} } },
+      track: t, state: 'racing', time: 0, laps: 3, route: null, limit: null,
+      leash: null, intercept: null, roadblocks: null, escape: null, checkpoints: null,
+      contact: false, endOnFirst: true, formation: 'grid', damageMax: null,
+      driftTarget: null, drift: null, results: [], order: [],
+      trafficEvery: f.trafficEvery, trafficSpecs: f.cars.filter((q) => q.traffic),
+    });
+    // A minimal live field: the player, moving, and the traffic where the
+    // slots put it. `_makeTraffic` builds real models, so if the top-up runs
+    // wild this leaks a thousand cars into a fake scene, not the real one.
+    const p0 = t.atDistance(40);
+    const player = {
+      vehicle: new Vehicle(CAR), loc: null, isPlayer: true, traffic: false,
+      pursuer: false, finished: false, lap: 0, lastS: 40, progress: 40,
+      contactT: 0, position: 1, lapTimes: [], bestLap: Infinity,
+      capture() {}, syncModel() {}, model: null, driver: null,
+    };
+    player.vehicle.reset(p0.x, p0.z, Math.atan2(p0.dirX, p0.dirZ));
+    player.vehicle.setSpeed(35);
+    player.loc = t.locate(player.vehicle.x, player.vehicle.z);
+    race.cars = [player];
+    race.player = player;
+    race._order = () => { race.order = [player]; return race.order; };
+    const before = { n: 0 };
+    // Drive a lap and a half of simulated time in chunks, moving the player
+    // by hand so the window slides the way it does in play.
+    let peak = 0;
+    for (let d = 40; d < t.length * 1.5; d += 90) {
+      const at = t.atDistance(d % t.length);
+      player.vehicle.reset(at.x, at.z, Math.atan2(at.dirX, at.dirZ));
+      player.vehicle.setSpeed(35);
+      player.loc = t.locate(player.vehicle.x, player.vehicle.z);
+      for (let i = 0; i < Math.round(2 / FIXED); i++) race._topUpTraffic();
+      peak = Math.max(peak, race.cars.length);
+    }
+    before.n = race.cars.length;
+    if (peak > 1) bad.push(`the loop's top-up spawned ${peak - 1} cars — a closed circuit does not drain`);
+    for (const q of race.cars) if (q.model) {
+      game.scene.remove(q.model);
+      q.model.traverse((o) => { if (o.geometry) o.geometry.dispose(); });
+    }
+  }
+
   // --- the skyline economy.
   const sky = STAGES.find((q) => q.id === 'skyline');
   let crossT = 0;
@@ -2150,6 +2208,42 @@ function checkCheats() {
     }
   }
 
+  // The lock ladder: stage one is always open, winning opens the next, a
+  // cheat opens the road to wherever it jumps, and losing closes nothing.
+  {
+    const kept = (() => { try { return localStorage.getItem('redline.progress'); } catch (e) { return null; } })();
+    try { localStorage.removeItem('redline.progress'); } catch (e) { /* fine */ }
+    if (unlockedUpTo() !== 0) bad.push('a fresh save does not start at stage one');
+    unlock(1);
+    if (unlockedUpTo() !== 1) bad.push('winning stage one did not unlock stage two');
+    unlock(0);
+    if (unlockedUpTo() !== 1) bad.push('progress went BACKWARDS');
+    unlock(6);
+    if (unlockedUpTo() !== 6) bad.push('a cheat to stage seven did not open the road to it');
+    unlock(999);
+    if (unlockedUpTo() !== STAGES.length - 1) bad.push('progress ran past the last stage');
+    // And the menu obeys it: locked rows are greyed and dead to the pointer.
+    try { localStorage.setItem('redline.progress', '2'); } catch (e) { /* fine */ }
+    const wasPhase = game.phase;
+    game.phase = 'attract';
+    game.openStageSelect();
+    const rows = [...document.querySelectorAll('#stage-rows .stage')];
+    const lockedRows = rows.filter((r) => r.classList.contains('locked'));
+    if (rows.length !== STAGES.length) bad.push(`the menu lists ${rows.length} of ${STAGES.length} stages`);
+    if (lockedRows.length !== STAGES.length - 3) {
+      bad.push(`${lockedRows.length} rows locked with three stages open`);
+    }
+    for (const r of lockedRows) {
+      if (getComputedStyle(r).pointerEvents !== 'none') bad.push('a locked stage still takes the click');
+    }
+    document.getElementById('stagesel').classList.remove('open');
+    game.phase = wasPhase;
+    try {
+      if (kept === null) localStorage.removeItem('redline.progress');
+      else localStorage.setItem('redline.progress', kept);
+    } catch (e) { /* fine */ }
+  }
+
   // One per stage and nothing else. A code that plays a cutscene is a code
   // that spoils the stage in front of it, and the panel lists nothing, so
   // there is no way to stumble into one either.
@@ -2161,7 +2255,8 @@ function checkCheats() {
 
   const ok = bad.length === 0;
   return `${ok ? 'one word per stage, and nothing on screen says which' : `WRONG — ${bad[0]}`} — ` +
-    `${CHEATS.length} codes for ${STAGES.length} stages, no scene codes, ` +
+    `${CHEATS.length} codes for ${STAGES.length} stages, wins and cheats both move the ` +
+    `lock ladder, no scene codes, ` +
     `each playing the scene that leads into it, matched however they are typed`;
 }
 

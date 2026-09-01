@@ -924,6 +924,18 @@ export class Race {
   // pays for the ones being added.
   _topUpTraffic() {
     if (!this.trafficEvery || !this.trafficSpecs.length) return;
+    // Not on a closed circuit — a loop does not drain.
+    //
+    // Top-up exists because an open route empties: everything drives forward
+    // and off the far end while the player starts at the back. On a loop the
+    // traffic circulates and the density laid down at the start persists
+    // forever, so there is nothing to top up — and worse, this function's
+    // window arithmetic is written in monotonic distances. On a 1.28 km lap
+    // with a 1.5 km look-ahead the window swallowed its own tail: `s` wraps
+    // at the lap, the membership test matched nothing, `want` was always
+    // short, and it added three cars a step — three hundred and sixty a
+    // second, nose to tail on the start straight.
+    if (this.track.closed) return;
     const t = this.track;
     const p = this.player;
     if (!p || !p.loc) return;

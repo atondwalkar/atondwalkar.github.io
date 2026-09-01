@@ -459,6 +459,38 @@
     padding: 9px 26px; font: inherit; font-size: 10px; letter-spacing: 4px; cursor: pointer;
   }
   #binds-reset:hover { background: var(--hot); border-color: var(--hot); color: #0a0c10; }
+  /* The stage select: every stage on one card, the locked ones greyed out
+     and dead to the pointer. Locks are progress, and progress you can SEE —
+     a list that only shows what you have reached reads as a short game. */
+  #stagesel {
+    position: absolute; inset: 0; z-index: 31; display: none;
+    align-items: center; justify-content: center; flex-direction: column;
+    gap: 14px; background: rgba(4, 6, 9, 0.9);
+  }
+  #stagesel.open { display: flex; }
+  #stagesel h2 { font-size: 15px; letter-spacing: 9px; margin-bottom: 4px; }
+  #stage-rows { display: flex; flex-direction: column; gap: 7px; max-height: 62vh; overflow-y: auto; }
+  #stage-rows .stage {
+    display: flex; align-items: baseline; gap: 16px; width: min(78vw, 560px);
+    background: rgba(10, 14, 20, 0.7); color: #f4f6f8; text-align: left;
+    border: 1px solid rgba(232, 236, 240, 0.3);
+    padding: 11px 16px; font: inherit; cursor: pointer;
+  }
+  #stage-rows .stage:hover:not(.locked) { border-color: var(--hot); }
+  #stage-rows .stage .n { font-size: 11px; letter-spacing: 2px; opacity: 0.5; width: 20px; }
+  #stage-rows .stage .nm { font-size: 13px; letter-spacing: 4px; flex: 0 0 auto; }
+  #stage-rows .stage .b { font-size: 9px; letter-spacing: 2px; opacity: 0.55; margin-left: auto; text-align: right; }
+  #stage-rows .stage.locked {
+    opacity: 0.32; cursor: default; pointer-events: none;
+    filter: grayscale(1);
+  }
+  #stagesel button#stagesel-close {
+    background: rgba(10, 14, 20, 0.7); color: #f4f6f8;
+    border: 1px solid rgba(232, 236, 240, 0.34);
+    padding: 12px 40px; font: inherit; font-size: 13px; letter-spacing: 6px; cursor: pointer;
+  }
+  #stagesel button#stagesel-close:hover { background: var(--hot); border-color: var(--hot); color: #0a0c10; }
+
   /* The cheat panel borrows the settings panel's shell wholesale — same
      backdrop, same buttons, same everything — because it is the same kind of
      thing: a list you open over the title screen and close again. */
@@ -643,6 +675,12 @@
   </div>
 
   <button id="settings-close">BACK</button>
+</div>
+
+<div id="stagesel">
+  <h2>CAMPAIGN</h2>
+  <div id="stage-rows"></div>
+  <button id="stagesel-close">BACK</button>
 </div>
 
 <div id="cheats">

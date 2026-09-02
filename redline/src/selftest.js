@@ -4035,22 +4035,28 @@ function checkHud(game) {
       return { blue, white };
     };
     hud.update(1 / 60);
-    const circuit = mapPx();
-    post('/__frame/map-circuit', el('map-c').toDataURL('image/png'));
-    const was2 = { route: race.route, limit: race.limit };
-    race.route = race.distanceAlong(race.player) + 1500;
-    race.limit = 200;
-    hud.update(1 / 60);
-    const rolling = mapPx();
-    post('/__frame/map-rolling', el('map-c').toDataURL('image/png'));
-    race.route = was2.route; race.limit = was2.limit;
-    hud.update(1 / 60);
-    notes.push(circuit.blue > 400 && rolling.blue > 200
-      ? `the route is blue in both maps (${circuit.blue}/${rolling.blue} px)`
-      : `THE ROUTE IS NOT BLUE (${circuit.blue}/${rolling.blue} px)`);
-    notes.push(circuit.white > 150 && rolling.white > 60
-      ? `the streets are white in both (${circuit.white}/${rolling.white} px)`
-      : `THE STREETS ARE MISSING (${circuit.white}/${rolling.white} px)`);
+    const m1 = mapPx();
+    post('/__frame/map', el('map-c').toDataURL('image/png'));
+    notes.push(m1.blue > 200
+      ? `the route is blue (${m1.blue} px)` : `THE ROUTE IS NOT BLUE (${m1.blue} px)`);
+    notes.push(m1.white > 120
+      ? `the streets are white (${m1.white} px)` : `THE STREETS ARE MISSING (${m1.white} px)`);
+    // The web is generated, so its properties are the check: seeded (the same
+    // twice over), plentiful (an intricate city, not whiskers), and none of it
+    // on a deck layout, where streets over open water would be nonsense.
+    const web1 = hud._streetWeb(race.track);
+    const webFor = hud._webFor;
+    hud._webFor = null;
+    const web2 = hud._streetWeb(race.track);
+    hud._webFor = webFor; hud._web = web1;
+    if (web1.length < race.track.length / 46) notes.push(`THE WEB IS THIN (${web1.length} segments)`);
+    if (web1.length !== web2.length
+      || web1.some((q, i2) => Math.abs(q[0] - web2[i2][0]) > 1e-6)) {
+      notes.push('THE WEB IS NOT SEEDED — the map shimmers');
+    }
+    const deckWeb = hud._streetWeb(new Track(LAYOUTS.bridge));
+    hud._webFor = webFor; hud._web = web1;
+    if (deckWeb.length) notes.push(`${deckWeb.length} STREETS DRAWN OVER OPEN WATER`);
   }
 
   // The speedometer, and whether its needle is attached to anything.

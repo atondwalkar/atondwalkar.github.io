@@ -36,7 +36,7 @@ export class Hud {
     this.flashT = 0;
     this.showAll = false;
     this._cache = {};
-    this._mapPath = null;
+    this._webFor = null;
   }
 
   show() { this.el.hud.style.display = 'block'; }
@@ -377,26 +377,86 @@ export class Hud {
 
   // The track map, drawn once into a Path2D and then reused every frame.
   _map(race, player) {
-    const c = this.map;
-    const W = 432;
-    const track = race.track;
+    // One map for every stage: the navigator. It used to split — a fixed
+    // north-up overview for circuits, the rolling window for routes — and the
+    // overview was the weaker of the two everywhere it applied: on a lap you
+    // still care most about the next three corners, and a chevron crawling
+    // round a static squiggle tells you less about them than the road ahead
+    // drawn ahead. The whole-lap picture the overview used to give is not
+    // lost; it was never load-bearing.
+    this._rollingMap(race, player, 432);
+  }
 
-    // Two maps, because there are two kinds of stage.
-    //
-    // A circuit fits on the panel: the whole lap, always the same way up, with
-    // everybody's dot on it — that is a timing screen, and on a two-kilometre
-    // loop it tells you where the field is. A route does not fit and would not
-    // help if it did. Eleven kilometres squeezed into two hundred pixels is a
-    // line with a dot on it that does not appear to move, and what you need on
-    // a run is the next few hundred metres and who is in them.
-    //
-    // So a route gets a scrolling window: centred on the car, turned so the
-    // way you are going is up, and scaled to show a few hundred metres of road
-    // rather than all of it.
-    const rolling = race.route !== null;
-    if (rolling) this._rollingMap(race, player, W);
-    else this._wholeMap(race, player, W);
-    void c;
+  // The street web the map draws under the route.
+  //
+  // Generated, cached per track, and SEEDED from the layout's name — the same
+  // city every time you look, which is the difference between a map and
+  // static. The recipe walks the route and hangs street-shapes off it: full
+  // crossings through the road, avenue fragments running parallel a block
+  // out, and stubs that turn an L partway — the three shapes a real street
+  // grid is mostly made of. Density and length are rolled per piece, which is
+  // where the intricacy comes from; the seed is where the stillness does.
+  _streetWeb(track) {
+    if (this._webFor === track) return this._web;
+    const segs = [];
+    if (!track.layout.deck) {
+      let seed = 0x9e3779b9;
+      for (const ch of track.layout.id) seed = ((seed * 31) + ch.charCodeAt(0)) >>> 0;
+      const rnd = () => {
+        seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+        return seed / 0x7fffffff;
+      };
+      const step = 34;
+      for (let d = 0; d < track.length; d += step) {
+        const p = track.atDistance(d);
+        const along = Math.atan2(p.dirX, p.dirZ);
+        const pieces = 1 + Math.floor(rnd() * 3);
+        for (let k = 0; k < pieces; k++) {
+          const roll = rnd();
+          if (roll < 0.42) {
+            // A crossing: straight through the road, longer on one side.
+            const ang = along + Math.PI / 2 + (rnd() - 0.5) * 0.12;
+            const ux = Math.sin(ang), uz = Math.cos(ang);
+            const l1 = 30 + rnd() * 150, l2 = 30 + rnd() * 150;
+            segs.push([p.x - ux * l1, p.z - uz * l1, p.x + ux * l2, p.z + uz * l2]);
+          } else if (roll < 0.72) {
+            // An avenue fragment, a block out, running with the road.
+            const side = rnd() < 0.5 ? -1 : 1;
+            const off = 26 + rnd() * 46;
+            const cx = p.x + p.nx * side * off, cz = p.z + p.nz * side * off;
+            const ang = along + (rnd() - 0.5) * 0.1;
+            const ux = Math.sin(ang), uz = Math.cos(ang);
+            const len = 80 + rnd() * 220;
+            segs.push([cx - ux * len / 2, cz - uz * len / 2, cx + ux * len / 2, cz + uz * len / 2]);
+            // Avenues carry their own cross streets — one or two short bars
+            // across them — which is what knits the pieces into a grid the eye
+            // reads as blocks rather than as strokes.
+            const bars = 1 + Math.floor(rnd() * 2);
+            for (let b2 = 0; b2 < bars; b2++) {
+              const at2 = (rnd() - 0.5) * len * 0.8;
+              const bx = cx + ux * at2, bz = cz + uz * at2;
+              const bl = 25 + rnd() * 60;
+              segs.push([bx - uz * bl, bz + ux * bl, bx + uz * bl, bz - ux * bl]);
+            }
+          } else {
+            // A stub that turns: out from the road, then an L at 45 or 90.
+            const side = rnd() < 0.5 ? -1 : 1;
+            const ang = along + Math.PI / 2 * side + (rnd() - 0.5) * 0.14;
+            const ux = Math.sin(ang), uz = Math.cos(ang);
+            const l1 = 30 + rnd() * 70;
+            const ex = p.x + ux * l1, ez = p.z + uz * l1;
+            segs.push([p.x, p.z, ex, ez]);
+            const turn = (rnd() < 0.5 ? 1 : -1) * (rnd() < 0.4 ? Math.PI / 4 : Math.PI / 2);
+            const a2 = ang + turn;
+            const l2 = 35 + rnd() * 90;
+            segs.push([ex, ez, ex + Math.sin(a2) * l2, ez + Math.cos(a2) * l2]);
+          }
+        }
+      }
+    }
+    this._webFor = track;
+    this._web = segs;
+    return segs;
   }
 
   // The tilt: the map squashed vertically about a pivot, which is the classic
@@ -431,86 +491,6 @@ export class Hud {
     c.restore();
   }
 
-  // The whole circuit, fixed, north-up.
-  _wholeMap(race, player, W) {
-    const c = this.map;
-    const track = race.track;
-    if (!this._mapPath) {
-      let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
-      for (const p of track.samples) {
-        minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
-        minZ = Math.min(minZ, p.z); maxZ = Math.max(maxZ, p.z);
-      }
-      const pad = 26;
-      const scale = Math.min((W - pad * 2) / (maxX - minX), (W - pad * 2) / (maxZ - minZ));
-      this._mapT = {
-        scale,
-        ox: W / 2 - ((minX + maxX) / 2) * scale,
-        oz: W / 2 - ((minZ + maxZ) / 2) * scale,
-      };
-      const path = new Path2D();
-      track.samples.forEach((p, i) => {
-        const x = p.x * scale + this._mapT.ox, z = p.z * scale + this._mapT.oz;
-        if (i === 0) path.moveTo(x, z); else path.lineTo(x, z);
-      });
-      if (track.closed) path.closePath();
-      this._mapPath = path;
-      // The side streets, cached with the track path they belong to. They are
-      // what makes the map read as a CITY with a route through it rather than
-      // a squiggle on black — the fake streets are the context.
-      const st = new Path2D();
-      for (const q of track.streets || []) {
-        st.moveTo((q.x + q.ux * q.from) * scale + this._mapT.ox,
-          (q.z + q.uz * q.from) * scale + this._mapT.oz);
-        st.lineTo((q.x + q.ux * q.to) * scale + this._mapT.ox,
-          (q.z + q.uz * q.to) * scale + this._mapT.oz);
-      }
-      this._mapStreets = st;
-    }
-    const T = this._mapT;
-    const X = (x) => x * T.scale + T.ox;
-    const Z = (z) => z * T.scale + T.oz;
-
-    c.clearRect(0, 0, W, W);
-    this._tilted(c, W / 2, () => {
-      c.lineJoin = 'round';
-      // The streets first, white and thin: the city the route runs through.
-      // Then the route over them in blue — the one road that matters, in the
-      // one colour nothing else on the map uses.
-      c.lineWidth = 4;
-      c.strokeStyle = 'rgba(235, 240, 246, 0.75)';
-      if (this._mapStreets) c.stroke(this._mapStreets);
-      c.lineWidth = 14;
-      c.strokeStyle = 'rgba(8, 18, 38, 0.8)';
-      c.stroke(this._mapPath);
-      c.lineWidth = 9;
-      c.strokeStyle = '#4593f0';
-      c.stroke(this._mapPath);
-
-      // The start line.
-      const sl = track.startLine;
-      c.strokeStyle = '#e8452f';
-      c.lineWidth = 3;
-      c.beginPath();
-      c.moveTo(X(sl.x + sl.nx * 8), Z(sl.z + sl.nz * 8));
-      c.lineTo(X(sl.x - sl.nx * 8), Z(sl.z - sl.nz * 8));
-      c.stroke();
-
-      for (const car of race.cars) {
-        if (car.traffic || car.isPlayer) continue;
-        this._carDot(c, X(car.vehicle.x), Z(car.vehicle.z), car);
-      }
-      // The player last and as a CHEVRON: a heading, not a dot. Screen north
-      // is world -z here, so the screen angle comes off the yaw directly.
-      const v = player.vehicle;
-      // Tip must point along (sin yaw, cos yaw) with screen-Y down, and the
-      // chevron's local tip is (0, -1) — so the rotation is atan2(sin, -cos),
-      // with nothing added: an extra half-turn here is a map that swears you
-      // are driving backwards.
-      this._chevron(c, X(v.x), Z(v.z), Math.atan2(Math.sin(v.yaw), -Math.cos(v.yaw)));
-    });
-  }
-
   // A window on the road ahead, centred on the car and turned to face the way
   // it is going.
   _rollingMap(race, player, W) {
@@ -538,20 +518,25 @@ export class Hud {
     c.lineJoin = 'round';
     c.lineCap = 'round';
 
-    // The fake streets first, in white: the side streets near enough to be on
-    // the panel, drawn thin under the route. They are what makes this read as
-    // a navigator's map of a city rather than a ribbon in the void.
+    // The fake streets first, in white: a generated web, not the literal side
+    // streets. The world's cosmetic streets are sparse — one stub per corner —
+    // and a map that reflects them faithfully reads as a road with whiskers.
+    // A navigator's map wants a CITY under the route, so the map draws one of
+    // its own: it is the one place in the game where the streets are allowed
+    // to be fiction, because a minimap is already a fiction about what the
+    // world looks like from above.
     const here = player.loc ? player.loc.s : 0;
-    if (track.streets && track.streets.length) {
-      c.lineWidth = Math.max(2.5, 5 * scale * 0.9);
+    const web = this._streetWeb(track);
+    if (web.length) {
+      c.lineWidth = Math.max(2.2, 4.6 * scale * 0.9);
       c.strokeStyle = 'rgba(235, 240, 246, 0.7)';
       c.beginPath();
-      for (const q of track.streets) {
-        const ax = q.x + q.ux * q.from, az = q.z + q.uz * q.from;
+      for (const q of web) {
         // Cheap cull by world distance to the car before projecting.
-        if ((ax - v.x) * (ax - v.x) + (az - v.z) * (az - v.z) > AHEAD * AHEAD * 1.6) continue;
-        const [x1, y1] = to(ax, az);
-        const [x2, y2] = to(q.x + q.ux * q.to, q.z + q.uz * q.to);
+        const mx = (q[0] + q[2]) / 2, mz = (q[1] + q[3]) / 2;
+        if ((mx - v.x) * (mx - v.x) + (mz - v.z) * (mz - v.z) > AHEAD * AHEAD * 1.7) continue;
+        const [x1, y1] = to(q[0], q[1]);
+        const [x2, y2] = to(q[2], q[3]);
         c.moveTo(x1, y1);
         c.lineTo(x2, y2);
       }
@@ -665,7 +650,7 @@ export class Hud {
     void k;
   }
 
-  trackChanged() { this._mapPath = null; this._mapT = null; this._cache = {}; }
+  trackChanged() { this._webFor = null; this._web = null; this._cache = {}; }
 
   hideResults() { this.el.results.classList.remove('open'); }
 }

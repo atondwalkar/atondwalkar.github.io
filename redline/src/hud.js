@@ -6,6 +6,10 @@
 import { RACE, CAR } from './defs.js';
 import { clamp, lerp, lapTime, gapTime, ordinal } from './utils.js';
 
+// How hard the minimap leans away from the viewer: 1 is a ceiling plan, and
+// the GPS-on-the-dash look sits around three fifths.
+const MAP_TILT = 0.62;
+
 const $ = (id) => document.getElementById(id);
 
 export class Hud {
@@ -395,6 +399,38 @@ export class Hud {
     void c;
   }
 
+  // The tilt: the map squashed vertically about a pivot, which is the classic
+  // GPS-on-the-dash look — you are looking at a table, not at a ceiling plan.
+  // An affine squash rather than true perspective, because 2D canvas has no
+  // perspective and at this size the difference is invisible.
+  _tilted(c, pivotY, draw) {
+    c.save();
+    c.translate(0, pivotY * (1 - MAP_TILT));
+    c.scale(1, MAP_TILT);
+    draw();
+    c.restore();
+  }
+
+  // The chevron: the player is a heading, not a dot. `angle` is screen-space,
+  // 0 pointing up.
+  _chevron(c, x, y, angle) {
+    c.save();
+    c.translate(x, y);
+    c.rotate(angle);
+    c.beginPath();
+    c.moveTo(0, -10);
+    c.lineTo(7.5, 8);
+    c.lineTo(0, 3.6);
+    c.lineTo(-7.5, 8);
+    c.closePath();
+    c.fillStyle = '#ffffff';
+    c.fill();
+    c.lineWidth = 2.5;
+    c.strokeStyle = 'rgba(10, 14, 20, 0.9)';
+    c.stroke();
+    c.restore();
+  }
+
   // The whole circuit, fixed, north-up.
   _wholeMap(race, player, W) {
     const c = this.map;
@@ -419,39 +455,60 @@ export class Hud {
       });
       if (track.closed) path.closePath();
       this._mapPath = path;
+      // The side streets, cached with the track path they belong to. They are
+      // what makes the map read as a CITY with a route through it rather than
+      // a squiggle on black — the fake streets are the context.
+      const st = new Path2D();
+      for (const q of track.streets || []) {
+        st.moveTo((q.x + q.ux * q.from) * scale + this._mapT.ox,
+          (q.z + q.uz * q.from) * scale + this._mapT.oz);
+        st.lineTo((q.x + q.ux * q.to) * scale + this._mapT.ox,
+          (q.z + q.uz * q.to) * scale + this._mapT.oz);
+      }
+      this._mapStreets = st;
     }
     const T = this._mapT;
     const X = (x) => x * T.scale + T.ox;
     const Z = (z) => z * T.scale + T.oz;
 
     c.clearRect(0, 0, W, W);
-    c.lineJoin = 'round';
-    // The circuit drawn as a pale road on a dark surround, not the other way
-    // round. It was a near-black line inside a faint grey halo — which is what
-    // the real thing looks like from above at night, and which on a small
-    // translucent panel is very close to invisible. The map is a diagram; it
-    // should read at a glance from the corner of your eye.
-    c.lineWidth = 15;
-    c.strokeStyle = 'rgba(10, 14, 20, 0.75)';
-    c.stroke(this._mapPath);
-    c.lineWidth = 10;
-    c.strokeStyle = 'rgba(240, 245, 250, 0.92)';
-    c.stroke(this._mapPath);
+    this._tilted(c, W / 2, () => {
+      c.lineJoin = 'round';
+      // The streets first, white and thin: the city the route runs through.
+      // Then the route over them in blue — the one road that matters, in the
+      // one colour nothing else on the map uses.
+      c.lineWidth = 4;
+      c.strokeStyle = 'rgba(235, 240, 246, 0.75)';
+      if (this._mapStreets) c.stroke(this._mapStreets);
+      c.lineWidth = 14;
+      c.strokeStyle = 'rgba(8, 18, 38, 0.8)';
+      c.stroke(this._mapPath);
+      c.lineWidth = 9;
+      c.strokeStyle = '#4593f0';
+      c.stroke(this._mapPath);
 
-    // The start line.
-    const sl = track.startLine;
-    c.strokeStyle = '#e8452f';                 // was white, on white
-    c.lineWidth = 3;
-    c.beginPath();
-    c.moveTo(X(sl.x + sl.nx * 8), Z(sl.z + sl.nz * 8));
-    c.lineTo(X(sl.x - sl.nx * 8), Z(sl.z - sl.nz * 8));
-    c.stroke();
+      // The start line.
+      const sl = track.startLine;
+      c.strokeStyle = '#e8452f';
+      c.lineWidth = 3;
+      c.beginPath();
+      c.moveTo(X(sl.x + sl.nx * 8), Z(sl.z + sl.nz * 8));
+      c.lineTo(X(sl.x - sl.nx * 8), Z(sl.z - sl.nz * 8));
+      c.stroke();
 
-    for (const car of race.cars) {
-      if (car.traffic) continue;
-      this._carDot(c, X(car.vehicle.x), Z(car.vehicle.z), car);
-    }
-    void player;
+      for (const car of race.cars) {
+        if (car.traffic || car.isPlayer) continue;
+        this._carDot(c, X(car.vehicle.x), Z(car.vehicle.z), car);
+      }
+      // The player last and as a CHEVRON: a heading, not a dot. Screen north
+      // is world -z here, so the screen angle comes off the yaw directly.
+      const v = player.vehicle;
+      // Tip must point along (sin yaw, cos yaw) with screen-Y down, and the
+      // chevron's local tip is (0, -1) — so the rotation is atan2(sin, -cos),
+      // with nothing added: an extra half-turn here is a map that swears you
+      // are driving backwards.
+      this._chevron(c, X(v.x), Z(v.z), Math.atan2(Math.sin(v.yaw), -Math.cos(v.yaw)));
+    });
   }
 
   // A window on the road ahead, centred on the car and turned to face the way
@@ -477,12 +534,33 @@ export class Hud {
     };
 
     c.clearRect(0, 0, W, W);
+    this._tilted(c, cy, () => {
     c.lineJoin = 'round';
     c.lineCap = 'round';
 
-    // The road, from a bit behind to well ahead. Walked by distance rather
-    // than drawn from a cached path, because the path moves every frame.
+    // The fake streets first, in white: the side streets near enough to be on
+    // the panel, drawn thin under the route. They are what makes this read as
+    // a navigator's map of a city rather than a ribbon in the void.
     const here = player.loc ? player.loc.s : 0;
+    if (track.streets && track.streets.length) {
+      c.lineWidth = Math.max(2.5, 5 * scale * 0.9);
+      c.strokeStyle = 'rgba(235, 240, 246, 0.7)';
+      c.beginPath();
+      for (const q of track.streets) {
+        const ax = q.x + q.ux * q.from, az = q.z + q.uz * q.from;
+        // Cheap cull by world distance to the car before projecting.
+        if ((ax - v.x) * (ax - v.x) + (az - v.z) * (az - v.z) > AHEAD * AHEAD * 1.6) continue;
+        const [x1, y1] = to(ax, az);
+        const [x2, y2] = to(q.x + q.ux * q.to, q.z + q.uz * q.to);
+        c.moveTo(x1, y1);
+        c.lineTo(x2, y2);
+      }
+      c.stroke();
+    }
+
+    // The route, walked by distance rather than drawn from a cached path,
+    // because the path moves every frame — in BLUE, the one colour nothing
+    // else on the map uses.
     const step = Math.max(track.step * 2, 6);
     const draw = (width, style) => {
       c.lineWidth = width;
@@ -498,8 +576,8 @@ export class Hud {
       }
       c.stroke();
     };
-    draw(Math.max(6, 15 * scale * 0.9), 'rgba(10, 14, 20, 0.75)');
-    draw(Math.max(4, 11 * scale * 0.9), 'rgba(240, 245, 250, 0.92)');
+    draw(Math.max(6, 15 * scale * 0.9), 'rgba(8, 18, 38, 0.8)');
+    draw(Math.max(4, 11 * scale * 0.9), '#4593f0');
 
     // Where it ends, if the end is in view — the thing the whole stage is for.
     if (!track.closed && here + AHEAD > track.length - 4) {
@@ -518,11 +596,15 @@ export class Hud {
       // Traffic is not on the map. Ninety commuters and three police cars is
       // ninety-three dots, and the three that matter are indistinguishable in
       // it — which is the opposite of what a minimap is for.
-      if (car.traffic) continue;
+      if (car.traffic || car.isPlayer) continue;
       const [x, y] = to(car.vehicle.x, car.vehicle.z);
       if (x < -20 || x > W + 20 || y < -20 || y > W + 20) continue;
       this._carDot(c, x, y, car);
     }
+    // The map is rotated so the heading is up, which makes the player's
+    // chevron a fixture: centre of the panel, pointing at the top of it.
+    this._chevron(c, cx, cy, 0);
+    });
   }
 
   // One car's dot. Pursuers get a light bar rather than a body colour: three

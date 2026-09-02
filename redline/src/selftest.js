@@ -4017,6 +4017,42 @@ function checkHud(game) {
   notes.push(drew('tacho-c') ? 'tacho drawn' : 'TACHO BLANK');
   notes.push(drew('map-c') ? 'map drawn' : 'MAP BLANK');
 
+  // The map's palette IS its legend: the route in blue, the fake streets in
+  // white, and one white chevron. A map that lost its streets or drew the
+  // route in the streets' colour would still be "drawn", so the colours are
+  // counted, not assumed — in both modes.
+  {
+    const mapPx = () => {
+      const cv = el('map-c');
+      const d = cv.getContext('2d').getImageData(0, 0, cv.width, cv.height).data;
+      let blue = 0, white = 0;
+      for (let i = 0; i < d.length; i += 4) {
+        if (d[i + 3] < 60) continue;
+        const r = d[i], g = d[i + 1], b = d[i + 2];
+        if (b > 140 && b > r + 50 && g > r) blue++;
+        else if (r > 195 && g > 195 && b > 195) white++;
+      }
+      return { blue, white };
+    };
+    hud.update(1 / 60);
+    const circuit = mapPx();
+    post('/__frame/map-circuit', el('map-c').toDataURL('image/png'));
+    const was2 = { route: race.route, limit: race.limit };
+    race.route = race.distanceAlong(race.player) + 1500;
+    race.limit = 200;
+    hud.update(1 / 60);
+    const rolling = mapPx();
+    post('/__frame/map-rolling', el('map-c').toDataURL('image/png'));
+    race.route = was2.route; race.limit = was2.limit;
+    hud.update(1 / 60);
+    notes.push(circuit.blue > 400 && rolling.blue > 200
+      ? `the route is blue in both maps (${circuit.blue}/${rolling.blue} px)`
+      : `THE ROUTE IS NOT BLUE (${circuit.blue}/${rolling.blue} px)`);
+    notes.push(circuit.white > 150 && rolling.white > 60
+      ? `the streets are white in both (${circuit.white}/${rolling.white} px)`
+      : `THE STREETS ARE MISSING (${circuit.white}/${rolling.white} px)`);
+  }
+
   // The speedometer, and whether its needle is attached to anything.
   //
   // "It drew something" is what a dial that has stopped reading the speed

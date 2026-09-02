@@ -4049,7 +4049,19 @@ function checkHud(game) {
     hud._webFor = null;
     const web2 = hud._streetWeb(race.track);
     hud._webFor = webFor; hud._web = web1;
-    if (web1.length < race.track.length / 46) notes.push(`THE WEB IS THIN (${web1.length} segments)`);
+    // A floor AND a ceiling: too few reads as whiskers, too many as graph
+    // paper the route has to fight. And the density tracks the layout's own
+    // block pitch, so the estuary's tight city maps busier than downtown.
+    if (web1.length < race.track.length / 90) notes.push(`THE WEB IS THIN (${web1.length} segments)`);
+    if (web1.length > race.track.length / 14) notes.push(`THE WEB IS GRAPH PAPER (${web1.length} segments)`);
+    {
+      const est2 = new Track(LAYOUTS.estuary);
+      const webE = hud._streetWeb(est2);
+      const perM = webE.length / est2.length;
+      const perM1 = web1.length / race.track.length;
+      hud._webFor = webFor; hud._web = web1;
+      if (perM <= perM1) notes.push('THE TIGHT CITY DOES NOT MAP DENSER THAN DOWNTOWN');
+    }
     if (web1.length !== web2.length
       || web1.some((q, i2) => Math.abs(q[0] - web2[i2][0]) > 1e-6)) {
       notes.push('THE WEB IS NOT SEEDED — the map shimmers');

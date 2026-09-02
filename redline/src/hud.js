@@ -406,18 +406,24 @@ export class Hud {
         seed = (seed * 1103515245 + 12345) & 0x7fffffff;
         return seed / 0x7fffffff;
       };
-      const step = 34;
+      // The spawn interval comes off the layout's own block pitch, so the
+      // map's density reflects the city's: the estuary's small tight blocks
+      // give a busier web than downtown's long ones, and a layout with no
+      // pitch of its own gets the default city's. One knob, already tuned by
+      // the road it belongs to.
+      const pitch = track.layout.pitch || { x: 52, z: 45 };
+      const step = (pitch.x + pitch.z) * 0.72;
       for (let d = 0; d < track.length; d += step) {
         const p = track.atDistance(d);
         const along = Math.atan2(p.dirX, p.dirZ);
-        const pieces = 1 + Math.floor(rnd() * 3);
+        const pieces = rnd() < 0.35 ? 2 : 1;
         for (let k = 0; k < pieces; k++) {
           const roll = rnd();
           if (roll < 0.42) {
             // A crossing: straight through the road, longer on one side.
             const ang = along + Math.PI / 2 + (rnd() - 0.5) * 0.12;
             const ux = Math.sin(ang), uz = Math.cos(ang);
-            const l1 = 30 + rnd() * 150, l2 = 30 + rnd() * 150;
+            const l1 = 25 + rnd() * 85, l2 = 25 + rnd() * 85;
             segs.push([p.x - ux * l1, p.z - uz * l1, p.x + ux * l2, p.z + uz * l2]);
           } else if (roll < 0.72) {
             // An avenue fragment, a block out, running with the road.
@@ -426,16 +432,16 @@ export class Hud {
             const cx = p.x + p.nx * side * off, cz = p.z + p.nz * side * off;
             const ang = along + (rnd() - 0.5) * 0.1;
             const ux = Math.sin(ang), uz = Math.cos(ang);
-            const len = 80 + rnd() * 220;
+            const len = 70 + rnd() * 130;
             segs.push([cx - ux * len / 2, cz - uz * len / 2, cx + ux * len / 2, cz + uz * len / 2]);
-            // Avenues carry their own cross streets — one or two short bars
-            // across them — which is what knits the pieces into a grid the eye
-            // reads as blocks rather than as strokes.
-            const bars = 1 + Math.floor(rnd() * 2);
-            for (let b2 = 0; b2 < bars; b2++) {
+            // A third of the avenues carry one short cross-bar — enough to
+            // knit the strokes into blocks here and there without turning the
+            // panel into graph paper. The first cut gave every avenue one or
+            // two, and the map was so busy the route had to fight it.
+            if (rnd() < 0.35) {
               const at2 = (rnd() - 0.5) * len * 0.8;
               const bx = cx + ux * at2, bz = cz + uz * at2;
-              const bl = 25 + rnd() * 60;
+              const bl = 22 + rnd() * 45;
               segs.push([bx - uz * bl, bz + ux * bl, bx + uz * bl, bz - ux * bl]);
             }
           } else {
@@ -443,12 +449,12 @@ export class Hud {
             const side = rnd() < 0.5 ? -1 : 1;
             const ang = along + Math.PI / 2 * side + (rnd() - 0.5) * 0.14;
             const ux = Math.sin(ang), uz = Math.cos(ang);
-            const l1 = 30 + rnd() * 70;
+            const l1 = 26 + rnd() * 55;
             const ex = p.x + ux * l1, ez = p.z + uz * l1;
             segs.push([p.x, p.z, ex, ez]);
             const turn = (rnd() < 0.5 ? 1 : -1) * (rnd() < 0.4 ? Math.PI / 4 : Math.PI / 2);
             const a2 = ang + turn;
-            const l2 = 35 + rnd() * 90;
+            const l2 = 30 + rnd() * 65;
             segs.push([ex, ez, ex + Math.sin(a2) * l2, ez + Math.cos(a2) * l2]);
           }
         }
@@ -497,7 +503,10 @@ export class Hud {
     const c = this.map;
     const track = race.track;
     const v = player.vehicle;
-    const AHEAD = 340;                          // metres of road shown
+    // Two hundred metres of road, not three-forty: a navigator is about the
+    // next two corners, and zoom is what makes the chevron feel like it is
+    // moving.
+    const AHEAD = 210;
     const scale = W / (AHEAD * 1.35);
     const cx = W / 2, cy = W * 0.66;            // the car sits low, looking up
 
@@ -528,7 +537,7 @@ export class Hud {
     const here = player.loc ? player.loc.s : 0;
     const web = this._streetWeb(track);
     if (web.length) {
-      c.lineWidth = Math.max(2.2, 4.6 * scale * 0.9);
+      c.lineWidth = Math.min(6, Math.max(2.2, 4.6 * scale * 0.9));
       c.strokeStyle = 'rgba(235, 240, 246, 0.7)';
       c.beginPath();
       for (const q of web) {
@@ -561,8 +570,8 @@ export class Hud {
       }
       c.stroke();
     };
-    draw(Math.max(6, 15 * scale * 0.9), 'rgba(8, 18, 38, 0.8)');
-    draw(Math.max(4, 11 * scale * 0.9), '#4593f0');
+    draw(Math.min(18, Math.max(6, 15 * scale * 0.9)), 'rgba(8, 18, 38, 0.8)');
+    draw(Math.min(13, Math.max(4, 11 * scale * 0.9)), '#4593f0');
 
     // Where it ends, if the end is in view — the thing the whole stage is for.
     if (!track.closed && here + AHEAD > track.length - 4) {

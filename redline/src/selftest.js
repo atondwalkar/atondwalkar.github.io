@@ -4071,6 +4071,34 @@ function checkHud(game) {
     if (deckWeb.length) notes.push(`${deckWeb.length} STREETS DRAWN OVER OPEN WATER`);
   }
 
+  // The map on an OPEN route, drawn for real.
+  //
+  // The route-mode checks above flip the live race into route mode on a
+  // CLOSED track, and closed short-circuits `!track.closed` branches — a
+  // crash that only open routes reach sailed through exactly that way. So the
+  // rolling map is driven once against a genuinely open track.
+  {
+    const open2 = new Track(LAYOUTS.run);
+    const fakeRace = {
+      track: open2, cars: [], route: open2.length, escape: null, drift: null,
+      limit: 100, time: 10, state: 'racing', distanceAlong: () => 500,
+    };
+    const p2 = open2.atDistance(500);
+    const fakePlayer = {
+      vehicle: { x: p2.x, z: p2.z, yaw: Math.atan2(p2.dirX, p2.dirZ) },
+      loc: open2.locate(p2.x, p2.z), isPlayer: true,
+    };
+    fakeRace.cars = [fakePlayer];
+    try {
+      hud._rollingMap(fakeRace, fakePlayer, 432);
+      notes.push('the map draws an open route');
+    } catch (e) {
+      notes.push(`THE MAP THROWS ON AN OPEN ROUTE: ${e.message}`);
+    }
+    hud.trackChanged();
+    hud.update(1 / 60);
+  }
+
   // The speedometer, and whether its needle is attached to anything.
   //
   // "It drew something" is what a dial that has stopped reading the speed

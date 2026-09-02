@@ -534,16 +534,18 @@ export class Hud {
     // its own: it is the one place in the game where the streets are allowed
     // to be fiction, because a minimap is already a fiction about what the
     // world looks like from above.
-    const here = player.loc ? player.loc.s : 0;
+    // Every segment, every frame — the canvas clips to its own box, and that
+    // is the only clipping wanted. There was a distance cull here, and a cull
+    // keyed on a segment's midpoint makes streets POP IN as their middles
+    // cross the radius: the map looked like it was being drawn as you drove.
+    // The whole web is a few hundred line segments; drawing them all costs
+    // less than the pop-in did.
     const web = this._streetWeb(track);
     if (web.length) {
       c.lineWidth = Math.min(6, Math.max(2.2, 4.6 * scale * 0.9));
       c.strokeStyle = 'rgba(235, 240, 246, 0.7)';
       c.beginPath();
       for (const q of web) {
-        // Cheap cull by world distance to the car before projecting.
-        const mx = (q[0] + q[2]) / 2, mz = (q[1] + q[3]) / 2;
-        if ((mx - v.x) * (mx - v.x) + (mz - v.z) * (mz - v.z) > AHEAD * AHEAD * 1.7) continue;
         const [x1, y1] = to(q[0], q[1]);
         const [x2, y2] = to(q[2], q[3]);
         c.moveTo(x1, y1);
@@ -552,38 +554,42 @@ export class Hud {
       c.stroke();
     }
 
-    // The route, walked by distance rather than drawn from a cached path,
-    // because the path moves every frame — in BLUE, the one colour nothing
-    // else on the map uses.
-    const step = Math.max(track.step * 2, 6);
+    // The route, walked WHOLE — in BLUE, the one colour nothing else on the
+    // map uses. It used to be walked a window ahead of the car, which is the
+    // same pop-in as the streets had: road appearing as you approached it. A
+    // full walk of the longest track is under fourteen hundred points a pass,
+    // and the canvas clips what falls outside the box for free.
+    const step = Math.max(track.step * 2, 8);
     const draw = (width, style) => {
       c.lineWidth = width;
       c.strokeStyle = style;
       c.beginPath();
       let first = true;
-      for (let d = -AHEAD * 0.35; d <= AHEAD; d += step) {
-        const s = here + d;
-        if (!track.closed && (s < 0 || s > track.length)) continue;
-        const p = track.atDistance(s);
+      for (let d = 0; d <= track.length; d += step) {
+        const p = track.atDistance(d);
         const [x, y] = to(p.x, p.z);
         if (first) { c.moveTo(x, y); first = false; } else { c.lineTo(x, y); }
       }
+      if (track.closed) c.closePath();
       c.stroke();
     };
     draw(Math.min(18, Math.max(6, 15 * scale * 0.9)), 'rgba(8, 18, 38, 0.8)');
     draw(Math.min(13, Math.max(4, 11 * scale * 0.9)), '#4593f0');
 
-    // Where it ends, if the end is in view — the thing the whole stage is for.
-    if (!track.closed && here + AHEAD > track.length - 4) {
+    // Where it ends — always drawn, clipped by the box like everything else.
+    // The "only when near" condition it used to carry read a variable the
+    // whole-road rewrite removed, and it survived the tests because they run
+    // on a closed track, where the short-circuit never reached it: an open
+    // route would have thrown on its first frame. The condition earned
+    // nothing anyway — a marker off the panel costs two line calls.
+    if (!track.closed) {
       const e = track.atDistance(track.length - 2);
-      const [ex, ey] = to(e.x, e.z);
       c.strokeStyle = '#35d06a';
       c.lineWidth = 4;
       c.beginPath();
       c.moveTo(...to(e.x + e.nx * 14, e.z + e.nz * 14));
       c.lineTo(...to(e.x - e.nx * 14, e.z - e.nz * 14));
       c.stroke();
-      void ex; void ey;
     }
 
     for (const car of race.cars) {

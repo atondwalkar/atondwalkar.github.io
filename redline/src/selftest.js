@@ -16,7 +16,7 @@ import { buildCar } from './carmodels.js';
 import { Driver, Cruiser, BRAKE_G } from './ai.js';
 import { Race, defaultField } from './race.js';
 import { Track, LAYOUTS, disposeTrack } from './track.js';
-import { CAR, RACE, AI, RIVAL, POLICE, SELECTABLE } from './defs.js';
+import { CAR, RACE, AI, RIVAL, POLICE, TRAFFIC, SELECTABLE } from './defs.js';
 import { clamp, lerp, lapTime, dist2D, angleDiff } from './utils.js';
 import { SHOTS, cameraFrame } from './camera.js';
 import { Cutscene, SCRIPTS } from './cutscene.js';
@@ -1245,6 +1245,36 @@ function checkNewStages(game) {
     if (offT > 7) bad.push(`the pack spent ${offT.toFixed(1)} car-seconds off the estuary`);
   }
 
+  // --- traffic looks like traffic.
+  //
+  // Every traffic livery takes the civilian path: real bodies with tall glass
+  // and lights, not racing silhouettes in grey paint. And the model honours
+  // the same contract syncModel drives — four wheels with pivots, a tail
+  // material whose opacity can follow the brakes — because traffic that drove
+  // with frozen wheels would be spotted in the first mirror glance.
+  for (const livery of TRAFFIC) {
+    if (!livery.civ) { bad.push('a traffic livery still wears a racing body'); continue; }
+    const m = buildCar(livery);
+    const w = m.userData.wheels || [];
+    if (w.length !== 4) bad.push(`a ${livery.civ} has ${w.length} wheels`);
+    if (!m.userData.tails) bad.push(`a ${livery.civ} has no brake lights`);
+    let minY = Infinity, maxY = -Infinity;
+    m.traverse((o) => {
+      if (!o.isMesh || !o.geometry.boundingBox) o.geometry && o.geometry.computeBoundingBox();
+    });
+    m.traverse((o) => {
+      if (!o.isMesh || !o.geometry.boundingBox) return;
+      minY = Math.min(minY, o.geometry.boundingBox.min.y + o.position.y);
+      maxY = Math.max(maxY, o.geometry.boundingBox.max.y + o.position.y);
+    });
+    // Taller than a racer — the racing roofline tops out at about 1.2 and a
+    // civilian greenhouse must not.
+    if (maxY < 1.35) bad.push(`a ${livery.civ} is ${maxY.toFixed(2)} m tall — that is a race car`);
+    m.traverse((o) => { if (o.geometry) o.geometry.dispose(); });
+  }
+  const civKinds = new Set(TRAFFIC.map((q) => q.civ));
+  if (civKinds.size < 4) bad.push(`the road only carries ${civKinds.size} kinds of car`);
+
   // --- traffic on a loop is a fixed population.
   //
   // The estuary is the first CLOSED stage with traffic, and the top-up that
@@ -1371,7 +1401,8 @@ function checkNewStages(game) {
 
   const ok = bad.length === 0;
   return `${ok ? 'a pack to race and a clock to feed' : `WRONG — ${bad[0]}`} — ` +
-    `the estuary fields 3 rivals plus traffic and the pack stays on the road; ` +
+    `the estuary fields 3 rivals plus civilian traffic — ${civKinds.size} body kinds, ` +
+    `all with wheels and brake lights — and the pack stays on the road; ` +
     `the skyline takes ${crossT.toFixed(0)}s against a ${sky.limit}s clock plus ` +
     `${sky.checkpoints.at.length}×${sky.checkpoints.bonus}s in lines, each one makeable, ` +
     `paid once each`;
@@ -4553,6 +4584,31 @@ function dumpFrames(game) {
       shot(name, [p3.x - p3.dirX * (at < 0.5 ? 900 : -900) + p3.nx * 420, p3.y + 260,
         p3.z - p3.dirZ * (at < 0.5 ? 900 : -900) + p3.nz * 420],
       [p3.x, p3.y, p3.z], 52);
+    }
+
+    // The civilian fleet, lined up for inspection. This is the picture the
+    // change is FOR — a table of proportions passes every numeric check and
+    // can still come out looking like a fridge on wheels.
+    {
+      // Strung ALONG the road, photographed from beside it — the framing the
+      // pursuit shot already proved out. Spread across the road they hid
+      // behind one another and the picture showed one van.
+      const line = TRAFFIC.map((livery, i) => {
+        const m = buildCar(livery);
+        const p3 = br.atDistance(600 + i * 7);
+        m.position.set(p3.x + p3.nx * ((i % 2) ? 2.2 : -2.2), p3.y, p3.z);
+        m.rotation.order = 'YXZ';
+        m.rotation.y = Math.atan2(p3.dirX, p3.dirZ);
+        game.scene.add(m);
+        return m;
+      });
+      const mid3 = br.atDistance(600 + 3.5 * 7);
+      shot('civvies', [mid3.x + mid3.nx * 13, mid3.y + 3.4, mid3.z + mid3.nz * 13],
+        [mid3.x, mid3.y + 0.8, mid3.z], 52);
+      for (const m of line) {
+        game.scene.remove(m);
+        m.traverse((o) => { if (o.geometry) o.geometry.dispose(); });
+      }
     }
 
     // From the deck, looking up it: six lanes, traffic in them, a tower ahead.

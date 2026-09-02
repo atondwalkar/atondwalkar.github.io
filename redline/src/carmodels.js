@@ -181,7 +181,129 @@ let template = null;
 export function setCarTemplate(group) { template = group; }
 export const usingExternalModel = () => !!template;
 
+// A civilian car: the kind you actually see on a road.
+//
+// Not a fifth racing silhouette. The racing builder exists to make four cars
+// you can tell apart at two hundred metres in a mirror, and everything about
+// it says so — wings, diffusers, door numbers, a windscreen banner. Traffic
+// wants the opposite: unremarkable three-box shapes with tall glass, small
+// wheels, bumpers, and lights on, because it is night and these people are
+// just driving home.
+//
+// Five bodies. Proportions are the whole difference between a hatchback and a
+// van at this poly count, so that is what the table holds.
+const CIVVY = {
+  //        length, width, sill,  roof, cabin start/end (fractions of length)
+  hatch: { L: 3.9, W: 1.68, sill: 0.74, roof: 1.47, c0: 0.30, c1: 0.94, bonnet: 0.62 },
+  sedan: { L: 4.5, W: 1.72, sill: 0.72, roof: 1.42, c0: 0.30, c1: 0.78, bonnet: 0.62 },
+  suv: { L: 4.4, W: 1.80, sill: 0.86, roof: 1.66, c0: 0.28, c1: 0.92, bonnet: 0.78 },
+  van: { L: 4.7, W: 1.82, sill: 0.80, roof: 1.88, c0: 0.20, c1: 0.97, bonnet: 0.70 },
+  pickup: { L: 5.0, W: 1.84, sill: 0.84, roof: 1.72, c0: 0.26, c1: 0.55, bonnet: 0.80 },
+};
+
+export function buildCivvy(livery) {
+  const c = CIVVY[livery.civ] || CIVVY.sedan;
+  const root = new THREE.Group();
+  const b = new MeshBuilder();
+  const body = livery.body;
+  const HW = c.W / 2;
+  const half = c.L / 2;
+  const GLASS = 0x11161c;
+
+  // The lower body: one box, with a bumper strip front and rear.
+  b.add(G.box(c.W, c.sill - 0.30, c.L), body, { y: (c.sill + 0.30) / 2, mottle: 0.04 });
+  b.add(G.box(c.W - 0.06, 0.16, 0.24), 0x2a2d31, { y: 0.44, z: half - 0.08 });
+  b.add(G.box(c.W - 0.06, 0.16, 0.24), 0x2a2d31, { y: 0.44, z: -half + 0.08 });
+
+  // The bonnet, from the cabin's front edge to the nose.
+  const noseZ = half, cabF = half - c.c0 * c.L, cabR = half - c.c1 * c.L;
+  b.add(G.box(c.W - 0.04, 0.16, noseZ - cabF), body,
+    { y: c.bonnet, z: (noseZ + cabF) / 2, mottle: 0.04 });
+  // A boot, where the body has one behind the cabin.
+  if (cabR > -half + 0.2) {
+    b.add(G.box(c.W - 0.04, 0.16, cabR + half), body,
+      { y: c.civTail ?? c.bonnet, z: (cabR - half) / 2, mottle: 0.04 });
+  }
+
+  // The greenhouse: pillars as a slab of paint, glass inset all round. Tall
+  // glass is most of what says "not a racing car" — the racers are all slit
+  // windows and roofline; these you could see a person in.
+  const gh = c.roof - c.bonnet;
+  const gLen = cabF - cabR;
+  b.add(G.box(c.W - 0.22, gh, gLen), body,
+    { y: c.bonnet + gh / 2, z: (cabF + cabR) / 2, mottle: 0.04 });
+  b.add(G.box(c.W - 0.10, gh - 0.24, gLen - 0.36), GLASS,
+    { y: c.bonnet + gh / 2, z: (cabF + cabR) / 2 });
+  // Windscreen and rear glass, raked.
+  b.add(G.box(c.W - 0.34, gh - 0.18, 0.30), GLASS,
+    { y: c.bonnet + gh / 2 - 0.02, z: cabF - 0.02, rx: -0.28 });
+  b.add(G.box(c.W - 0.36, gh - 0.22, 0.26), GLASS,
+    { y: c.bonnet + gh / 2 - 0.02, z: cabR + 0.02, rx: 0.24 });
+
+  // A pickup gets its bed; a taxi gets its light.
+  if (livery.civ === 'pickup') {
+    b.add(G.box(c.W - 0.08, 0.34, half + cabR - 0.1), 0x33373c,
+      { y: c.sill + 0.10, z: (cabR - half) / 2 });
+  }
+  if (livery.taxi) {
+    b.add(G.box(0.62, 0.16, 0.30), 0x2a2d31, { y: c.roof + 0.10, z: (cabF + cabR) / 2 });
+  }
+  root.add(b.build());
+
+  // Lights, lit — it is night and these are the cars with somewhere to be.
+  // Head and side lamps in one unlit mesh; the tails on their own material so
+  // they can flare under braking through the same contract the racers use.
+  const lit = new MeshBuilder();
+  for (const sx of [-1, 1]) {
+    lit.add(G.box(0.30, 0.12, 0.06), 0xfff2cc, { x: sx * (HW - 0.28), y: 0.66, z: half - 0.02 });
+  }
+  if (livery.taxi) lit.add(G.box(0.56, 0.10, 0.24), 0xffd75e, { y: c.roof + 0.12, z: (cabF + cabR) / 2 });
+  root.add(lit.build(VC_UNLIT));
+
+  const tb = new MeshBuilder();
+  for (const sx of [-1, 1]) {
+    tb.add(G.box(0.30, 0.12, 0.05), 0xff2a1c, { x: sx * (HW - 0.28), y: 0.64, z: -half + 0.01 });
+  }
+  const tailMat = new THREE.MeshBasicMaterial({
+    vertexColors: true, transparent: true, opacity: 0.34,
+  });
+  const tails = tb.build(tailMat);
+  root.add(tails);
+  root.userData.tails = tailMat;
+
+  // Wheels: smaller and narrower than a racer's, tucked at the corners.
+  const WR = 0.30;
+  const wheels = [];
+  for (const spec of [
+    { x: -HW + 0.18, z: half - 0.72, front: true }, { x: HW - 0.18, z: half - 0.72, front: true },
+    { x: -HW + 0.18, z: -half + 0.78, front: false }, { x: HW - 0.18, z: -half + 0.78, front: false },
+  ]) {
+    const pivot = new THREE.Group();
+    pivot.position.set(spec.x, WR, spec.z);
+    const mesh = buildWheel(WR, 0.20, spec.front);
+    pivot.add(mesh);
+    root.add(pivot);
+    wheels.push({ pivot, mesh, front: spec.front });
+  }
+
+  const shadow = new THREE.Mesh(
+    new THREE.PlaneGeometry(c.W * 1.05, c.L * 0.94),
+    new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.30, depthWrite: false }),
+  );
+  shadow.rotation.x = -Math.PI / 2;
+  shadow.position.y = 0.025;
+  root.add(shadow);
+
+  root.userData.wheels = wheels;
+  root.userData.shadow = shadow;
+  root.userData.livery = livery;
+  return root;
+}
+
 export function buildCar(livery) {
+  // Civilian bodies take their own path: the racing builder would give them
+  // wings and door numbers, and no amount of grey paint hides a wing.
+  if (livery.civ) return buildCivvy(livery);
   if (template) return cloneTemplate(livery);
   const root = new THREE.Group();
   const b = new MeshBuilder();

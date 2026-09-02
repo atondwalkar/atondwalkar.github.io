@@ -193,13 +193,19 @@ export const POLICE = {
 // told apart at two hundred metres; these are chosen NOT to be — a bridge full
 // of racing colours reads as more competitors, and the whole point of them is
 // that they are not in the race.
+// Civilian bodies (`civ`), not racing silhouettes in grey paint: hatchbacks,
+// sedans, a crossover, a minivan, a pickup, and one yellow cab — the mix an
+// actual road carries at night. `shape` stays for anything that falls back to
+// the racing builder, but nothing here should.
 export const TRAFFIC = [
-  { name: '', body: 0xb8bcc0, trim: 0x2b3038, num: 0, shape: 'muscle' },
-  { name: '', body: 0x38424e, trim: 0x1a1f26, num: 0, shape: 'gt' },
-  { name: '', body: 0x8f9aa2, trim: 0x2a3038, num: 0, shape: 'muscle' },
-  { name: '', body: 0x6d5a48, trim: 0x2a231c, num: 0, shape: 'gt' },
-  { name: '', body: 0x2f4a3c, trim: 0x18241d, num: 0, shape: 'muscle' },
-  { name: '', body: 0xd8d4cc, trim: 0x33383e, num: 0, shape: 'gt' },
+  { name: '', body: 0xb8bcc0, trim: 0x2b3038, num: 0, shape: 'gt', civ: 'sedan' },
+  { name: '', body: 0xd8d4cc, trim: 0x33383e, num: 0, shape: 'gt', civ: 'hatch' },
+  { name: '', body: 0x38424e, trim: 0x1a1f26, num: 0, shape: 'gt', civ: 'suv' },
+  { name: '', body: 0x6d5a48, trim: 0x2a231c, num: 0, shape: 'gt', civ: 'pickup' },
+  { name: '', body: 0x2f4a3c, trim: 0x18241d, num: 0, shape: 'gt', civ: 'van' },
+  { name: '', body: 0x23262b, trim: 0x33383e, num: 0, shape: 'gt', civ: 'sedan' },
+  { name: '', body: 0x7a2e28, trim: 0x2a231c, num: 0, shape: 'gt', civ: 'hatch' },
+  { name: '', body: 0xd9b13b, trim: 0x1a1f26, num: 0, shape: 'gt', civ: 'sedan', taxi: true },
 ];
 
 export const HULL = {

@@ -6932,19 +6932,30 @@ function processDynEq(){
   }));
 }
 const EQ_FR_N=160;
-let eqFr=null, eqMag=null, eqPh=null, eqMagAcc=null, eqProbe=null;
-let eqProbeCtx=null;
-function eqProbeBands(){
-  if(!eqProbe){
-    const pc=new OfflineAudioContext(1,128,(ctx&&ctx.sampleRate)||44100);
-    eqProbeCtx=pc;
-    eqProbe=EQ_FREQS.map((f,i)=>{
-      const b=pc.createBiquadFilter();
-      b.type = i===0 ? 'lowshelf' : i===EQ_FREQS.length-1 ? 'highshelf' : 'peaking';
-      return b;
-    });
+let eqFr=null, eqMag=null, eqPh=null, eqMagAcc=null;
+/* analytic |H| of a biquad over the plot grid — replaces the old probe OfflineAudioContext, which
+   created a fresh IIRFilterNode per shelf/pass band on EVERY redraw of a bypassed EQ (a node leak
+   that slowly bogged the whole page down). Trig tables cached per sample rate. */
+let eqTrig=null, eqTrigSr=0;
+function eqTrigTables(sr){
+  if(eqTrig && eqTrigSr===sr) return eqTrig;
+  const c1=new Float32Array(EQ_FR_N), s1=new Float32Array(EQ_FR_N), c2=new Float32Array(EQ_FR_N), s2=new Float32Array(EQ_FR_N);
+  for(let i=0;i<EQ_FR_N;i++){ const w=2*Math.PI*eqFr[i]/sr; c1[i]=Math.cos(w); s1[i]=Math.sin(w); c2[i]=Math.cos(2*w); s2[i]=Math.sin(2*w); }
+  eqTrigSr=sr; return eqTrig={c1,s1,c2,s2};
+}
+function eqAccumBiquad(ff,fb,acc,sr){
+  const t=eqTrigTables(sr), b0=ff[0],b1=ff[1],b2=ff[2], a0=fb[0],a1=fb[1],a2=fb[2];
+  for(let i=0;i<EQ_FR_N;i++){
+    const nr=b0+b1*t.c1[i]+b2*t.c2[i], ni=-(b1*t.s1[i]+b2*t.s2[i]);
+    const dr=a0+a1*t.c1[i]+a2*t.c2[i], di=-(a1*t.s1[i]+a2*t.s2[i]);
+    acc[i]*=Math.sqrt((nr*nr+ni*ni)/Math.max(1e-24,dr*dr+di*di));
   }
-  return eqProbe;
+}
+function rbjCoef(type,f,gDb,Q,sr){                              // peaking / notch / bandpass (WebAudio-compatible RBJ)
+  const A=Math.pow(10,gDb/40), w0=2*Math.PI*Math.min(f,sr*0.49)/sr, cs=Math.cos(w0), al=Math.sin(w0)/(2*Math.max(0.05,Q));
+  if(type==='peaking') return [[1+al*A,-2*cs,1-al*A],[1+al/A,-2*cs,1-al/A]];
+  if(type==='notch')   return [[1,-2*cs,1],[1+al,-2*cs,1-al]];
+  return [[al,0,-al],[1+al,-2*cs,1-al]];                        // bandpass
 }
 function drawEq(fx){
   const cv=fx.eqCv;
@@ -6997,12 +7008,9 @@ function drawEq(fx){
     eqPh=new Float32Array(EQ_FR_N); eqMagAcc=new Float32Array(EQ_FR_N);
     for(let i=0;i<EQ_FR_N;i++) eqFr[i]=fxAxisF(i/(EQ_FR_N-1));
   }
-  let rkey='';
-  if(n && n.bands){
-    const p=fx.params; rkey=(n.dynOn?'D':'')+p.damt;
-    for(let i=0;i<16;i++) rkey+='|'+p['b'+i]+','+p['f'+i]+','+p['q'+i]+','+p['x'+i]+','+bandType(fx,i);
-  }
-  if(n && n.bands && !n.dynOn && fx._eqRespKey===rkey && fx._eqResp){
+  let rkey=(n&&n.bands&&n.dynOn?'D':'')+fx.params.damt;
+  { const p=fx.params; for(let i=0;i<16;i++) rkey+='|'+p['b'+i]+','+p['f'+i]+','+p['q'+i]+','+p['x'+i]+','+bandType(fx,i); }
+  if(!(n && n.bands && n.dynOn) && fx._eqRespKey===rkey && fx._eqResp){
     eqMagAcc.set(fx._eqResp);
   }else if(n && n.bands){
     eqMagAcc.fill(1);
@@ -7013,19 +7021,17 @@ function drawEq(fx){
     fx._eqRespKey=rkey; fx._eqResp=fx._eqResp||new Float32Array(EQ_FR_N); fx._eqResp.set(eqMagAcc);
   }else{
     eqMagAcc.fill(1);
-    eqProbeBands().forEach((b,i)=>{
+    const sr=(ctx&&ctx.sampleRate)||44100;
+    for(let i=0;i<16;i++){
       const ty=EQ_TYPES[bandType(fx,i)];
-      if(EQ_IIR_TYPES[ty]){
-        const sh=shelfNode(eqProbeCtx,ty,bandFreq(fx,i),bandOn(fx,i)?(fx.params['b'+i]||0):0,fx.params['q'+i]||0.7);
-        sh.getFrequencyResponse(eqFr,eqMag,eqPh); for(let j=0;j<EQ_FR_N;j++) eqMagAcc[j]*=eqMag[j]; return;
-      }
-      b.type=ty;
-      b.gain.value=bandOn(fx,i)?(fx.params['b'+i]||0):0;
-      b.frequency.value=bandFreq(fx,i);
-      b.Q.value=fx.params['q'+i]||(ty==='peaking'?2.2:0.7);
-      b.getFrequencyResponse(eqFr,eqMag,eqPh);
-      for(let j=0;j<EQ_FR_N;j++) eqMagAcc[j]*=eqMag[j];
-    });
+      const gv=bandOn(fx,i)?(fx.params['b'+i]||0):0, fv=bandFreq(fx,i), qv=fx.params['q'+i]||(ty==='peaking'?2.2:0.7);
+      let co;
+      if(ty==='lowpass'||ty==='highpass') co=passCoef(ty,fv,qv,sr);
+      else if(ty==='lowshelf'||ty==='highshelf') co=shelfCoef(ty,fv,gv,qv,sr);
+      else co=rbjCoef(ty,fv,gv,qv,sr);
+      eqAccumBiquad(co[0],co[1],eqMagAcc,sr);
+    }
+    fx._eqRespKey=rkey; fx._eqResp=fx._eqResp||new Float32Array(EQ_FR_N); fx._eqResp.set(eqMagAcc);
   }
   g.beginPath();
   for(let i=0;i<EQ_FR_N;i++){

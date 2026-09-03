@@ -431,6 +431,18 @@
     text-shadow:0 1px 0 rgba(0,0,0,.8);
   }
   .knob-row{display:flex;gap:14px;flex-wrap:wrap;align-items:flex-start;flex:1}
+  /* Air: two hero knobs + link + trim, modelled on the classic two-knob enhancer layout */
+  .air-panel{display:flex;flex-direction:column;gap:10px;align-items:center;justify-content:center;padding:12px 8px;flex:1}
+  .air-row{display:flex;gap:24px;align-items:center}
+  .knob-wrap.air-knob{width:112px;gap:4px}
+  .knob-wrap.air-knob .knob{width:84px;height:84px}
+  .knob-wrap.air-knob .knob i{height:30px;width:3.5px;background:#bfe8ff;box-shadow:0 0 6px rgba(191,232,255,.55)}
+  .knob-wrap.air-knob .klab{font-size:11px;letter-spacing:.22em;text-transform:uppercase;color:var(--ink)}
+  .knob-wrap.air-knob .kread{font-size:12px;color:#bfe8ff}
+  .air-link{font-size:9px;letter-spacing:.14em;padding:4px 10px;border-radius:10px;color:var(--ink-dim);align-self:center}
+  .air-link.on{background:#bfe8ff;border-color:#bfe8ff;color:#111}
+  .air-vu{width:min(340px,92%);height:5px;background:#10141b;border:1px solid var(--line);border-radius:3px;overflow:hidden}
+  .air-vu i{display:block;height:100%;width:0;background:linear-gradient(90deg,#7fd6ae,#bfe8ff);transition:width .06s linear}
   .knob-wrap{display:flex;flex-direction:column;align-items:center;gap:2px;width:52px}
   .knob{
     position:relative;width:36px;height:36px;border-radius:50%;cursor:ns-resize;touch-action:none;
@@ -845,6 +857,7 @@
         <option value="crush">Bitcrusher</option>
         <option value="stutter">Stutter</option>
         <option value="denoise">Noise Filter</option>
+        <option value="air">Air</option>
       </select>
       <button id="fx-add">Add FX</button>
       <button id="fx-paste" title="Paste the copied FX onto this track">Paste FX</button>
@@ -1236,7 +1249,22 @@ const FX_DEFS={
     spread:{min:0,max:30,step:0.5,val:0,fmt:v=>(+v).toFixed(1).replace(/\.0$/,'')+' ms',label:'mono spread'},
     monofreq:{min:20,max:500,step:5,val:20,fmt:hzFmt,label:'mono below'},
   }},
+  air:{name:'Air', color:'#bfe8ff', params:{                       // two-band dynamic HF enhancer (Dolby-A exciter trick)
+    mid: {min:0,max:100,step:1,val:30,fmt:v=>Math.round(v)+'%',label:'mid air',onSet:airLink},
+    high:{min:0,max:100,step:1,val:30,fmt:v=>Math.round(v)+'%',label:'high air',onSet:airLink},
+    trim:{min:-12,max:6,step:0.5,val:0,fmt:dbFmt,label:'trim'},
+  }},
 };
+/* LINK on the Air panel: dragging one hero knob carries the other by the same delta */
+function airLink(fx,key,v,prev){
+  if(!fx._airLink) return;
+  const other=key==='mid'?'high':'mid';
+  const nv=Math.max(0,Math.min(100,Math.round((fx.params[other]??30)+(v-prev))));
+  if(nv===fx.params[other]) return;
+  fx.params[other]=nv;
+  const kn=fx._knobs&&fx._knobs[other]; if(kn&&kn.isConnected) kn._refresh(nv);
+  applyFxTo(fx,fx.nodes);
+}
 Object.values(FX_DEFS).forEach(d=>{
   if(d.inst) return;
   d.params.ingain={min:-24,max:24,step:0.5,val:0,fmt:dbFmt,label:'in',io:true};
@@ -2041,6 +2069,55 @@ process(inputs,outputs,params){
  if(this.w>1073741824){ this.w-=1073741824; }                          // re-base the ring pointer (multiple of every power-of-two N) before int32 masks lie
  return true}}
 registerProcessor('s16-limit',S16Limit);
+class S16Air extends AudioWorkletProcessor{
+// Two parallel Butterworth high-passed bands (3.15 kHz presence / 9 kHz air — the classic Dolby-A corners),
+// each with a stereo-linked envelope and an upward lift that gives quiet HF up to +8 dB more than loud HF,
+// summed with dry. Smoothstep gain law + 3 ms slewing keep it click- and harshness-free. No saturation.
+static get parameterDescriptors(){return[
+ {name:'mid',defaultValue:30,minValue:0,maxValue:100},
+ {name:'high',defaultValue:30,minValue:0,maxValue:100},
+ {name:'trim',defaultValue:0,minValue:-12,maxValue:6}]}
+constructor(){super();
+ const mk=fc=>{ const w=2*Math.PI*fc/sampleRate, cw=Math.cos(w), al=Math.sin(w)/1.41421356, a0=1+al;
+  return {b0:(1+cw)/(2*a0), b1:-(1+cw)/a0, b2:(1+cw)/(2*a0), a1:-2*cw/a0, a2:(1-al)/a0, z1l:0,z2l:0,z1r:0,z2r:0}; };
+ this.fm=mk(3150); this.fh=mk(9000);
+ this.envM=0; this.envH=0;
+ this.aM=1-Math.exp(-1/(0.005*sampleRate)); this.rM=1-Math.exp(-1/(0.09*sampleRate));
+ this.aH=1-Math.exp(-1/(0.003*sampleRate)); this.rH=1-Math.exp(-1/(0.06*sampleRate));
+ this.gS=1-Math.exp(-1/(0.003*sampleRate));
+ this.wM=0; this.wH=0; this.tg=1;
+}
+process(inputs,outputs,params){
+ const inp=inputs[0], out=outputs[0]; if(!out||!out.length) return true;
+ const L=inp&&inp[0], R=(inp&&inp[1])||L, n=out[0].length;
+ if(!L){ for(let c=0;c<out.length;c++) out[c].fill(0); return true; }
+ const mid=params.mid[0], high=params.high[0], trim=params.trim[0];
+ const wMt=0.90*(mid/100)*(mid/100), wHt=1.25*(high/100)*(high/100);
+ const tgt=Math.pow(10,trim/20);
+ const idle=wMt===0&&wHt===0&&trim===0&&this.wM<1e-6&&this.wH<1e-6;
+ const lift=e=>{ const E=20*Math.log10(e+1e-9); let s2=(-12-E)/28; s2=s2<0?0:s2>1?1:s2; s2=s2*s2*(3-2*s2); return Math.pow(10,8*s2/20); };
+ const gM=lift(this.envM), gH=lift(this.envH), fm=this.fm, fh=this.fh;
+ for(let i=0;i<n;i++){
+  const xl=L[i], xr=R[i];
+  const ml=fm.b0*xl+fm.z1l; fm.z1l=fm.b1*xl-fm.a1*ml+fm.z2l; fm.z2l=fm.b2*xl-fm.a2*ml;
+  const mr=fm.b0*xr+fm.z1r; fm.z1r=fm.b1*xr-fm.a1*mr+fm.z2r; fm.z2r=fm.b2*xr-fm.a2*mr;
+  const hl=fh.b0*xl+fh.z1l; fh.z1l=fh.b1*xl-fh.a1*hl+fh.z2l; fh.z2l=fh.b2*xl-fh.a2*hl;
+  const hr=fh.b0*xr+fh.z1r; fh.z1r=fh.b1*xr-fh.a1*hr+fh.z2r; fh.z2r=fh.b2*xr-fh.a2*hr;
+  const rm=Math.abs(ml)>Math.abs(mr)?Math.abs(ml):Math.abs(mr);
+  const rh=Math.abs(hl)>Math.abs(hr)?Math.abs(hl):Math.abs(hr);
+  this.envM+=(rm>this.envM?this.aM:this.rM)*(rm-this.envM);
+  this.envH+=(rh>this.envH?this.aH:this.rH)*(rh-this.envH);
+  this.wM+=this.gS*(wMt*gM-this.wM); this.wH+=this.gS*(wHt*gH-this.wH); this.tg+=this.gS*(tgt-this.tg);
+  if(idle){ out[0][i]=xl; if(out[1]) out[1][i]=xr; continue; }
+  out[0][i]=(xl+this.wM*ml+this.wH*hl)*this.tg;
+  if(out[1]) out[1][i]=(xr+this.wM*mr+this.wH*hr)*this.tg;
+ }
+ if(Math.abs(fm.z1l)<1e-20&&Math.abs(fm.z2l)<1e-20){fm.z1l=0;fm.z2l=0;} if(Math.abs(fm.z1r)<1e-20&&Math.abs(fm.z2r)<1e-20){fm.z1r=0;fm.z2r=0;}
+ if(Math.abs(fh.z1l)<1e-20&&Math.abs(fh.z2l)<1e-20){fh.z1l=0;fh.z2l=0;} if(Math.abs(fh.z1r)<1e-20&&Math.abs(fh.z2r)<1e-20){fh.z1r=0;fh.z2r=0;}
+ if(this.envM<1e-12) this.envM=0; if(this.envH<1e-12) this.envH=0;
+ if(this.wM<1e-9&&wMt===0) this.wM=0; if(this.wH<1e-9&&wHt===0) this.wH=0;
+ return true}}
+registerProcessor('s16-air',S16Air);
 class S16Diag extends AudioWorkletProcessor{
  // dropout detector: the audio thread should call process() at a steady device-buffer cadence; a gap far
  // longer than the typical callback period means the render thread was late (underrun / stall)
@@ -2405,6 +2482,14 @@ function buildFxCore(fx,c,useWorklet){
     depth.connect(duckG.gain);
     return {in:inN, out:duckG, duckG, rect, env, thrShape, depth};
   }
+  if(t==='air'){
+    if(useWorklet){
+      const node=watchProcessor(new AudioWorkletNode(c,'s16-air',{outputChannelCount:[2]}),fx,'air');
+      return {in:node, out:node, airNode:node};
+    }
+    const g=c.createGain();                                   // no worklet support: transparent pass-through
+    return {in:g, out:g};
+  }
   if(t==='limit'){
     if(useWorklet){
       const node=watchProcessor(new AudioWorkletNode(c,'s16-limit',{outputChannelCount:[2]}),fx,'limit');
@@ -2754,6 +2839,12 @@ function applyFxTo(fx,n){
         return tc;
       });
       n.builtThr=thr;
+    }
+  }else if(fx.type==='air'){
+    if(n.airNode){
+      n.airNode.parameters.get('mid').value=p.mid??30;
+      n.airNode.parameters.get('high').value=p.high??30;
+      n.airNode.parameters.get('trim').value=p.trim??0;
     }
   }else if(fx.type==='limit'){
     if(n.limNode){
@@ -5993,9 +6084,11 @@ function makeKnob(fx,key,p){
   const set=v=>{
     v=Math.round(v/p.step)*p.step;
     v=+Math.max(p.min,Math.min(p.max,v)).toFixed(6);
+    const prev=fx.params[key];
     fx.params[key]=v;
     show(v);
     applyFx(fx);
+    if(p.onSet && v!==prev) p.onSet(fx,key,v,prev);
   };
   k.onpointerdown=e=>{
     e.preventDefault();
@@ -6481,6 +6574,19 @@ function renderFxPanel(){
       });
       if(def.sampler) buildSamplerExtras(gw,fx,def);
       slot.appendChild(gw);
+    }else if(fx.type==='air'){
+      const aw=document.createElement('div'); aw.className='eq-wrap air-panel';
+      const row=document.createElement('div'); row.className='air-row';
+      const kMid=makeKnob(fx,'mid',def.params.mid); kMid.classList.add('air-knob');
+      const kHigh=makeKnob(fx,'high',def.params.high); kHigh.classList.add('air-knob');
+      const link=document.createElement('button'); link.className='air-link'+(fx._airLink?' on':''); link.textContent='LINK';
+      link.title='Locked: MID AIR and HIGH AIR move together'; link.setAttribute('aria-pressed',String(!!fx._airLink));
+      link.onclick=()=>{ fx._airLink=!fx._airLink; link.classList.toggle('on',fx._airLink); link.setAttribute('aria-pressed',String(!!fx._airLink)); };
+      const kTrim=makeKnob(fx,'trim',def.params.trim);
+      row.append(kMid,link,kHigh,kTrim);
+      const vu=document.createElement('div'); vu.className='air-vu'; const vi=document.createElement('i'); vu.appendChild(vi); fx.airVu=vi;
+      aw.append(row,vu);
+      slot.appendChild(aw);
     }else if(!def.inst){
       const sw2=document.createElement('div'); sw2.className='eq-wrap';
       if(fx.type!=='reverb' && fx.type!=='denoise'){
@@ -6671,6 +6777,7 @@ function updateFxMeters(){
     if(!n || !fx.meterIn) return;
     fx.meterIn.style.width=(meterLevel(n.preAn,n.preBuf)*100)+'%';
     fx.meterOut.style.width=(meterLevel(n.postAn,n.postBuf)*100)+'%';
+    if(fx.airVu && fx.airVu.isConnected && n.postAn) fx.airVu.style.width=(meterLevel(n.postAn,n.postBuf)*100)+'%';
   });
 }
 

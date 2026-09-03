@@ -334,6 +334,8 @@
   .auto-pop button{display:block;width:100%;text-align:left;font-size:10px;padding:3px 7px;border:none;background:none;color:var(--ink);border-radius:3px;cursor:pointer}
   .auto-pop button:hover{background:rgba(255,179,71,.15)}
   .auto-pop .grp{font-size:8px;letter-spacing:.14em;color:var(--ink-dim);padding:5px 6px 1px}
+  .add-pop{width:190px;z-index:80}
+  .add-pop .swatch{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:7px}
   .chip{
     display:flex;flex-direction:column;align-items:stretch;gap:4px;width:100%;
     padding:4px 6px;background:rgba(30,34,41,.92);border:1px solid var(--line);
@@ -831,38 +833,8 @@
   <div class="panel-head">
     <h2><button class="pfold" data-k="fx" aria-label="Collapse FX">▾</button>Track FX <span class="itemlab" id="fx-track-lab"></span></h2>
     <div class="tools">
-      <select id="inst-add-sel" aria-label="Instrument type">
-        <option value="drums">Drums</option>
-        <option value="piano">Piano</option>
-        <option value="choir">Choir</option>
-        <option value="sampler">Sampler</option>
-        <option value="eguitar">E-Guitar</option>
-        <option value="ebass">E-Bass</option>
-        <option value="wt">Wavetable</option>
-      </select>
-      <button id="inst-add">Add Instrument</button>
-      <select id="fx-add-sel" aria-label="Effect type">
-        <option value="gate">Noise Gate</option>
-        <option value="eq">EQ</option>
-        <option value="comp">Compressor</option>
-        <option value="reverb">Reverb</option>
-        <option value="delay">Delay</option>
-        <option value="dist">Distortion</option>
-        <option value="od">High Gain</option>
-        <option value="amp">Metal Amp</option>
-        <option value="cab">Cab IR</option>
-        <option value="duck">Ducker</option>
-        <option value="limit">Limiter</option>
-        <option value="chorus">Chorus</option>
-        <option value="pitch">Pitch Shift</option>
-        <option value="width">Stereo Width</option>
-        <option value="tune">Auto-Tune</option>
-        <option value="crush">Bitcrusher</option>
-        <option value="stutter">Stutter</option>
-        <option value="denoise">Noise Filter</option>
-        <option value="air">Air</option>
-      </select>
-      <button id="fx-add">Add FX</button>
+      <button id="inst-add" aria-haspopup="menu">Add Instrument ▾</button>
+      <button id="fx-add" aria-haspopup="menu">Add FX ▾</button>
       <button id="fx-paste" title="Paste the copied FX onto this track">Paste FX</button>
     </div>
   </div>
@@ -1256,6 +1228,15 @@ const FX_DEFS={
     mid: {min:0,max:100,step:1,val:30,fmt:v=>Math.round(v)+'%',label:'mid air',onSet:airLink},
     high:{min:0,max:100,step:1,val:30,fmt:v=>Math.round(v)+'%',label:'high air',onSet:airLink},
     trim:{min:-12,max:6,step:0.5,val:0,fmt:dbFmt,label:'trim'},
+  }},
+  deess:{name:'De-Esser', color:'#ffb8d9', params:{               // Pro-DS-style sibilance tamer: band-keyed downward dynamics
+    threshold:{min:-60,max:0,step:0.5,val:-30,fmt:v=>v+' dB',label:'threshold'},
+    range:{min:0,max:24,step:0.5,val:6,fmt:v=>(+v).toFixed(1).replace(/\.0$/,'')+' dB',label:'range'},
+    freq:{min:2000,max:16000,step:100,val:6500,fmt:hzFmt,label:'freq'},
+    link:{min:0,max:100,step:1,val:100,fmt:v=>Math.round(v)+'%',label:'stereo link'},
+    mode:{min:0,max:1,step:1,val:0,opts:['vocal','allround'],fmt:v=>['vocal','allround'][Math.round(v)]||'vocal',label:'detect'},
+    band:{min:0,max:1,step:1,val:0,opts:['split','wide'],fmt:v=>['split','wide'][Math.round(v)]||'split',label:'band'},
+    listen:{min:0,max:2,step:1,val:0,opts:['off','detect','removed'],fmt:v=>['off','detect','removed'][Math.round(v)]||'off',label:'audition'},
   }},
 };
 /* LINK on the Air panel: dragging one hero knob carries the other by the same delta */
@@ -2121,6 +2102,105 @@ process(inputs,outputs,params){
  if(this.wM<1e-9&&wMt===0) this.wM=0; if(this.wH<1e-9&&wHt===0) this.wH=0;
  return true}}
 registerProcessor('s16-air',S16Air);
+class S16Deess extends AudioWorkletProcessor{
+// De-esser: downward dynamics keyed on a high-passed detection band. Fixed 2 ms lookahead (program path
+// delayed; detection undelayed). 'vocal' mode gates the trigger by a sibilance confidence: HF dominance
+// (band vs full-band envelope) x noisiness (jitter of interpolated zero-crossing intervals) — a steady
+// HF tone barely triggers, an s-sound does. Split band = minimum-phase LR4, only the highs are ducked.
+static get parameterDescriptors(){return[
+ {name:'threshold',defaultValue:-30,minValue:-60,maxValue:0},
+ {name:'range',defaultValue:6,minValue:0,maxValue:24},
+ {name:'freq',defaultValue:6500,minValue:2000,maxValue:16000},
+ {name:'link',defaultValue:1,minValue:0,maxValue:1},
+ {name:'mode',defaultValue:0,minValue:0,maxValue:1},
+ {name:'band',defaultValue:0,minValue:0,maxValue:1},
+ {name:'listen',defaultValue:0,minValue:0,maxValue:2}]}
+constructor(){super();
+ const BQ=()=>new WTBiquad();
+ this.dh1=BQ(); this.dh2=BQ(); this.dlp=BQ();                      // detection: HP4 @freq + LP2 @16k
+ this.xl1=BQ(); this.xl2=BQ(); this.xh1=BQ(); this.xh2=BQ();      // LR4 crossover on the delayed program
+ this.dlp.set('lowpass',16000,-3.0103);
+ this._f=0;
+ this.D=Math.round(0.002*sampleRate);
+ let sz=1; while(sz<this.D+256) sz*=2; this.mask=sz-1;
+ this.dL=new Float32Array(sz); this.dR=new Float32Array(sz); this.wp=0;
+ this.envL=0; this.envR=0; this.envF=0; this.envBM=0;
+ this.aA=1-Math.exp(-1/(0.0005*sampleRate)); this.aR=1-Math.exp(-1/(0.050*sampleRate));
+ this.gA=1-Math.exp(-1/(0.001*sampleRate));
+ this.cA=1-Math.exp(-128/(0.005*sampleRate));
+ this.gL=1; this.gR=1; this.c=0;
+ this.bPrev=0; this.tPrev=-1; this.TPrev=-1; this.Jnum=0; this.Jden=0; this.Jn=0; this.nAbs=0;
+ this.grPeak=0; this.grLast=0; this.postN=Math.max(1,Math.round(0.066*sampleRate/128)); this.postC=0;
+}
+process(inputs,outputs,params){
+ const inp=inputs[0], out=outputs[0]; if(!out||!out.length) return true;
+ const L=inp&&inp[0], R=(inp&&inp[1])||L, n=out[0].length;
+ if(!L){ for(let ch=0;ch<out.length;ch++) out[ch].fill(0); return true; }
+ const thr=params.threshold[0], range=params.range[0], freq=params.freq[0], link=params.link[0];
+ const vocal=params.mode[0]<0.5, split=params.band[0]<0.5, listen=Math.round(params.listen[0]);
+ if(freq!==this._f){ const sl=this._f!==0; this._f=freq;
+  this.dh1.set('highpass',freq,-3.0103,sl); this.dh2.set('highpass',freq,-3.0103,sl);
+  this.xl1.set('lowpass',freq,-3.0103,sl); this.xl2.set('lowpass',freq,-3.0103,sl);
+  this.xh1.set('highpass',freq,-3.0103,sl); this.xh2.set('highpass',freq,-3.0103,sl); }
+ // block-rate sibilance confidence
+ const ss=u=>{ const t2=u<0?0:u>1?1:u; return t2*t2*(3-2*t2); };
+ let cT=1;
+ if(vocal){
+  const eB=20*Math.log10(this.envBM+1e-9), eF=20*Math.log10(this.envF+1e-9);
+  const J=this.Jn>=12?this.Jnum/Math.max(this.Jden,1e-6):0;   // trust jitter only after 12 intervals (~1.5 ms of sibilance)
+  cT=(eB<-60)?0:ss(((eB-eF)+16)/10)*ss((J-0.05)/0.15);
+ }
+ this.c+=this.cA*(cT-this.c);
+ const c=this.c, rangeLin=range, mask=this.mask, D=this.D, dL=this.dL, dR=this.dR;
+ const idle=range===0 && listen===0 && !split && this.gL>0.999999 && this.gR>0.999999;
+ for(let i=0;i<n;i++){
+  const xl=L[i], xr=R[i];
+  dL[this.wp&mask]=xl; dR[this.wp&mask]=xr;
+  const rp=(this.wp-D)&mask; const yl=dL[rp], yr=dR[rp]; this.wp++;
+  // detection chain (undelayed)
+  this.dh1.tick2(xl,xr); this.dh2.tick2(this.dh1.l,this.dh1.r); this.dlp.tick2(this.dh2.l,this.dh2.r);
+  const bL=this.dlp.l, bR=this.dlp.r, bm=0.5*(bL+bR);
+  const abL=bL<0?-bL:bL, abR=bR<0?-bR:bR, abm=bm<0?-bm:bm, af=0.5*((xl<0?-xl:xl)+(xr<0?-xr:xr));
+  this.envL+=(abL>this.envL?this.aA:this.aR)*(abL-this.envL);
+  this.envR+=(abR>this.envR?this.aA:this.aR)*(abR-this.envR);
+  this.envBM+=(abm>this.envBM?this.aA:this.aR)*(abm-this.envBM);
+  this.envF+=(af>this.envF?this.aA:this.aR)*(af-this.envF);
+  // zero-crossing jitter of the band (linearly interpolated crossings)
+  if(this.bPrev<0 && bm>=0){
+   const t2=this.nAbs - (bm===this.bPrev?0:bm/(bm-this.bPrev));
+   if(this.tPrev>=0){ const T=t2-this.tPrev;
+    if(T>sampleRate/500){ this.TPrev=-1; this.Jn=0; }
+    else { if(this.TPrev>0){ const dT=T>this.TPrev?T-this.TPrev:this.TPrev-T; this.Jnum+=(dT-this.Jnum)/32; this.Jden+=(T-this.Jden)/32; this.Jn++; } this.TPrev=T; } }
+   this.tPrev=t2;
+  }
+  this.bPrev=bm; this.nAbs++;
+  if(idle){ out[0][i]=yl; if(out[1]) out[1][i]=yr; continue; }
+  // gain law per channel
+  const knee=o=>o<=-3?0:o>=3?o:(o+3)*(o+3)/12;
+  const eL=20*Math.log10(this.envL+1e-9), eR=20*Math.log10(this.envR+1e-9);
+  let grL=c*knee(eL-thr); if(grL>rangeLin) grL=rangeLin;
+  let grR=c*knee(eR-thr); if(grR>rangeLin) grR=rangeLin;
+  const grM=grL>grR?grL:grR;
+  const aL=link*grM+(1-link)*grL, aR2=link*grM+(1-link)*grR;
+  if(aL>this.grPeak) this.grPeak=aL; if(aR2>this.grPeak) this.grPeak=aR2;
+  this.gL+=this.gA*(Math.pow(10,-aL/20)-this.gL); this.gR+=this.gA*(Math.pow(10,-aR2/20)-this.gR);
+  let oL,oR;
+  if(split){
+   this.xl1.tick2(yl,yr); this.xl2.tick2(this.xl1.l,this.xl1.r);
+   this.xh1.tick2(yl,yr); this.xh2.tick2(this.xh1.l,this.xh1.r);
+   oL=this.xl2.l+this.xh2.l*this.gL; oR=this.xl2.r+this.xh2.r*this.gR;
+  } else { oL=yl*this.gL; oR=yr*this.gR; }
+  if(listen===1){ oL=bL; oR=bR; }
+  else if(listen===2){ oL=yl-oL; oR=yr-oR; }
+  out[0][i]=oL; if(out[1]) out[1][i]=oR;
+ }
+ [this.dh1,this.dh2,this.dlp,this.xl1,this.xl2,this.xh1,this.xh2].forEach(b=>b.endBlock());
+ if(this.envL<1e-12) this.envL=0; if(this.envR<1e-12) this.envR=0; if(this.envBM<1e-12) this.envBM=0; if(this.envF<1e-12) this.envF=0;
+ if(++this.postC>=this.postN){ this.postC=0;
+  const gp=this.grPeak; if(Math.abs(gp-this.grLast)>0.05 || gp>0.05){ this.port.postMessage({gr:+gp.toFixed(2)}); this.grLast=gp; }
+  this.grPeak=0; }
+ return true}}
+registerProcessor('s16-deess',S16Deess);
 class S16Diag extends AudioWorkletProcessor{
  // dropout detector: the audio thread should call process() at a steady device-buffer cadence; a gap far
  // longer than the typical callback period means the render thread was late (underrun / stall)
@@ -2485,6 +2565,15 @@ function buildFxCore(fx,c,useWorklet){
     depth.connect(duckG.gain);
     return {in:inN, out:duckG, duckG, rect, env, thrShape, depth};
   }
+  if(t==='deess'){
+    if(useWorklet){
+      const node=watchProcessor(new AudioWorkletNode(c,'s16-deess',{outputChannelCount:[2]}),fx,'deess');
+      node.port.onmessage=e=>{ if(e.data&&e.data.gr!=null) fx._deessGr=e.data.gr; };
+      return {in:node, out:node, deessNode:node};
+    }
+    const g=c.createGain();                                   // no worklet support: transparent pass-through
+    return {in:g, out:g};
+  }
   if(t==='air'){
     if(useWorklet){
       const node=watchProcessor(new AudioWorkletNode(c,'s16-air',{outputChannelCount:[2]}),fx,'air');
@@ -2842,6 +2931,12 @@ function applyFxTo(fx,n){
         return tc;
       });
       n.builtThr=thr;
+    }
+  }else if(fx.type==='deess'){
+    if(n.deessNode){
+      const sp=(k2,v)=>{ const ap=n.deessNode.parameters.get(k2); if(ap) ap.value=v; };
+      sp('threshold',p.threshold??-30); sp('range',p.range??6); sp('freq',p.freq??6500); sp('link',(p.link??100)/100);
+      sp('mode',p.mode||0); sp('band',p.band||0); sp('listen',p.listen||0);
     }
   }else if(fx.type==='air'){
     if(n.airNode){
@@ -6000,21 +6095,41 @@ function removeFxFromTrack(track,fx){
   updateChipInst(track);
   renderFxPanel();
 }
-document.getElementById('fx-add').onclick=()=>{
+/* ---- Add FX / Add Instrument: sorted popup menus generated from FX_DEFS ---- */
+let addPop=null;
+function closeAddMenu(){ if(addPop){ addPop.remove(); addPop=null; document.removeEventListener('pointerdown',addPopOutside,true); } }
+function addPopOutside(e){ if(addPop && !addPop.contains(e.target) && e.target!==addPop._btn) closeAddMenu(); }
+function openAddMenu(kind,btn){
+  if(addPop){ const same=addPop._kind===kind; closeAddMenu(); if(same) return; }
   if(!selectedTrack){ flash('Select a track first.'); return; }
-  pushHistory();
-  initAudio();
-  addFxToTrack(selectedTrack, document.getElementById('fx-add-sel').value);
-};
-document.getElementById('inst-add').onclick=()=>{
-  if(!selectedTrack){ flash('Select a track first.'); return; }
-  if(selectedTrack.isMaster){ flash('Instruments go on tracks, not the master.'); return; }
-  const type=document.getElementById('inst-add-sel').value;
-  if(trackHasInst(selectedTrack,type)){ flash(selectedTrack.name+' already has '+FX_DEFS[type].name+'.'); return; }
-  pushHistory();
-  addFxToTrack(selectedTrack,type);
-  flash(FX_DEFS[type].name+' added \u2014 double-click the track lane to create a pattern.');
-};
+  const pop=document.createElement('div'); pop.className='auto-pop add-pop'; pop.setAttribute('role','menu'); pop._kind=kind; pop._btn=btn;
+  const items=Object.entries(FX_DEFS).filter(([k,d])=>kind==='inst'?!!d.inst:!d.inst)
+    .sort((a,b)=>a[1].name.localeCompare(b[1].name));
+  items.forEach(([type,d])=>{
+    const b=document.createElement('button'); b.setAttribute('role','menuitem');
+    const dot=document.createElement('i'); dot.className='swatch'; dot.style.background=d.color||'#888';
+    b.append(dot,document.createTextNode(d.name));
+    b.onclick=e=>{ e.stopPropagation();
+      if(!selectedTrack || (!selectedTrack.isMaster && !tracksAll.includes(selectedTrack))){ flash('Select a track first.'); closeAddMenu(); return; }
+      if(kind==='inst'){
+        if(selectedTrack.isMaster){ flash('Instruments go on tracks, not the master.'); return; }
+        if(trackHasInst(selectedTrack,type)){ flash(selectedTrack.name+' already has '+d.name+'.'); return; }
+      }
+      pushHistory(); initAudio(); addFxToTrack(selectedTrack,type);
+      if(kind==='inst') flash(d.name+' added \u2014 double-click the track lane to create a pattern.');
+      closeAddMenu();
+    };
+    pop.appendChild(b);
+  });
+  const r=btn.getBoundingClientRect();
+  pop.style.left=Math.min(r.left,window.innerWidth-200)+'px';
+  const H=Math.min(300,items.length*22+10);
+  pop.style.top=(r.bottom+H>window.innerHeight?Math.max(4,r.top-H-4):r.bottom+4)+'px';
+  document.body.appendChild(pop); addPop=pop;
+  setTimeout(()=>document.addEventListener('pointerdown',addPopOutside,true),0);
+}
+document.getElementById('fx-add').onclick=()=>openAddMenu('fx',document.getElementById('fx-add'));
+document.getElementById('inst-add').onclick=()=>openAddMenu('inst',document.getElementById('inst-add'));
 function makeGKnob(spec){
   const wrap=document.createElement('div'); wrap.className='knob-wrap';
   const k=document.createElement('div'); k.className='knob';
@@ -7147,8 +7262,9 @@ function drawScope(fx){
     };
     envLine(fx._envA,'rgba(170,179,197,.45)',1);
     envLine(fx._envB,FX_DEFS[fx.type].color||'#ffb347',1.4);
-    if((fx.type==='comp'||fx.type==='limit') && n.comp){
-      const red=Math.max(0,-n.comp.reduction);            // dB being compressed away
+    const deessRed=fx.type==='deess'?(fx._deessGr||0):null;
+    if(((fx.type==='comp'||fx.type==='limit') && n.comp) || deessRed!=null){
+      const red=deessRed!=null?deessRed:Math.max(0,-n.comp.reduction);            // dB being compressed away
       if(!fx._grHist) fx._grHist=new Float32Array(256);
       fx._grHist.copyWithin(0,1);
       fx._grHist[255]=red;
@@ -9658,7 +9774,7 @@ document.addEventListener('keydown',e=>{
   if(!ctrl && !e.altKey && e.code==='KeyK'){ e.preventDefault(); toggleMarker(); return; }
   if(!ctrl && !e.altKey && e.code==='KeyM'){ e.preventDefault(); toggleMuteTrack(selectedTrack); return; }
   if(!ctrl && !e.altKey && e.code==='KeyY'){ e.preventDefault(); mergeSelection(); return; }
-  if(e.code==='Escape'){ if(hkPop){ closeHkPop(); return; } if(prSel.size){ prSel.clear(); drawPianoRoll(); return; } selectObj(null); clearTrackSel(); closeAutoMenu(); return; }
+  if(e.code==='Escape'){ if(hkPop){ closeHkPop(); return; } if(addPop){ closeAddMenu(); return; } if(prSel.size){ prSel.clear(); drawPianoRoll(); return; } selectObj(null); clearTrackSel(); closeAutoMenu(); return; }
   if(e.key==='?' && !ctrl && !e.altKey){ e.preventDefault(); toggleHkPop(); return; }
   if(e.code==='KeyS' && !e.ctrlKey && !e.metaKey && !e.altKey){
     e.preventDefault();

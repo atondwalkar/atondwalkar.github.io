@@ -662,6 +662,9 @@
     position:absolute;bottom:0;left:0;right:0;height:0;
     background:linear-gradient(0deg,#5fd4c4,#ffb347 72%,#ff5d5d 94%);
   }
+  .strip .smeter{cursor:pointer}
+  .strip .smeter.clip{background:#3a1418;box-shadow:0 0 0 1px #ff5d5d}
+  .strip .smeter.clip i{background:#ff5d5d}
   .strip .sval{font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--amber)}
   .strip .sbtns{display:flex;gap:4px}
   .fx{display:flex;flex-direction:column;gap:6px}
@@ -1423,7 +1426,7 @@ function bfxOf(track){ return track.fx.find(f=>f.type==='ebass' && !f.bypass); }
 
 /* ============================== audio engine ============================== */
 let ctx=null, master=null;
-let mAnL=null, mAnR=null, mBufL=null, mBufR=null, pkL=0, pkR=0;
+let mAnL=null, mAnR=null, mBufL=null, mBufR=null, pkL=0, pkR=0, clipML=false, clipMR=false;
 let liveWorklet=false, gateURL=null;
 const GATE_SRC=`class S16Gate extends AudioWorkletProcessor{
 static get parameterDescriptors(){return[
@@ -6763,13 +6766,16 @@ function renderFxPanel(){
 }
 
 function meterLevel(an,buf){
+  meterLevel.pk=0;
   if(!an || !an.getFloatTimeDomainData) return 0;
   an.getFloatTimeDomainData(buf);
-  let sum=0;
-  for(let i=0;i<buf.length;i++) sum+=buf[i]*buf[i];
+  let sum=0, mx=0;
+  for(let i=0;i<buf.length;i++){ const v=buf[i]; sum+=v*v; const a=v<0?-v:v; if(a>mx) mx=a; }
+  meterLevel.pk=mx;                                             // raw peak of this read — clip lights key on ≥ 0 dBFS
   const db=20*Math.log10(Math.sqrt(sum/buf.length)+1e-8);
   return Math.max(0,Math.min(1,(db+60)/60));
 }
+const CLIP_AT=0.999;
 function updateFxMeters(){
   if(!selectedTrack) return;
   selectedTrack.fx.forEach(fx=>{
@@ -8054,7 +8060,10 @@ function frame(now){
     const e=t.mixEls, ts=state.tracks[t.id];
     if(e && e.meterL && ts && ts.meterAnL){
       e.meterL.style.height=(meterLevel(ts.meterAnL,ts.meterBufL)*100)+'%';
+      let clip=meterLevel.pk>=CLIP_AT;
       e.meterR.style.height=(meterLevel(ts.meterAnR,ts.meterBufR)*100)+'%';
+      clip=clip||meterLevel.pk>=CLIP_AT;
+      if(clip && !ts.clipHold){ ts.clipHold=true; e.smL.classList.add('clip'); e.smR.classList.add('clip'); e.smL.title=e.smR.title='Peaked over 0 dBFS — click to reset'; }
     }
   });
   if(mAnL && sc){
@@ -8064,8 +8073,12 @@ function frame(now){
     const bw=Math.round(cw*dpr), bhh=Math.round(chh*dpr);
     if(scope.width!==bw || scope.height!==bhh){ scope.width=bw; scope.height=bhh; }
     sc.setTransform(dpr,0,0,dpr,0,0);
-    const l=meterLevel(mAnL,mBufL), r=meterLevel(mAnR,mBufR);
+    const l=meterLevel(mAnL,mBufL); if(meterLevel.pk>=CLIP_AT) clipML=true;
+    const r=meterLevel(mAnR,mBufR); if(meterLevel.pk>=CLIP_AT) clipMR=true;
     pkL=Math.max(pkL*0.912, l); pkR=Math.max(pkR*0.912, r);
+    if(!frame._clipHook){ frame._clipHook=true; scope.style.cursor='pointer';
+      scope.addEventListener('click',()=>{ clipML=clipMR=false; scope.title='Master meters'; }); }
+    scope.title=(clipML||clipMR)?'Peaked over 0 dBFS — click to reset':'Master meters';
     sc.clearRect(0,0,cw,chh);
     const x0=16, W=cw-x0-8, bh=(chh-15)/2, rad=bh/2;
     const rrect=(x,y,w,h)=>{
@@ -8082,19 +8095,20 @@ function frame(now){
       grad.addColorStop(0.85,'#ff8347'); grad.addColorStop(1,'#ff5d5d');
       frame._g=grad; frame._gw=W;
     }
-    const bar=(y,v,pk,lab)=>{
-      sc.fillStyle='#20242d'; rrect(x0,y,W,bh);
+    const bar=(y,v,pk,lab,clip)=>{
+      sc.fillStyle=clip?'#3a1418':'#20242d'; rrect(x0,y,W,bh);
       // scale ticks every 25%
       sc.fillStyle='rgba(139,147,163,.25)';
       for(let i=1;i<4;i++) sc.fillRect(x0+W*i/4,y+1,1,bh-2);
-      sc.fillStyle=grad; rrect(x0,y,W*v,bh);
+      sc.fillStyle=clip?'#ff5d5d':grad; rrect(x0,y,W*v,bh);
       sc.fillStyle='#ffe9c9';
       sc.fillRect(x0+Math.min(W-2,W*pk),y,2,bh);
-      sc.fillStyle='#8b93a3'; sc.font='600 9px system-ui'; sc.textBaseline='middle';
+      if(clip){ sc.fillStyle='#ff5d5d'; sc.fillRect(x0+W-4,y,4,bh); }      // clip LED at the top of the scale
+      sc.fillStyle=clip?'#ff8d8d':'#8b93a3'; sc.font='600 9px system-ui'; sc.textBaseline='middle';
       sc.fillText(lab,4,y+bh/2+0.5);
     };
-    bar(5,l,pkL,'L');
-    bar(5+bh+5,r,pkR,'R');
+    bar(5,l,pkL,'L',clipML);
+    bar(5+bh+5,r,pkR,'R',clipMR);
   }
 }
 requestAnimationFrame(frame);
@@ -9352,6 +9366,8 @@ function renderMixer(){
     const sfillL=document.createElement('i'); smL.appendChild(sfillL);
     const smR=document.createElement('div'); smR.className='smeter';
     const sfillR=document.createElement('i'); smR.appendChild(sfillR);
+    const clearClip=()=>{ ts.clipHold=false; smL.classList.remove('clip'); smR.classList.remove('clip'); smL.title=smR.title=''; };
+    smL.onclick=smR.onclick=clearClip;
     const val=document.createElement('span'); val.className='sval';
     val.textContent=Math.round(ts.vol*100)+'%';
     f.onpointerdown=()=>{ pushHistory(); autoTouch(t.id+'|vol',true); };
@@ -9401,7 +9417,7 @@ function renderMixer(){
     btns.append(m,sb,fxb,ab,lb);
     srow.append(f,smL,smR);
     strip.append(dot,nm,bs,pn,pval,srow,val,btns);
-    t.mixEls={fader:f,val,m,s:sb,strip,meterL:sfillL,meterR:sfillR,pan:pn,pval,panTxt,fxb,autoBtn:ab,autoLanesBtn:lb};
+    t.mixEls={fader:f,val,m,s:sb,strip,meterL:sfillL,meterR:sfillR,smL,smR,pan:pn,pval,panTxt,fxb,autoBtn:ab,autoLanesBtn:lb};
     f._midi={kind:'vol',track:t}; pn._midi={kind:'pan',track:t};
     updateAutoBtn(t);
     mixerEl.appendChild(strip);

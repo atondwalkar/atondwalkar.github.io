@@ -8111,6 +8111,17 @@ function perfTick(now){
   }
 }
 let frameDt=16.7;                                              // smoothed rAF interval (choppiness detector)
+/* vsync pump: Wayland/occlusion-style scheduling parks renderer frames when nothing paints, which makes the
+   compositor-only playhead and the meters chunky. While the transport runs (or recording), painting one
+   alternating pixel per frame keeps BeginFrames at the display rate. Idle pages still power-save. */
+let pumpCv=null, pumpG=null, pumpPh=false;
+function vsyncPump(on){
+  if(!on) return;
+  if(!pumpCv){ pumpCv=document.createElement('canvas'); pumpCv.width=2; pumpCv.height=2;
+    pumpCv.style.cssText='position:fixed;left:0;bottom:0;width:2px;height:2px;opacity:0.02;pointer-events:none;z-index:1';
+    document.body.appendChild(pumpCv); pumpG=pumpCv.getContext('2d'); }
+  pumpPh=!pumpPh; pumpG.fillStyle=pumpPh?'#000':'#111'; pumpG.fillRect(0,0,2,2);
+}
 function frame(now){
   requestAnimationFrame(frame);
   frameNo++;
@@ -8118,6 +8129,7 @@ function frame(now){
   if(frame._pl) frameDt=frameDt*0.9+Math.min(200,nowMs-frame._pl)*0.1;
   frame._pl=nowMs;
   perfTick(nowMs);
+  vsyncPump(state.playing || !!recorder);
   const tick2=(frameNo&1)===0 || frameDt>24;                     // 30 Hz for meters / spectra / scopes — full rate when rAF itself is slow
   const fxOpen=!fxPanelEl.classList.contains('pcollapsed');
   const mixOpen=!mixerPanelEl.classList.contains('pcollapsed');

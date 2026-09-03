@@ -381,7 +381,7 @@
 
   .piano-wrap{position:relative;overflow-x:auto;overflow-y:hidden;border:1px solid var(--line);border-radius:6px;background:#12151b}
   #piano-roll{display:block;cursor:crosshair;touch-action:none}
-  #piano-playhead{position:absolute;top:0;width:2px;background:var(--amber);opacity:.9;box-shadow:0 0 6px rgba(255,179,71,.6);pointer-events:none;display:none;z-index:2}
+  #piano-playhead{will-change:transform;position:absolute;left:0;top:0;width:2px;background:var(--amber);opacity:.9;box-shadow:0 0 6px rgba(255,179,71,.6);pointer-events:none;display:none;z-index:2}
   .clip.mpiano{background:linear-gradient(180deg,#1f4328,#183321);border:1px solid #2f7a45}
   .clip.mpiano .cname{color:#8adf9a}
   .clip.mpiano.sel{border-color:#8adf9a;box-shadow:0 0 12px rgba(138,223,154,.5);z-index:3}
@@ -395,7 +395,7 @@
   .clip.mbass .hdl.r{border-right:3px solid rgba(95,212,196,.6)}
   .clip.mbass.sel{border-color:var(--cyan);box-shadow:0 0 12px rgba(95,212,196,.5);z-index:3}
 
-  .tl-playhead{
+  .tl-playhead{will-change:transform;
     position:absolute;top:0;bottom:0;left:0;width:2px;background:var(--ink);
     box-shadow:0 0 8px rgba(232,226,212,.7);pointer-events:none;z-index:6;
   }
@@ -8081,14 +8081,14 @@ function setPlayhead(abs){
 function updateRollPlayhead(){
   const it=selMidiItem();
   if(!state.playing || !it || !prGeom || edRoll.hidden){
-    if(!state.playing) prPh.style.display='none';
+    if(!state.playing && prPh.style.display!=='none') prPh.style.display='none';
     return;
   }
   const local=curPos()/stepDur()-it.startStep;
   if(local>=0 && local<it.lenSteps){
-    prPh.style.display='block';
-    prPh.style.left=(prGeom.gut+local*prGeom.cell)+'px';
-    prPh.style.height=(prGeom.rows*prGeom.rowH)+'px';
+    if(prPh.style.display!=='block') prPh.style.display='block';
+    prPh.style.transform='translateX('+(prGeom.gut+local*prGeom.cell)+'px)';   // compositor-only motion: no repaint of the roll
+    const h=(prGeom.rows*prGeom.rowH)+'px'; if(prPh.style.height!==h) prPh.style.height=h;
   }else{
     prPh.style.display='none';
   }
@@ -8110,11 +8110,15 @@ function perfTick(now){
     perfAcc=0; perfN=0;
   }
 }
+let frameDt=16.7;                                              // smoothed rAF interval (choppiness detector)
 function frame(now){
   requestAnimationFrame(frame);
   frameNo++;
-  perfTick(now||performance.now());
-  const tick2=(frameNo&1)===0;                                   // 30 Hz for meters / spectra / scopes
+  const nowMs=now||performance.now();
+  if(frame._pl) frameDt=frameDt*0.9+Math.min(200,nowMs-frame._pl)*0.1;
+  frame._pl=nowMs;
+  perfTick(nowMs);
+  const tick2=(frameNo&1)===0 || frameDt>24;                     // 30 Hz for meters / spectra / scopes — full rate when rAF itself is slow
   const fxOpen=!fxPanelEl.classList.contains('pcollapsed');
   const mixOpen=!mixerPanelEl.classList.contains('pcollapsed');
   if(fxOpen && selectedTrack){

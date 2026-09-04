@@ -405,11 +405,14 @@
     font-size:11px;color:var(--red-soft);letter-spacing:.06em;white-space:nowrap;
     overflow:hidden;text-overflow:ellipsis;max-width:45%;
   }
-  #toast{position:fixed;top:14px;right:18px;z-index:120;max-width:340px;padding:9px 14px;border-radius:8px;
+  #toast-wrap{position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:200;
+    display:flex;flex-direction:column;align-items:center;gap:6px;pointer-events:none;max-width:min(560px,92vw)}
+  .toast{max-width:100%;padding:9px 16px;border-radius:8px;text-align:center;
     background:linear-gradient(180deg,#1b2029,#12151c);border:1px solid var(--amber);color:var(--amber);
-    font-size:11px;letter-spacing:.05em;box-shadow:0 8px 24px rgba(0,0,0,.55);opacity:0;transform:translateY(-8px);
-    pointer-events:none;transition:opacity .18s ease,transform .18s ease}
-  #toast.show{opacity:1;transform:translateY(0)}
+    font-size:11px;letter-spacing:.05em;box-shadow:0 8px 26px rgba(0,0,0,.6);
+    opacity:0;transform:translateY(-10px);transition:opacity .18s ease,transform .18s ease}
+  #flash-toast{border-color:var(--cyan);color:var(--cyan)}
+  .toast.show{opacity:1;transform:translateY(0)}
 
   /* ---------- fx rack ---------- */
   #fx-list{display:flex;flex-direction:column;gap:8px}
@@ -692,7 +695,7 @@
 
 <header>
   <div class="hrow">
-    <div class="brand"><b>SHEESH&nbsp;DAW<span class="ver">V1.0</span><a class="gh" href="https://github.com/atondwalkar/sheesh-daw" target="_blank" rel="noopener" title="SHEESH DAW on GitHub" aria-label="SHEESH DAW on GitHub"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg></a></b></div>
+    <div class="brand"><b>SHEESH&nbsp;DAW<span class="ver">v0.9</span><a class="gh" href="https://github.com/atondwalkar/sheesh-daw" target="_blank" rel="noopener" title="SHEESH DAW on GitHub" aria-label="SHEESH DAW on GitHub"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg></a></b></div>
     <button id="play" class="play-btn" aria-label="Play or stop">&#9654;</button>
     <button id="rec" class="rec-btn" aria-label="Record from microphone">&#9679;</button>
     <button id="loop" class="loop-btn" aria-pressed="false">LOOP</button>
@@ -4148,15 +4151,21 @@ let recAn=null, recAnBuf=null, recLiveEl=null, recLiveCv=null, recPeaks=null, re
 const recBtn=document.getElementById('rec');
 const recMsg=document.getElementById('rec-msg');
 function say(msg){ recMsg.hidden=!msg; recMsg.textContent=msg||''; }
-function flash(msg){ say(msg); setTimeout(()=>say(''),2500); }
-let toastEl=null, toastT=null;
-function fileSay(msg,sticky){                                   // status text lives in its own toast, never over the header viz
-  if(!toastEl){ toastEl=document.createElement('div'); toastEl.id='toast'; toastEl.setAttribute('role','status'); document.body.appendChild(toastEl); }
-  clearTimeout(toastT);
-  if(!msg){ toastEl.classList.remove('show'); return; }
-  toastEl.textContent=msg; toastEl.classList.add('show');
-  if(!sticky) toastT=setTimeout(()=>toastEl.classList.remove('show'),4000);   // progress messages update in place; final ones fade
+/* toast notifications: a fixed stack centred at the top of the window (stays put while scrolling).
+   #toast = file/render status (sticky-capable, updates in place); #flash-toast = track ops (copy/paste, hints). */
+let toastWrap=null; const toastTimers={};
+function toastWrapEl(){ if(!toastWrap){ toastWrap=document.createElement('div'); toastWrap.id='toast-wrap'; document.body.appendChild(toastWrap); } return toastWrap; }
+function showToast(id,msg,ms){
+  const wrap=toastWrapEl();
+  let el=document.getElementById(id);
+  if(!el){ el=document.createElement('div'); el.id=id; el.className='toast'; el.setAttribute('role','status'); wrap.appendChild(el); }
+  clearTimeout(toastTimers[id]);
+  if(!msg){ el.classList.remove('show'); return; }
+  el.textContent=msg; el.classList.add('show');
+  if(ms) toastTimers[id]=setTimeout(()=>el.classList.remove('show'),ms);
 }
+function flash(msg){ showToast('flash-toast',msg,2500); }
+function fileSay(msg,sticky){ showToast('toast',msg,sticky?0:4000); }
 function fileFlash(msg){ fileSay(msg); }
 
 async function toggleRecord(){
@@ -8201,30 +8210,25 @@ function drawViz(){
       front[i]=Math.max(0,Math.min(1,(db-FLOOR)/(CEIL-FLOOR)));
     }
   }
-  H.pop(); H.unshift(front);                                   // row 0 = nearest/front, last = far/back
-  // perspective projection: far rows smaller, higher, dimmer, pushed toward the vanishing point
-  const cx=cw/2, horizon=ch*0.30, baseY=ch*0.98, colW=cw*0.92;
-  const persp=r=>{ const t=r/(ROWS-1); const sc=1-0.72*t; return {sc, y:baseY-(baseY-horizon)*t, alpha:(1-t)*0.9+0.08}; };
-  const amp=ch*0.72;
-  for(let r=ROWS-1;r>=0;r--){                                  // draw far → near so near overlaps far
-    const P=persp(r), row=H[r];
-    const px=i=>cx+(i/(NB-1)-0.5)*colW*P.sc;
-    const py=i=>P.y-row[i]*amp*P.sc;
-    // filled ribbon
-    g.beginPath(); g.moveTo(px(0),P.y);
-    for(let i=0;i<NB;i++) g.lineTo(px(i),py(i));
-    g.lineTo(px(NB-1),P.y); g.closePath();
-    const hueTop = r<3 ? 'rgba(255,93,93,' : r<7 ? 'rgba(255,179,71,' : 'rgba(95,212,196,';
-    g.fillStyle=hueTop+(P.alpha*0.30)+')'; g.fill();
-    // ridge line
-    g.beginPath();
-    for(let i=0;i<NB;i++){ const x=px(i), y=py(i); i?g.lineTo(x,y):g.moveTo(x,y); }
-    g.strokeStyle=hueTop+P.alpha+')'; g.lineWidth=r===0?1.6:1; g.stroke();
-  }
-  // vertical grid lines converging to the vanishing point (the 3D "floor")
-  g.strokeStyle='rgba(139,147,163,.10)'; g.lineWidth=1;
-  for(let i=0;i<=6;i++){ const fx=(i/6-0.5); g.beginPath();
-    g.moveTo(cx+fx*colW, baseY); g.lineTo(cx+fx*colW*(1-0.72), horizon); g.stroke(); }
+  H.pop(); H.unshift(front);                                  // row 0 = nearest, last = far
+  drawViz.phase=(drawViz.phase||0)+0.16;                       // gentle travelling ripple so the mesh always "waves"
+  const cx=cw/2, horizon=ch*0.26, baseY=ch*0.97, colW=cw*0.94, amp=ch*0.66, ph=drawViz.phase;
+  const P=r=>{ const t=r/(ROWS-1); return {sc:1-0.74*t, y:baseY-(baseY-horizon)*t, a:(1-t)*0.85+0.12}; };
+  // project every mesh vertex
+  const PX=[], PY=[], PA=[];
+  for(let r=0;r<ROWS;r++){ const pr=P(r), row=H[r], xs=[], ys=[];
+    for(let i=0;i<NB;i++){ const rip=0.06*Math.sin(i*0.7 - r*0.55 + ph)*(0.5+row[i]);
+      const h=(row[i]+rip)*amp*pr.sc;
+      xs.push(cx+(i/(NB-1)-0.5)*colW*pr.sc); ys.push(pr.y - h); }
+    PX.push(xs); PY.push(ys); PA.push(pr.a); }
+  const col=(r,a)=>{ const t=r/(ROWS-1); const c= t<0.33?'255,93,93': t<0.66?'255,179,71':'95,212,196'; return 'rgba('+c+','+a+')'; };
+  g.lineJoin='round';
+  // depth lines (columns): weave front→back at each frequency — this is what makes it a mesh, not just ridges
+  for(let i=0;i<NB;i++){ g.beginPath(); for(let r=0;r<ROWS;r++){ r?g.lineTo(PX[r][i],PY[r][i]):g.moveTo(PX[0][i],PY[0][i]); }
+    g.strokeStyle='rgba(150,180,210,.14)'; g.lineWidth=0.8; g.stroke(); }
+  // frequency lines (rows): far → near so near draws over far
+  for(let r=ROWS-1;r>=0;r--){ g.beginPath(); for(let i=0;i<NB;i++){ i?g.lineTo(PX[r][i],PY[r][i]):g.moveTo(PX[r][0],PY[r][0]); }
+    g.strokeStyle=col(r,PA[r]); g.lineWidth=r===0?1.7:1; g.stroke(); }
 }
 function vsyncPump(on){
   if(!on) return;

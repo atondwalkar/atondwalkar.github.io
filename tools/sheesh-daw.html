@@ -8224,27 +8224,33 @@ function drawViz(){
   g.setTransform(dpr,0,0,dpr,0,0);
   if(!vizOn){ g.clearRect(0,0,cw,ch); g.strokeStyle='rgba(139,147,163,.22)'; g.beginPath(); g.moveTo(8,ch/2); g.lineTo(cw-8,ch/2); g.stroke();
     g.fillStyle='rgba(139,147,163,.35)'; g.font='8px system-ui'; g.fillText('viz off — click',10,ch/2-4); return; }
-  // amplitude-driven colour gradient: three band levels colour the gradient, overall level sets its intensity. Cheap: one fillRect.
-  let lo=0,mid=0,hi=0,amp=0;
+  // amplitude-driven colour gradient on a warped-LOG frequency axis (same axis as the EQ plot) so the
+  // interesting highs get real width instead of being crushed at the right edge. Cheap: one fillRect.
+  const NS=28;                                                      // gradient stops across the width
+  if(!drawViz.lv || drawViz.lv.length!==NS) drawViz.lv=new Float32Array(NS);
+  const lv=drawViz.lv; let amp=0;
   const ready=mAnL&&mAnR&&ctx&&mAnL.getByteFrequencyData;
   if(ready){
     if(!drawViz._fb||drawViz._fb.length!==mAnL.frequencyBinCount){ drawViz._fb=new Uint8Array(mAnL.frequencyBinCount); drawViz._fb2=new Uint8Array(mAnR.frequencyBinCount); }
     mAnL.getByteFrequencyData(drawViz._fb); mAnR.getByteFrequencyData(drawViz._fb2);
     const fb=drawViz._fb, fb2=drawViz._fb2, bins=fb.length, nyq=ctx.sampleRate/2;
-    const band=(f0,f1,tiltDb)=>{ let k0=Math.max(1,Math.floor(f0/nyq*bins)), k1=Math.min(bins-1,Math.ceil(f1/nyq*bins)), s2=0,n=0;
-      for(let k=k0;k<=k1;k++){ s2+=Math.max(fb[k],fb2[k]); n++; } const db=-100+(n?s2/n:0)/255*70 + tiltDb;
-      return Math.max(0,Math.min(1,(db+66)/54)); };                 // −66…−12 dB → 0…1
-    lo=band(20,250,0); mid=band(250,3000,4); hi=band(3000,16000,9); // pink tilt keeps highs visible
-    amp=Math.max(lo,mid,hi)*0.7+((lo+mid+hi)/3)*0.3;
-  }
-  drawViz.level=amp; drawViz.bands=[lo,mid,hi];
-  const shade=(r,gr,b,L)=>{ const k=0.12+0.88*L; return 'rgb('+Math.round(r*k)+','+Math.round(gr*k)+','+Math.round(b*k)+')'; };
+    for(let s2=0;s2<NS;s2++){
+      const f0=fxAxisF(s2/NS), f1=fxAxisF((s2+1)/NS), fc=Math.sqrt(Math.max(1,f0*f1));
+      let k0=Math.max(1,Math.floor(f0/nyq*bins)), k1=Math.min(bins-1,Math.max(k0,Math.ceil(f1/nyq*bins))), m=0;
+      for(let k=k0;k<=k1;k++){ const v=Math.max(fb[k],fb2[k]); if(v>m) m=v; }
+      const db=-100+m/255*70 + 4.5*Math.log2(fc/800);               // +4.5 dB/oct pink tilt
+      lv[s2]=Math.max(0,Math.min(1,(db+66)/54));                    // −66…−12 dB → 0…1
+      if(lv[s2]>amp) amp=lv[s2];
+    }
+  } else lv.fill(0);
+  drawViz.level=amp; drawViz.bands=[lv[Math.floor(NS*0.15)],lv[Math.floor(NS*0.5)],lv[Math.floor(NS*0.85)]];
+  // hue sweeps warm(low) → amber(mid) → cyan(high) across the log axis; brightness = that band's level
+  const hueRGB=u=>{ if(u<0.5){ const t=u/0.5; return [255, Math.round(93+86*t), Math.round(71+0*t)]; } const t=(u-0.5)/0.5; return [Math.round(255-160*t), Math.round(179+33*t), Math.round(71+125*t)]; };
   const grad=g.createLinearGradient(0,0,cw,0);
-  grad.addColorStop(0,   shade(255,93,71, lo));                     // lows: warm
-  grad.addColorStop(0.5, shade(255,179,71, mid));                   // mids: amber
-  grad.addColorStop(1,   shade(95,212,196, hi));                    // highs: cyan
+  for(let s2=0;s2<NS;s2++){ const u=s2/(NS-1), L=lv[s2], k=0.10+0.90*L, c2=hueRGB(u);
+    grad.addColorStop(u,'rgb('+Math.round(c2[0]*k)+','+Math.round(c2[1]*k)+','+Math.round(c2[2]*k)+')'); }
   g.fillStyle='#0b0d11'; g.fillRect(0,0,cw,ch);
-  g.globalAlpha=0.30+0.70*amp;                                      // whole panel gets more intense with level
+  g.globalAlpha=0.28+0.72*amp;
   g.fillStyle=grad; g.fillRect(0,0,cw,ch);
   g.globalAlpha=1;
   const cy=ch/2, gl=g.createLinearGradient(0,cy-ch*0.5*amp,0,cy+ch*0.5*amp);   // soft centre highlight scaled by amplitude

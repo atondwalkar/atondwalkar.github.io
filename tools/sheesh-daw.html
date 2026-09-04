@@ -6910,10 +6910,11 @@ function processDynEq(){
     if(fx.type!=='eq' || !fx.nodes || !fx.nodes.preAn) return;
     const n=fx.nodes, amt=fx.params.damt||0;
     if(!amt){
-      if(n.dynOn){ n.dynOn=false; n.bands.forEach((b,i)=>{ if(b.gain) b.gain.value=bandOn(fx,i)?(fx.params['b'+i]||0):0; }); }
+      if(n.dynOn){ n.dynOn=false; n.dynG=null; n.bands.forEach((b,i)=>{ if(b.gain){ b.gain.cancelScheduledValues(ctx.currentTime); b.gain.value=bandOn(fx,i)?(fx.params['b'+i]||0):0; } }); }
       return;
     }
     n.dynOn=true;
+    const nowMs=performance.now(); const dt=Math.min(0.1,Math.max(0.01,(nowMs-(n._dynT||nowMs-33))/1000)); n._dynT=nowMs;
     n.preAn.getByteFrequencyData(dynBuf);
     const binHz=ctx.sampleRate/2/n.preAn.frequencyBinCount;
     n.bands.forEach((b,i)=>{
@@ -6927,7 +6928,14 @@ function processDynEq(){
       const db=-100+m/255*70;
       const over=Math.max(0,db-(fx.params.dthr??-24));
       const target=Math.max(-24,(fx.params['b'+i]||0)-over*amt*0.5);
-      b.gain.setTargetAtTime(target,ctx.currentTime,0.05);
+      // envelope lives in JS (repeatedly re-anchored setTargetAtTime never converges in current Chrome);
+      // the param just follows with short linear ramps — zipper-free and deterministic
+      const cur=(n.dynG&&n.dynG[i]!=null)?n.dynG[i]:(fx.params['b'+i]||0);
+      const tau=target<cur?0.008:0.15;                           // 8 ms attack into reduction, 150 ms release back out
+      const g2=cur+(1-Math.exp(-dt/tau))*(target-cur);
+      (n.dynG=n.dynG||{})[i]=g2;
+      const t0=ctx.currentTime;
+      b.gain.cancelScheduledValues(t0); b.gain.setValueAtTime(cur,t0); b.gain.linearRampToValueAtTime(g2,t0+dt);
     });
   }));
 }
@@ -7008,17 +7016,10 @@ function drawEq(fx){
     eqPh=new Float32Array(EQ_FR_N); eqMagAcc=new Float32Array(EQ_FR_N);
     for(let i=0;i<EQ_FR_N;i++) eqFr[i]=fxAxisF(i/(EQ_FR_N-1));
   }
-  let rkey=(n&&n.bands&&n.dynOn?'D':'')+fx.params.damt;
+  let rkey=''+fx.params.damt;
   { const p=fx.params; for(let i=0;i<16;i++) rkey+='|'+p['b'+i]+','+p['f'+i]+','+p['q'+i]+','+p['x'+i]+','+bandType(fx,i); }
-  if(!(n && n.bands && n.dynOn) && fx._eqRespKey===rkey && fx._eqResp){
+  if(fx._eqRespKey===rkey && fx._eqResp){
     eqMagAcc.set(fx._eqResp);
-  }else if(n && n.bands){
-    eqMagAcc.fill(1);
-    n.bands.forEach(b=>{
-      b.getFrequencyResponse(eqFr,eqMag,eqPh);
-      for(let i=0;i<EQ_FR_N;i++) eqMagAcc[i]*=eqMag[i];
-    });
-    fx._eqRespKey=rkey; fx._eqResp=fx._eqResp||new Float32Array(EQ_FR_N); fx._eqResp.set(eqMagAcc);
   }else{
     eqMagAcc.fill(1);
     const sr=(ctx&&ctx.sampleRate)||44100;
@@ -7033,12 +7034,37 @@ function drawEq(fx){
     }
     fx._eqRespKey=rkey; fx._eqResp=fx._eqResp||new Float32Array(EQ_FR_N); fx._eqResp.set(eqMagAcc);
   }
-  g.beginPath();
-  for(let i=0;i<EQ_FR_N;i++){
-    const x=i/(EQ_FR_N-1)*cw, y=Y(20*Math.log10(eqMagAcc[i]||1e-4));
-    i?g.lineTo(x,y):g.moveTo(x,y);
+  /* live curve while dynamics run: instantaneous band gains from the audio nodes, drawn against the
+     dim static target with the activity ribbon between them — the standard dynamic-EQ picture */
+  const dyn=n && n.bands && n.dynOn;
+  let live=null;
+  if(dyn){
+    const sr=(ctx&&ctx.sampleRate)||44100;
+    live=fx._eqLive=fx._eqLive||new Float32Array(EQ_FR_N); live.fill(1);
+    for(let i=0;i<16;i++){
+      const ty=EQ_TYPES[bandType(fx,i)];
+      const stat=bandOn(fx,i)?(fx.params['b'+i]||0):0;
+      const nb=n.bands[i];
+      const gv=(n.dynG&&n.dynG[i]!=null)?n.dynG[i]:((nb&&nb.gain)?nb.gain.value:stat);   // JS envelope is the truth; IIR shelves/passes stay static
+      const fv=bandFreq(fx,i), qv=fx.params['q'+i]||(ty==='peaking'?2.2:0.7);
+      let co;
+      if(ty==='lowpass'||ty==='highpass') co=passCoef(ty,fv,qv,sr);
+      else if(ty==='lowshelf'||ty==='highshelf') co=shelfCoef(ty,fv,gv,qv,sr);
+      else co=rbjCoef(ty,fv,gv,qv,sr);
+      eqAccumBiquad(co[0],co[1],live,sr);
+    }
   }
-  g.strokeStyle='#ffb347'; g.lineWidth=1.6; g.stroke();
+  const path=(arr)=>{ g.beginPath(); for(let i=0;i<EQ_FR_N;i++){ const x=i/(EQ_FR_N-1)*cw, y=Y(20*Math.log10(arr[i]||1e-4)); i?g.lineTo(x,y):g.moveTo(x,y); } };
+  if(dyn && live){
+    g.beginPath();                                               // activity ribbon between target and live
+    for(let i=0;i<EQ_FR_N;i++){ const x=i/(EQ_FR_N-1)*cw; i?g.lineTo(x,Y(20*Math.log10(eqMagAcc[i]||1e-4))):g.moveTo(x,Y(20*Math.log10(eqMagAcc[i]||1e-4))); }
+    for(let i=EQ_FR_N-1;i>=0;i--){ g.lineTo(i/(EQ_FR_N-1)*cw,Y(20*Math.log10(live[i]||1e-4))); }
+    g.closePath(); g.fillStyle='rgba(255,179,71,.12)'; g.fill();
+    path(eqMagAcc); g.strokeStyle='rgba(255,179,71,.45)'; g.lineWidth=1; g.stroke();   // static target, dim
+    path(live); g.strokeStyle='#ffb347'; g.lineWidth=1.8; g.stroke();                  // live curve, bright
+  }else{
+    path(eqMagAcc); g.strokeStyle='#ffb347'; g.lineWidth=1.6; g.stroke();
+  }
   EQ_FREQS.forEach((f,i)=>{
     if(!bandOn(fx,i)) return;
     const ty=bandType(fx,i), x=X(bandFreq(fx,i)), y=Y(ty>=3?0:(fx.params['b'+i]||0));
@@ -7049,6 +7075,17 @@ function drawEq(fx){
     else g.arc(x,y,R,0,7);
     g.fillStyle=drag?'#ffe08a':sel?'#ffb347':'#5fd4c4';
     g.fill();
+    if(n && n.bands && n.dynOn){                                 // live gain marker: drops below the handle while the band ducks
+      const nb=n.bands[i];
+      if(nb && nb.gain && ty<3){
+        const gl=(n.dynG&&n.dynG[i]!=null)?n.dynG[i]:nb.gain.value, gs=fx.params['b'+i]||0;
+        if(Math.abs(gl-gs)>0.3){
+          const yl=Y(gl);
+          g.strokeStyle='rgba(255,179,71,.7)'; g.lineWidth=1; g.beginPath(); g.moveTo(x,y); g.lineTo(x,yl); g.stroke();
+          g.beginPath(); g.arc(x,yl,2.4,0,7); g.fillStyle='#ffe08a'; g.fill();
+        }
+      }
+    }
     if(sel){ g.strokeStyle='rgba(255,179,71,.6)'; g.lineWidth=1; g.beginPath(); g.arc(x,y,7.5,0,7); g.stroke(); }
   });
 }
@@ -8141,7 +8178,7 @@ function frame(now){
   const mixOpen=!mixerPanelEl.classList.contains('pcollapsed');
   if(fxOpen && selectedTrack){
     selectedTrack.fx.forEach(fx=>{
-      if(fx.type==='eq'){ if(tick2 && fx.eqCv && fx.eqCv.isConnected) drawEq(fx); }
+      if(fx.type==='eq'){ if((tick2 || (fx.nodes&&fx.nodes.dynOn)) && fx.eqCv && fx.eqCv.isConnected) drawEq(fx); }
       else if(fx.type==='wt'){ if(tick2 && fx.wtRoot && fx.wtRoot.isConnected){ drawWt(fx,'A'); drawWt(fx,'B'); drawWt(fx,'C'); drawWtFilter(fx,''); drawWtFilter(fx,'2'); drawWtMod(fx); if(tick2 && fx.synthCv) drawSynthScope(fx); } }
       else if(fx.type==='sampler'){ if(fx.smpCv && fx.smpCv.isConnected) drawSampler(fx); }
       else if(tick2){ if(fx.scopeCv && fx.scopeCv.isConnected) drawScope(fx); if(fx.dnCv && fx.dnCv.isConnected) drawDnChart(fx); }

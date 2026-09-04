@@ -405,10 +405,11 @@
     font-size:11px;color:var(--red-soft);letter-spacing:.06em;white-space:nowrap;
     overflow:hidden;text-overflow:ellipsis;max-width:45%;
   }
-  #file-msg{
-    position:absolute;right:calc(100% + 12px);top:50%;transform:translateY(-50%);
-    font-size:10px;color:var(--amber);letter-spacing:.06em;white-space:nowrap;
-  }
+  #toast{position:fixed;top:14px;right:18px;z-index:120;max-width:340px;padding:9px 14px;border-radius:8px;
+    background:linear-gradient(180deg,#1b2029,#12151c);border:1px solid var(--amber);color:var(--amber);
+    font-size:11px;letter-spacing:.05em;box-shadow:0 8px 24px rgba(0,0,0,.55);opacity:0;transform:translateY(-8px);
+    pointer-events:none;transition:opacity .18s ease,transform .18s ease}
+  #toast.show{opacity:1;transform:translateY(0)}
 
   /* ---------- fx rack ---------- */
   #fx-list{display:flex;flex-direction:column;gap:8px}
@@ -676,8 +677,8 @@
   footer{margin-top:12px;text-align:center;font-size:9px;letter-spacing:.24em;text-transform:uppercase;color:#5a6070}
 
   header .file-tools{margin-left:auto;display:flex;gap:6px;position:relative;align-items:center}
-  #viz{flex:1 1 60px;min-width:60px;height:40px;align-self:center;margin:0 10px;border-radius:6px;
-    background:#0f1218;border:1px solid var(--line);cursor:pointer}
+  #viz{flex:1 1 80px;min-width:80px;height:56px;align-self:center;margin:0 12px;border-radius:6px;
+    background:radial-gradient(120% 160% at 50% 120%,#141b28,#0b0d11);border:1px solid var(--line);cursor:pointer}
   header .file-tools button{padding:6px 10px;font-size:11px}
   .io-lcd select{
     max-width:128px;background:#161a22;color:var(--ink);border:1px solid var(--line);
@@ -702,7 +703,6 @@
     </div>
     <canvas id="viz" title="Audio visualizer — click to switch it off / on"></canvas>
     <div class="tools file-tools">
-      <span id="file-msg" hidden></span>
       <button id="hk-btn" class="hk-btn" title="Show all keyboard shortcuts (?)" aria-expanded="false">Hotkeys</button>
       <button id="new-proj" title="Save the current project, then start an empty one">New</button>
       <button id="save-proj">Save</button>
@@ -4149,9 +4149,15 @@ const recBtn=document.getElementById('rec');
 const recMsg=document.getElementById('rec-msg');
 function say(msg){ recMsg.hidden=!msg; recMsg.textContent=msg||''; }
 function flash(msg){ say(msg); setTimeout(()=>say(''),2500); }
-const fileMsgEl=document.getElementById('file-msg');
-function fileSay(msg){ fileMsgEl.hidden=!msg; fileMsgEl.textContent=msg||''; }
-function fileFlash(msg){ fileSay(msg); setTimeout(()=>fileSay(''),2500); }
+let toastEl=null, toastT=null;
+function fileSay(msg,sticky){                                   // status text lives in its own toast, never over the header viz
+  if(!toastEl){ toastEl=document.createElement('div'); toastEl.id='toast'; toastEl.setAttribute('role','status'); document.body.appendChild(toastEl); }
+  clearTimeout(toastT);
+  if(!msg){ toastEl.classList.remove('show'); return; }
+  toastEl.textContent=msg; toastEl.classList.add('show');
+  if(!sticky) toastT=setTimeout(()=>toastEl.classList.remove('show'),4000);   // progress messages update in place; final ones fade
+}
+function fileFlash(msg){ fileSay(msg); }
 
 async function toggleRecord(){
   if(countInTimer){                       // cancel a pending count-in
@@ -8168,38 +8174,55 @@ let vizPk=null, vizWave=null;
 function drawViz(){
   const cv=document.getElementById('viz'); if(!cv) return;
   const g=cv.getContext('2d'); if(!g) return;
-  const dpr=window.devicePixelRatio||1, cw=cv.clientWidth||60, ch=cv.clientHeight||40;
+  const dpr=window.devicePixelRatio||1, cw=cv.clientWidth||80, ch=cv.clientHeight||56;
   const bw=Math.round(cw*dpr), bh=Math.round(ch*dpr);
   if(cv.width!==bw||cv.height!==bh){ cv.width=bw; cv.height=bh; }
   g.setTransform(dpr,0,0,dpr,0,0);
   g.clearRect(0,0,cw,ch);
-  if(!vizOn){ g.strokeStyle='rgba(139,147,163,.25)'; g.beginPath(); g.moveTo(6,ch/2); g.lineTo(cw-6,ch/2); g.stroke();
-    g.fillStyle='rgba(139,147,163,.35)'; g.font='8px system-ui'; g.fillText('viz off — click',8,ch/2-4); return; }
-  const mid=ch/2;
-  if(!(mAnL&&mAnR&&ctx&&mAnL.getByteFrequencyData&&mAnR.getByteFrequencyData)){ g.strokeStyle='rgba(95,212,196,.3)'; g.beginPath(); g.moveTo(0,mid); g.lineTo(cw,mid); g.stroke(); return; }
-  if(!drawViz._fb){ drawViz._fb=new Uint8Array(mAnL.frequencyBinCount); drawViz._fb2=new Uint8Array(mAnR.frequencyBinCount); }
-  mAnL.getByteFrequencyData(drawViz._fb); mAnR.getByteFrequencyData(drawViz._fb2);
-  const NB=Math.max(24,Math.min(64,Math.floor(cw/7)));
-  if(!vizPk||vizPk.length!==NB) vizPk=new Float32Array(NB);
-  const nyq=ctx.sampleRate/2, bins=mAnL.frequencyBinCount;
-  for(let i2=0;i2<NB;i2++){
-    const f0=30*Math.pow(nyq*0.8/30,i2/NB), f1=30*Math.pow(nyq*0.8/30,(i2+1)/NB);
-    let k0=Math.max(0,Math.floor(f0/nyq*bins)), k1=Math.min(bins-1,Math.max(k0,Math.ceil(f1/nyq*bins)));
-    let m=0; for(let k=k0;k<=k1;k++){ const v=Math.max(drawViz._fb[k],drawViz._fb2[k]); if(v>m) m=v; }
-    const h=(m/255)*(mid-2);
-    vizPk[i2]=Math.max(vizPk[i2]*0.94,h);
-    const x=i2/NB*cw+1, w2=cw/NB-2;
-    const hue=i2/NB;
-    g.fillStyle=hue<0.5?'#5fd4c4':hue<0.8?'#ffb347':'#ff5d5d';
-    g.globalAlpha=0.85;
-    g.fillRect(x,mid-h,w2,h); g.fillRect(x,mid,w2,h*0.8);
-    g.globalAlpha=1;
-    g.fillStyle='#ffe9c9'; g.fillRect(x,mid-vizPk[i2]-1.5,w2,1.5);
+  if(!vizOn){ g.strokeStyle='rgba(139,147,163,.22)'; g.beginPath(); g.moveTo(8,ch*0.62); g.lineTo(cw-8,ch*0.62); g.stroke();
+    g.fillStyle='rgba(139,147,163,.35)'; g.font='8px system-ui'; g.fillText('viz off — click',10,ch*0.62-4); return; }
+  const ready=mAnL&&mAnR&&ctx&&mAnL.getByteFrequencyData&&mAnR.getByteFrequencyData;
+  const NB=Math.max(20,Math.min(48,Math.floor(cw/9)));         // frequency columns
+  const ROWS=14;                                               // depth rows (time history, receding)
+  if(!drawViz.hist || drawViz.hist.nb!==NB){ drawViz.hist={nb:NB, rows:[]}; for(let r=0;r<ROWS;r++) drawViz.hist.rows.push(new Float32Array(NB)); }
+  const H=drawViz.hist.rows;
+  // newest spectrum → front row
+  const front=new Float32Array(NB);
+  if(ready){
+    if(!drawViz._fb || drawViz._fb.length!==mAnL.frequencyBinCount){ drawViz._fb=new Uint8Array(mAnL.frequencyBinCount); drawViz._fb2=new Uint8Array(mAnR.frequencyBinCount); }
+    mAnL.getByteFrequencyData(drawViz._fb); mAnR.getByteFrequencyData(drawViz._fb2);
+    const nyq=ctx.sampleRate/2, bins=mAnL.frequencyBinCount;
+    for(let i=0;i<NB;i++){
+      const f0=30*Math.pow(nyq*0.8/30,i/NB), f1=30*Math.pow(nyq*0.8/30,(i+1)/NB);
+      let k0=Math.max(0,Math.floor(f0/nyq*bins)), k1=Math.min(bins-1,Math.max(k0,Math.ceil(f1/nyq*bins)));
+      let m=0; for(let k=k0;k<=k1;k++){ const v=Math.max(drawViz._fb[k],drawViz._fb2[k]); if(v>m) m=v; }
+      front[i]=m/255;
+    }
   }
-  if(mBufL && mAnL.getFloatTimeDomainData){ mAnL.getFloatTimeDomainData(mBufL);
-    g.strokeStyle='rgba(230,232,236,.28)'; g.lineWidth=1; g.beginPath();
-    for(let i2=0;i2<mBufL.length;i2++){ const x=i2/(mBufL.length-1)*cw, y=mid-mBufL[i2]*mid*0.9; i2?g.lineTo(x,y):g.moveTo(x,y); }
-    g.stroke(); }
+  H.pop(); H.unshift(front);                                   // row 0 = nearest/front, last = far/back
+  // perspective projection: far rows smaller, higher, dimmer, pushed toward the vanishing point
+  const cx=cw/2, horizon=ch*0.30, baseY=ch*0.98, colW=cw*0.92;
+  const persp=r=>{ const t=r/(ROWS-1); const sc=1-0.72*t; return {sc, y:baseY-(baseY-horizon)*t, alpha:(1-t)*0.9+0.08}; };
+  const amp=ch*0.72;
+  for(let r=ROWS-1;r>=0;r--){                                  // draw far → near so near overlaps far
+    const P=persp(r), row=H[r];
+    const px=i=>cx+(i/(NB-1)-0.5)*colW*P.sc;
+    const py=i=>P.y-row[i]*amp*P.sc;
+    // filled ribbon
+    g.beginPath(); g.moveTo(px(0),P.y);
+    for(let i=0;i<NB;i++) g.lineTo(px(i),py(i));
+    g.lineTo(px(NB-1),P.y); g.closePath();
+    const hueTop = r<3 ? 'rgba(255,93,93,' : r<7 ? 'rgba(255,179,71,' : 'rgba(95,212,196,';
+    g.fillStyle=hueTop+(P.alpha*0.30)+')'; g.fill();
+    // ridge line
+    g.beginPath();
+    for(let i=0;i<NB;i++){ const x=px(i), y=py(i); i?g.lineTo(x,y):g.moveTo(x,y); }
+    g.strokeStyle=hueTop+P.alpha+')'; g.lineWidth=r===0?1.6:1; g.stroke();
+  }
+  // vertical grid lines converging to the vanishing point (the 3D "floor")
+  g.strokeStyle='rgba(139,147,163,.10)'; g.lineWidth=1;
+  for(let i=0;i<=6;i++){ const fx=(i/6-0.5); g.beginPath();
+    g.moveTo(cx+fx*colW, baseY); g.lineTo(cx+fx*colW*(1-0.72), horizon); g.stroke(); }
 }
 function vsyncPump(on){
   if(!on) return;
@@ -8814,11 +8837,11 @@ async function runExport(o){
     let total=0; const names=[];
     for(let i=0;i<jobs.length;i++){
       const job=jobs[i]; const jl=job.label?' '+job.label+' ('+(i+1)+'/'+jobs.length+')':'';
-      fileSay('Rendering'+jl+'…'); prog.start('Rendering'+jl, expEnd-expStart+o.tail);
+      fileSay('Rendering'+jl+'…',true); prog.start('Rendering'+jl, expEnd-expStart+o.tail);
       const raw=await renderRange(expStart,expEnd,{sr, tail:o.tail, solo:job.solo, noMaster:o.stems&&!o.stemMaster, cancel, cols:prog.cols, onProgress:prog.render});
       if(!raw || cancel.on) throw new Error('cancelled');
       const buf=o.trim!==false?trimSilence(raw):raw;
-      fileSay('Encoding'+jl+'…'); prog.phase('Encoding'+jl);
+      fileSay('Encoding'+jl+'…',true); prog.phase('Encoding'+jl);
       const blob=await encodeExport(buf,Object.assign({},o,{onProgress:prog.encode}));
       if(cancel.on) throw new Error('cancelled');
       const fname=(job.label?base+'-'+job.label.replace(/[\\/:*?"<>|]+/g,'-'):base)+ext;
@@ -9148,7 +9171,7 @@ async function saveProject(){
       dlName=name; setProjectName(name);
     }
     // 2. build the archive
-    fileSay('Saving…');
+    fileSay('Saving…',true);
     const bufs=[], bufIdx=new Map();
     const bufRef=b=>{ if(!bufIdx.has(b)){ bufIdx.set(b,bufs.length); bufs.push(b); } return bufIdx.get(b); };
     const proj={

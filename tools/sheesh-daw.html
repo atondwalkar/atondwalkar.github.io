@@ -41,6 +41,7 @@
   body.midi-learn button.midi-bound{position:relative}
   #midi-learn.on{background:var(--amber);color:#111;border-color:var(--amber)}
   .exp-pop{width:min(620px,94vw)}
+  .yt-pop{width:min(520px,94vw)} .yt-err{color:#ff8d8d !important} .yt-pop code{color:var(--amber);font-size:10px}
   .exp-prog{width:min(680px,94vw)} .exp-prog canvas{display:block;width:100%;height:140px;border:1px solid var(--line);border-radius:4px;margin-top:8px;background:#0f1218}
   .rv-bar{height:6px;background:#161a22;border:1px solid var(--line);border-radius:3px;margin-top:8px;overflow:hidden} .rv-bar i{display:block;height:100%;width:0;background:var(--amber);transition:width .15s linear}
   .rv-row{display:flex;align-items:center;gap:10px;margin-top:8px} .rv-row #rv-eta{margin-left:auto}
@@ -6074,38 +6075,53 @@ function launchHelper(){
     },700);
   });
 }
-document.getElementById('import-yt').onclick=async ()=>{
-  const url=prompt('YouTube URL:'); if(!url) return;
+async function runYtImport(url,msgEl,goBtn){
+  url=(url||'').trim(); if(!url){ msgEl.textContent='Paste a YouTube URL first.'; return false; }
   initAudio();
-  say('Fetching audio from YouTube…');
+  goBtn.disabled=true; msgEl.className='exp-note'; msgEl.textContent='Fetching audio from YouTube…';
   try{
     let res;
-    try{
-      res=await fetch(YT_HELPER+'/yt?url='+encodeURIComponent(url.trim()));
-    }catch(_){
-      say('Starting import helper…');
-      if(!await launchHelper()) throw new TypeError('helper down');
-      say('Fetching audio from YouTube…');
-      res=await fetch(YT_HELPER+'/yt?url='+encodeURIComponent(url.trim()));
-    }
+    try{ res=await fetch(YT_HELPER+'/yt?url='+encodeURIComponent(url)); }
+    catch(_){ msgEl.textContent='Starting import helper…'; if(!await launchHelper()) throw new TypeError('helper down'); msgEl.textContent='Fetching audio from YouTube…'; res=await fetch(YT_HELPER+'/yt?url='+encodeURIComponent(url)); }
     if(!res.ok) throw new Error(await res.text());
     const title=decodeURIComponent(res.headers.get('X-Title')||'YouTube');
-    say('Decoding…');
+    msgEl.textContent='Decoding \u201c'+title.slice(0,40)+'\u201d…';
     const buf=await ctx.decodeAudioData(await res.arrayBuffer());
     pushHistory();
-    const tr=addTrack();
-    tr.name=title.slice(0,18)||'YT Import';
+    const tr=addTrack(); tr.name=title.slice(0,18)||'YT Import';
     tr.chipEl.querySelector('.tname').textContent=tr.name;
-    renderMixer();
-    selectTrack(tr);
+    renderMixer(); selectTrack(tr);
     addClip(tr, buf, startPos, title.slice(0,18));
     flash('Imported: '+title.slice(0,32));
+    return true;
   }catch(e){
-    flash(e instanceof TypeError
-      ? 'YT helper not running — start it with: python3 yt_import.py'
-      : 'YouTube import failed: '+(e.message||e));
+    msgEl.className='exp-note yt-err';
+    msgEl.textContent = e instanceof TypeError
+      ? 'Helper not running — start it with: python3 yt_import.py'
+      : 'Import failed: '+(e.message||e);
+    goBtn.disabled=false;
+    return false;
   }
-};
+}
+function openYtDialog(){
+  document.querySelectorAll('.yt-pop').forEach(e=>e.remove());
+  const pop=document.createElement('div'); pop.className='hk-pop exp-pop yt-pop'; pop.setAttribute('role','dialog'); pop.setAttribute('aria-label','YouTube import');
+  pop.innerHTML='<div class="hk-head"><span>YouTube import</span><button class="kill" aria-label="Close">\u2715</button></div>'+
+    '<div class="exp-grid"><label>URL</label><div><input id="yt-url" type="text" placeholder="https://www.youtube.com/watch?v=\u2026" style="width:100%"></div></div>'+
+    '<div class="exp-note" style="padding:2px">Extracts the audio to a new track (needs the local helper: <code>python3 yt_import.py</code>).</div>'+
+    '<div class="exp-foot"><span id="yt-msg" class="exp-note"></span><button id="yt-cancel">Cancel</button><button id="yt-go" class="primary">Import</button></div>';
+  document.body.appendChild(pop);
+  const $=id=>pop.querySelector('#'+id);
+  const close=()=>{ pop.remove(); document.removeEventListener('keydown',esc); };
+  const esc=e=>{ if(e.key==='Escape'){ e.stopPropagation(); close(); } };
+  document.addEventListener('keydown',esc);
+  pop.querySelector('.kill').onclick=$('yt-cancel').onclick=close;
+  $('yt-url').addEventListener('keydown',e=>{ e.stopPropagation(); if(e.key==='Enter') $('yt-go').click(); });
+  $('yt-go').onclick=async()=>{ if(await runYtImport($('yt-url').value,$('yt-msg'),$('yt-go'))) close(); };
+  $('yt-url').focus();
+  return pop;
+}
+document.getElementById('import-yt').onclick=openYtDialog;
 
 function drawTimelinePlayhead(){
   tlPlayhead.style.transform='translateX('+(curPos()*PPS)+'px)';

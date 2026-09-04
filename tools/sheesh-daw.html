@@ -364,6 +364,8 @@
   }
   .clip canvas{position:absolute;inset:0;pointer-events:none}
   .ghost{position:absolute;pointer-events:none;z-index:1;opacity:.55;border-radius:4px}
+  .ghost.bghost.sum{opacity:.85;background:none;border:none}
+  .ghost.bghost.midi{opacity:.32;filter:saturate(.5)}
   .ghost.bghost{opacity:.42;filter:saturate(.55);background:rgba(255,255,255,.035);border:1px dashed rgba(255,255,255,.12);box-sizing:border-box}
   .clip .cname{
     position:absolute;top:2px;left:6px;font-size:8px;letter-spacing:.12em;
@@ -5336,32 +5338,65 @@ function renderGhosts(){
   renderBusGhosts();
 }
 /* bus lanes show a combined ghost of everything routed into them (clips + MIDI items of every sub-track, nested busses included) */
+/* per-clip waveform envelope in real amplitude (× clip gain, mono mix), cached by geometry so moves don't recompute */
+function clipColumnPeaks(c){
+  if(!c.buffer) return null;
+  const w=Math.max(6,Math.round(clipTlDur(c)*PPS)), gainLin=clipGainLin(c);
+  const key=c.offset+'|'+c.dur+'|'+w+'|'+(c.rev?1:0)+'|'+(c.fadeIn||0)+'|'+(c.fadeOut||0)+'|'+gainLin;
+  if(c._cpk && c._cpk.key===key && c._cpk.buf===c.buffer) return c._cpk;
+  const sr=c.buffer.sampleRate, nch=Math.min(2,c.buffer.numberOfChannels), chans=[];
+  for(let ch=0;ch<nch;ch++) chans.push(c.buffer.getChannelData(ch));
+  const N=chans[0].length, s0=Math.floor(c.offset*sr), n=Math.max(1,Math.floor(c.dur*sr)), spp=n/w, stride=Math.max(1,Math.floor(spp/40));
+  const min=new Float32Array(w), max=new Float32Array(w);
+  for(let x=0;x<w;x++){
+    const a=s0+Math.floor(x*spp), b=a+Math.max(1,Math.floor(spp)); let mn=0,mx=0;
+    for(let i=a;i<b;i+=stride){ let sm=0; for(let ch=0;ch<nch;ch++) sm+=chans[ch][((i%N)+N)%N]||0; sm=(sm/nch)*gainLin; if(sm<mn)mn=sm; if(sm>mx)mx=sm; }
+    min[x]=mn; max[x]=mx;
+  }
+  if(c.rev){ min.reverse(); max.reverse(); }
+  const fi=Math.round((c.fadeIn||0)*PPS), fo=Math.round((c.fadeOut||0)*PPS);   // taper the envelope through the clip's own fades
+  for(let x=0;x<w;x++){ let f=1; if(fi>0&&x<fi) f=Math.min(f,x/fi); if(fo>0&&x>w-fo) f=Math.min(f,(w-x)/fo); if(f<1){ min[x]*=f; max[x]*=f; } }
+  return c._cpk={key, buf:c.buffer, w, min, max};
+}
+/* summed waveform of everything routed (transitively) into a bus: Σ (clip envelope × source-track volume), per pixel column */
+function busSumPeaks(bus){
+  const byId=new Map(tracksAll.map(t=>[t.id,t]));
+  const isDesc=tr=>{ let cur=tr, g=0; while(cur && g++<64){ if(cur.busId===bus.id) return true; cur=cur.busId?byId.get(cur.busId):null; } return false; };
+  const srcs=[]; let W=0;
+  tracksAll.forEach(tr=>{ if(tr===bus || !isDesc(tr)) return; const tv=effectiveVol(tr.id);
+    tr.clips.forEach(c=>{ const pk=clipColumnPeaks(c); if(!pk) return; const x0=Math.round(c.start*PPS); srcs.push({pk,tv,x0}); W=Math.max(W,x0+pk.w); }); });
+  if(!W) return null;
+  const min=new Float32Array(W), max=new Float32Array(W);
+  srcs.forEach(({pk,tv,x0})=>{ for(let x=0;x<pk.w;x++){ const col=x0+x; if(col<0||col>=W) continue; min[col]+=pk.min[x]*tv; max[col]+=pk.max[x]*tv; } });
+  return {W, min, max};
+}
 function renderBusGhosts(){
   const byId=new Map(tracksAll.map(t=>[t.id,t]));
-  tracksAll.forEach(tr=>{
-    if(!tr.busId) return;
-    const anc=[]; let cur=byId.get(tr.busId), g=0;
-    while(cur && g++<64){ anc.push(cur); cur=cur.busId?byId.get(cur.busId):null; }
-    if(!anc.length) return;
-    const srcs=[...tr.clips.map(c=>({el:c.el,cv:c.canvas,kind:'clip'})), ...tr.items.map(it=>({el:it.el,cv:it.canvas,kind:it.kind}))];
-    anc.forEach(bus=>{
-      if(!bus.laneEl) return;
-      const compact=bus.laneEl.classList.contains('compact');
-      const h=compact?26:54, top=compact?3:5;
-      srcs.forEach(s=>{
-        if(!s.cv || !s.cv.width) return;
-        const w=s.cv.width;
-        const gcv=document.createElement('canvas'); gcv.className='ghost bghost '+s.kind;
-        gcv.width=w; gcv.height=h;
-        gcv.style.width=w+'px'; gcv.style.height=h+'px'; gcv.style.left=s.el.style.left; gcv.style.top=top+'px';
-        gcv.dataset.src=tr.id;
-        const g2=gcv.getContext('2d'); if(!g2) return;
-        g2.drawImage(s.cv,0,0,w,h);
-        bus.laneEl.appendChild(gcv);
-      });
-    });
+  const busSet=new Set(tracksAll.filter(t=>t.busId).flatMap(t=>{ const a=[]; let cur=byId.get(t.busId), g=0; while(cur&&g++<64){ a.push(cur.id); cur=cur.busId?byId.get(cur.busId):null; } return a; }));
+  busSet.forEach(bid=>{
+    const bus=byId.get(bid); if(!bus||!bus.laneEl) return;
+    const compact=bus.laneEl.classList.contains('compact'), h=compact?26:54, top=compact?3:5, mid=h/2, amp=h/2-1;
+    // summed audio waveform
+    const sum=busSumPeaks(bus);
+    if(sum){
+      const gcv=document.createElement('canvas'); gcv.className='ghost bghost sum';
+      gcv.width=sum.W; gcv.height=h; gcv.style.width=sum.W+'px'; gcv.style.height=h+'px'; gcv.style.left='0px'; gcv.style.top=top+'px';
+      const g2=gcv.getContext('2d');
+      if(g2){ for(let x=0;x<sum.W;x++){ const mxr=sum.max[x], mnr=sum.min[x]; if(mxr===0&&mnr===0) continue;
+        const mx=Math.min(1,mxr)*amp, mn=Math.max(-1,mnr)*amp, over=mxr>1||mnr<-1;
+        g2.fillStyle=over?'rgba(255,110,110,.75)':'rgba(120,200,255,.55)';
+        g2.fillRect(x, mid-mx, 1, Math.max(1, mx-mn)); } }
+      bus.laneEl.appendChild(gcv);
+    }
+    // MIDI items have no sampled waveform to sum — keep a faint blit of each so they still show on the bus
+    tracksAll.forEach(tr=>{ if(tr===bus) return; let cur=tr, g=0, desc=false; while(cur&&g++<64){ if(cur.busId===bid){ desc=true; break; } cur=cur.busId?byId.get(cur.busId):null; } if(!desc) return;
+      tr.items.forEach(it=>{ if(!it.canvas||!it.canvas.width) return; const w=it.canvas.width;
+        const gc=document.createElement('canvas'); gc.className='ghost bghost midi '+it.kind; gc.width=w; gc.height=h;
+        gc.style.width=w+'px'; gc.style.height=h+'px'; gc.style.left=it.el.style.left; gc.style.top=top+'px';
+        const g3=gc.getContext('2d'); if(g3) g3.drawImage(it.canvas,0,0,w,h); bus.laneEl.appendChild(gc); }); });
   });
 }
+
 function deleteItem(it){
   const tr=tracksAll.find(t=>t.id===it.trackId);
   tr.items=tr.items.filter(x=>x!==it);

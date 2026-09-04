@@ -676,6 +676,8 @@
   footer{margin-top:12px;text-align:center;font-size:9px;letter-spacing:.24em;text-transform:uppercase;color:#5a6070}
 
   header .file-tools{margin-left:auto;display:flex;gap:6px;position:relative;align-items:center}
+  #viz{flex:1 1 60px;min-width:60px;height:40px;align-self:center;margin:0 10px;border-radius:6px;
+    background:#0f1218;border:1px solid var(--line);cursor:pointer}
   header .file-tools button{padding:6px 10px;font-size:11px}
   .io-lcd select{
     max-width:128px;background:#161a22;color:var(--ink);border:1px solid var(--line);
@@ -698,6 +700,7 @@
       <label>Position</label>
       <span class="val" id="pos-val">1.1</span>
     </div>
+    <canvas id="viz" title="Audio visualizer — click to switch it off / on"></canvas>
     <div class="tools file-tools">
       <span id="file-msg" hidden></span>
       <button id="hk-btn" class="hk-btn" title="Show all keyboard shortcuts (?)" aria-expanded="false">Hotkeys</button>
@@ -8158,6 +8161,46 @@ let frameDt=16.7;                                              // smoothed rAF i
    compositor-only playhead and the meters chunky. While the transport runs (or recording), painting one
    alternating pixel per frame keeps BeginFrames at the display rate. Idle pages still power-save. */
 let pumpCv=null, pumpG=null, pumpPh=false;
+/* header audio visualizer: log-frequency bars from the master analysers, falling peak caps, waveform ghost.
+   Click toggles it (remembered); off shows a dim idle line. */
+let vizOn=true; try{ vizOn=localStorage.getItem('s16viz')!=='0'; }catch(_){}
+let vizPk=null, vizWave=null;
+function drawViz(){
+  const cv=document.getElementById('viz'); if(!cv) return;
+  const g=cv.getContext('2d'); if(!g) return;
+  const dpr=window.devicePixelRatio||1, cw=cv.clientWidth||60, ch=cv.clientHeight||40;
+  const bw=Math.round(cw*dpr), bh=Math.round(ch*dpr);
+  if(cv.width!==bw||cv.height!==bh){ cv.width=bw; cv.height=bh; }
+  g.setTransform(dpr,0,0,dpr,0,0);
+  g.clearRect(0,0,cw,ch);
+  if(!vizOn){ g.strokeStyle='rgba(139,147,163,.25)'; g.beginPath(); g.moveTo(6,ch/2); g.lineTo(cw-6,ch/2); g.stroke();
+    g.fillStyle='rgba(139,147,163,.35)'; g.font='8px system-ui'; g.fillText('viz off — click',8,ch/2-4); return; }
+  const mid=ch/2;
+  if(!(mAnL&&mAnR&&ctx&&mAnL.getByteFrequencyData&&mAnR.getByteFrequencyData)){ g.strokeStyle='rgba(95,212,196,.3)'; g.beginPath(); g.moveTo(0,mid); g.lineTo(cw,mid); g.stroke(); return; }
+  if(!drawViz._fb){ drawViz._fb=new Uint8Array(mAnL.frequencyBinCount); drawViz._fb2=new Uint8Array(mAnR.frequencyBinCount); }
+  mAnL.getByteFrequencyData(drawViz._fb); mAnR.getByteFrequencyData(drawViz._fb2);
+  const NB=Math.max(24,Math.min(64,Math.floor(cw/7)));
+  if(!vizPk||vizPk.length!==NB) vizPk=new Float32Array(NB);
+  const nyq=ctx.sampleRate/2, bins=mAnL.frequencyBinCount;
+  for(let i2=0;i2<NB;i2++){
+    const f0=30*Math.pow(nyq*0.8/30,i2/NB), f1=30*Math.pow(nyq*0.8/30,(i2+1)/NB);
+    let k0=Math.max(0,Math.floor(f0/nyq*bins)), k1=Math.min(bins-1,Math.max(k0,Math.ceil(f1/nyq*bins)));
+    let m=0; for(let k=k0;k<=k1;k++){ const v=Math.max(drawViz._fb[k],drawViz._fb2[k]); if(v>m) m=v; }
+    const h=(m/255)*(mid-2);
+    vizPk[i2]=Math.max(vizPk[i2]*0.94,h);
+    const x=i2/NB*cw+1, w2=cw/NB-2;
+    const hue=i2/NB;
+    g.fillStyle=hue<0.5?'#5fd4c4':hue<0.8?'#ffb347':'#ff5d5d';
+    g.globalAlpha=0.85;
+    g.fillRect(x,mid-h,w2,h); g.fillRect(x,mid,w2,h*0.8);
+    g.globalAlpha=1;
+    g.fillStyle='#ffe9c9'; g.fillRect(x,mid-vizPk[i2]-1.5,w2,1.5);
+  }
+  if(mBufL && mAnL.getFloatTimeDomainData){ mAnL.getFloatTimeDomainData(mBufL);
+    g.strokeStyle='rgba(230,232,236,.28)'; g.lineWidth=1; g.beginPath();
+    for(let i2=0;i2<mBufL.length;i2++){ const x=i2/(mBufL.length-1)*cw, y=mid-mBufL[i2]*mid*0.9; i2?g.lineTo(x,y):g.moveTo(x,y); }
+    g.stroke(); }
+}
 function vsyncPump(on){
   if(!on) return;
   if(!pumpCv){ pumpCv=document.createElement('canvas'); pumpCv.width=2; pumpCv.height=2;
@@ -8173,7 +8216,8 @@ function frame(now){
   frame._pl=nowMs;
   perfTick(nowMs);
   vsyncPump(state.playing || !!recorder);
-  const tick2=(frameNo&1)===0 || frameDt>24;                     // 30 Hz for meters / spectra / scopes — full rate when rAF itself is slow
+  const tick2=(frameNo&1)===0 || frameDt>24;
+  if(tick2){ try{ drawViz(); }catch(_){} }                     // a viz hiccup must never kill the frame loop                     // 30 Hz for meters / spectra / scopes — full rate when rAF itself is slow
   const fxOpen=!fxPanelEl.classList.contains('pcollapsed');
   const mixOpen=!mixerPanelEl.classList.contains('pcollapsed');
   if(fxOpen && selectedTrack){
@@ -10241,6 +10285,7 @@ mvol.onpointerdown=()=>pushHistory();
 mvol._midi={kind:'mvol'};
 Object.keys(MIDI_BTN_LABEL).forEach(id=>{ const el=document.getElementById(id); if(el) el._midi={kind:'btn',id}; });
 document.getElementById('midi-learn').onclick=()=>setMidiLearn(!midiLearn);
+{ const vz=document.getElementById('viz'); if(vz) vz.onclick=()=>{ vizOn=!vizOn; try{ localStorage.setItem('s16viz',vizOn?'1':'0'); }catch(_){} drawViz(); flash(vizOn?'Visualizer on':'Visualizer off'); }; }
 mvol.oninput=()=>{
   state.tracks.master.vol=parseFloat(mvol.value);
   if(master) master.gain.setTargetAtTime(parseFloat(mvol.value), ctx.currentTime, 0.01);

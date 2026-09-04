@@ -8187,48 +8187,34 @@ function drawViz(){
   const bw=Math.round(cw*dpr), bh=Math.round(ch*dpr);
   if(cv.width!==bw||cv.height!==bh){ cv.width=bw; cv.height=bh; }
   g.setTransform(dpr,0,0,dpr,0,0);
-  g.clearRect(0,0,cw,ch);
-  if(!vizOn){ g.strokeStyle='rgba(139,147,163,.22)'; g.beginPath(); g.moveTo(8,ch*0.62); g.lineTo(cw-8,ch*0.62); g.stroke();
-    g.fillStyle='rgba(139,147,163,.35)'; g.font='8px system-ui'; g.fillText('viz off — click',10,ch*0.62-4); return; }
-  const ready=mAnL&&mAnR&&ctx&&mAnL.getByteFrequencyData&&mAnR.getByteFrequencyData;
-  const NB=Math.max(20,Math.min(48,Math.floor(cw/9)));         // frequency columns
-  const ROWS=14;                                               // depth rows (time history, receding)
-  if(!drawViz.hist || drawViz.hist.nb!==NB){ drawViz.hist={nb:NB, rows:[]}; for(let r=0;r<ROWS;r++) drawViz.hist.rows.push(new Float32Array(NB)); }
-  const H=drawViz.hist.rows;
-  // newest spectrum → front row
-  const front=new Float32Array(NB);
+  if(!vizOn){ g.clearRect(0,0,cw,ch); g.strokeStyle='rgba(139,147,163,.22)'; g.beginPath(); g.moveTo(8,ch/2); g.lineTo(cw-8,ch/2); g.stroke();
+    g.fillStyle='rgba(139,147,163,.35)'; g.font='8px system-ui'; g.fillText('viz off — click',10,ch/2-4); return; }
+  // amplitude-driven colour gradient: three band levels colour the gradient, overall level sets its intensity. Cheap: one fillRect.
+  let lo=0,mid=0,hi=0,amp=0;
+  const ready=mAnL&&mAnR&&ctx&&mAnL.getByteFrequencyData;
   if(ready){
-    if(!drawViz._fb || drawViz._fb.length!==mAnL.frequencyBinCount){ drawViz._fb=new Uint8Array(mAnL.frequencyBinCount); drawViz._fb2=new Uint8Array(mAnR.frequencyBinCount); }
+    if(!drawViz._fb||drawViz._fb.length!==mAnL.frequencyBinCount){ drawViz._fb=new Uint8Array(mAnL.frequencyBinCount); drawViz._fb2=new Uint8Array(mAnR.frequencyBinCount); }
     mAnL.getByteFrequencyData(drawViz._fb); mAnR.getByteFrequencyData(drawViz._fb2);
-    const nyq=ctx.sampleRate/2, bins=mAnL.frequencyBinCount, top=Math.min(nyq*0.92,20000), lo=28;
-    const TILT=4.5, REF=800, FLOOR=-74, CEIL=-12;               // +4.5 dB/oct pink tilt so bass doesn't dominate; map dB → height
-    for(let i=0;i<NB;i++){
-      const f0=lo*Math.pow(top/lo,i/NB), f1=lo*Math.pow(top/lo,(i+1)/NB), fc=Math.sqrt(f0*f1);
-      let k0=Math.max(0,Math.floor(f0/nyq*bins)), k1=Math.min(bins-1,Math.max(k0,Math.ceil(f1/nyq*bins)));
-      let m=0; for(let k=k0;k<=k1;k++){ const v=Math.max(drawViz._fb[k],drawViz._fb2[k]); if(v>m) m=v; }
-      const db=-100+m/255*70 + TILT*Math.log2(fc/REF);          // analyser bytes are dB (−100…−30); add the octave tilt
-      front[i]=Math.max(0,Math.min(1,(db-FLOOR)/(CEIL-FLOOR)));
-    }
+    const fb=drawViz._fb, fb2=drawViz._fb2, bins=fb.length, nyq=ctx.sampleRate/2;
+    const band=(f0,f1,tiltDb)=>{ let k0=Math.max(1,Math.floor(f0/nyq*bins)), k1=Math.min(bins-1,Math.ceil(f1/nyq*bins)), s2=0,n=0;
+      for(let k=k0;k<=k1;k++){ s2+=Math.max(fb[k],fb2[k]); n++; } const db=-100+(n?s2/n:0)/255*70 + tiltDb;
+      return Math.max(0,Math.min(1,(db+66)/54)); };                 // −66…−12 dB → 0…1
+    lo=band(20,250,0); mid=band(250,3000,4); hi=band(3000,16000,9); // pink tilt keeps highs visible
+    amp=Math.max(lo,mid,hi)*0.7+((lo+mid+hi)/3)*0.3;
   }
-  H.pop(); H.unshift(front);                                  // row 0 = nearest, last = far
-  drawViz.phase=(drawViz.phase||0)+0.16;                       // gentle travelling ripple so the mesh always "waves"
-  const cx=cw/2, horizon=ch*0.26, baseY=ch*0.97, colW=cw*0.94, amp=ch*0.66, ph=drawViz.phase;
-  const P=r=>{ const t=r/(ROWS-1); return {sc:1-0.74*t, y:baseY-(baseY-horizon)*t, a:(1-t)*0.85+0.12}; };
-  // project every mesh vertex
-  const PX=[], PY=[], PA=[];
-  for(let r=0;r<ROWS;r++){ const pr=P(r), row=H[r], xs=[], ys=[];
-    for(let i=0;i<NB;i++){ const rip=0.06*Math.sin(i*0.7 - r*0.55 + ph)*(0.5+row[i]);
-      const h=(row[i]+rip)*amp*pr.sc;
-      xs.push(cx+(i/(NB-1)-0.5)*colW*pr.sc); ys.push(pr.y - h); }
-    PX.push(xs); PY.push(ys); PA.push(pr.a); }
-  const col=(r,a)=>{ const t=r/(ROWS-1); const c= t<0.33?'255,93,93': t<0.66?'255,179,71':'95,212,196'; return 'rgba('+c+','+a+')'; };
-  g.lineJoin='round';
-  // depth lines (columns): weave front→back at each frequency — this is what makes it a mesh, not just ridges
-  for(let i=0;i<NB;i++){ g.beginPath(); for(let r=0;r<ROWS;r++){ r?g.lineTo(PX[r][i],PY[r][i]):g.moveTo(PX[0][i],PY[0][i]); }
-    g.strokeStyle='rgba(150,180,210,.14)'; g.lineWidth=0.8; g.stroke(); }
-  // frequency lines (rows): far → near so near draws over far
-  for(let r=ROWS-1;r>=0;r--){ g.beginPath(); for(let i=0;i<NB;i++){ i?g.lineTo(PX[r][i],PY[r][i]):g.moveTo(PX[r][0],PY[r][0]); }
-    g.strokeStyle=col(r,PA[r]); g.lineWidth=r===0?1.7:1; g.stroke(); }
+  drawViz.level=amp; drawViz.bands=[lo,mid,hi];
+  const shade=(r,gr,b,L)=>{ const k=0.12+0.88*L; return 'rgb('+Math.round(r*k)+','+Math.round(gr*k)+','+Math.round(b*k)+')'; };
+  const grad=g.createLinearGradient(0,0,cw,0);
+  grad.addColorStop(0,   shade(255,93,71, lo));                     // lows: warm
+  grad.addColorStop(0.5, shade(255,179,71, mid));                   // mids: amber
+  grad.addColorStop(1,   shade(95,212,196, hi));                    // highs: cyan
+  g.fillStyle='#0b0d11'; g.fillRect(0,0,cw,ch);
+  g.globalAlpha=0.30+0.70*amp;                                      // whole panel gets more intense with level
+  g.fillStyle=grad; g.fillRect(0,0,cw,ch);
+  g.globalAlpha=1;
+  const cy=ch/2, gl=g.createLinearGradient(0,cy-ch*0.5*amp,0,cy+ch*0.5*amp);   // soft centre highlight scaled by amplitude
+  gl.addColorStop(0,'rgba(255,255,255,0)'); gl.addColorStop(0.5,'rgba(255,255,255,'+(0.10*amp)+')'); gl.addColorStop(1,'rgba(255,255,255,0)');
+  g.fillStyle=gl; g.fillRect(0,0,cw,ch);
 }
 function vsyncPump(on){
   if(!on) return;

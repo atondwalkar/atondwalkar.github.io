@@ -683,8 +683,6 @@
   footer{margin-top:12px;text-align:center;font-size:9px;letter-spacing:.24em;text-transform:uppercase;color:#5a6070}
 
   header .file-tools{margin-left:auto;display:flex;gap:6px;position:relative;align-items:center}
-  #viz{flex:1 1 80px;min-width:80px;height:56px;align-self:center;margin:0 12px;border-radius:6px;
-    background:radial-gradient(120% 160% at 50% 120%,#141b28,#0b0d11);border:1px solid var(--line);cursor:pointer}
   header .file-tools button{padding:6px 10px;font-size:11px}
   .io-lcd select{
     max-width:128px;background:#161a22;color:var(--ink);border:1px solid var(--line);
@@ -707,7 +705,6 @@
       <label>Position</label>
       <span class="val" id="pos-val">1.1</span>
     </div>
-    <canvas id="viz" title="Audio visualizer — click to switch it off / on"></canvas>
     <div class="tools file-tools">
       <button id="hk-btn" class="hk-btn" title="Show all keyboard shortcuts (?)" aria-expanded="false">Hotkeys</button>
       <button id="new-proj" title="Save the current project, then start an empty one">New</button>
@@ -8221,52 +8218,6 @@ let frameDt=16.7;                                              // smoothed rAF i
    compositor-only playhead and the meters chunky. While the transport runs (or recording), painting one
    alternating pixel per frame keeps BeginFrames at the display rate. Idle pages still power-save. */
 let pumpCv=null, pumpG=null, pumpPh=false;
-/* header audio visualizer: log-frequency bars from the master analysers, falling peak caps, waveform ghost.
-   Click toggles it (remembered); off shows a dim idle line. */
-let vizOn=true; try{ vizOn=localStorage.getItem('s16viz')!=='0'; }catch(_){}
-let vizPk=null, vizWave=null;
-function drawViz(){
-  const cv=document.getElementById('viz'); if(!cv) return;
-  const g=cv.getContext('2d'); if(!g) return;
-  const dpr=window.devicePixelRatio||1, cw=cv.clientWidth||80, ch=cv.clientHeight||56;
-  const bw=Math.round(cw*dpr), bh=Math.round(ch*dpr);
-  if(cv.width!==bw||cv.height!==bh){ cv.width=bw; cv.height=bh; }
-  g.setTransform(dpr,0,0,dpr,0,0);
-  if(!vizOn){ g.clearRect(0,0,cw,ch); g.strokeStyle='rgba(139,147,163,.22)'; g.beginPath(); g.moveTo(8,ch/2); g.lineTo(cw-8,ch/2); g.stroke();
-    g.fillStyle='rgba(139,147,163,.35)'; g.font='8px system-ui'; g.fillText('viz off — click',10,ch/2-4); return; }
-  // amplitude-driven colour gradient on a warped-LOG frequency axis (same axis as the EQ plot) so the
-  // interesting highs get real width instead of being crushed at the right edge. Cheap: one fillRect.
-  const NS=28;                                                      // gradient stops across the width
-  if(!drawViz.lv || drawViz.lv.length!==NS) drawViz.lv=new Float32Array(NS);
-  const lv=drawViz.lv; let amp=0;
-  const ready=mAnL&&mAnR&&ctx&&mAnL.getByteFrequencyData;
-  if(ready){
-    if(!drawViz._fb||drawViz._fb.length!==mAnL.frequencyBinCount){ drawViz._fb=new Uint8Array(mAnL.frequencyBinCount); drawViz._fb2=new Uint8Array(mAnR.frequencyBinCount); }
-    mAnL.getByteFrequencyData(drawViz._fb); mAnR.getByteFrequencyData(drawViz._fb2);
-    const fb=drawViz._fb, fb2=drawViz._fb2, bins=fb.length, nyq=ctx.sampleRate/2;
-    for(let s2=0;s2<NS;s2++){
-      const f0=fxAxisF(s2/NS), f1=fxAxisF((s2+1)/NS), fc=Math.sqrt(Math.max(1,f0*f1));
-      let k0=Math.max(1,Math.floor(f0/nyq*bins)), k1=Math.min(bins-1,Math.max(k0,Math.ceil(f1/nyq*bins))), m=0;
-      for(let k=k0;k<=k1;k++){ const v=Math.max(fb[k],fb2[k]); if(v>m) m=v; }
-      const db=-100+m/255*70 + 4.5*Math.log2(fc/800);               // +4.5 dB/oct pink tilt
-      lv[s2]=Math.max(0,Math.min(1,(db+66)/54));                    // −66…−12 dB → 0…1
-      if(lv[s2]>amp) amp=lv[s2];
-    }
-  } else lv.fill(0);
-  drawViz.level=amp; drawViz.bands=[lv[Math.floor(NS*0.15)],lv[Math.floor(NS*0.5)],lv[Math.floor(NS*0.85)]];
-  // hue sweeps warm(low) → amber(mid) → cyan(high) across the log axis; brightness = that band's level
-  const hueRGB=u=>{ if(u<0.5){ const t=u/0.5; return [255, Math.round(93+86*t), Math.round(71+0*t)]; } const t=(u-0.5)/0.5; return [Math.round(255-160*t), Math.round(179+33*t), Math.round(71+125*t)]; };
-  const grad=g.createLinearGradient(0,0,cw,0);
-  for(let s2=0;s2<NS;s2++){ const u=s2/(NS-1), L=lv[s2], k=0.10+0.90*L, c2=hueRGB(u);
-    grad.addColorStop(u,'rgb('+Math.round(c2[0]*k)+','+Math.round(c2[1]*k)+','+Math.round(c2[2]*k)+')'); }
-  g.fillStyle='#0b0d11'; g.fillRect(0,0,cw,ch);
-  g.globalAlpha=0.28+0.72*amp;
-  g.fillStyle=grad; g.fillRect(0,0,cw,ch);
-  g.globalAlpha=1;
-  const cy=ch/2, gl=g.createLinearGradient(0,cy-ch*0.5*amp,0,cy+ch*0.5*amp);   // soft centre highlight scaled by amplitude
-  gl.addColorStop(0,'rgba(255,255,255,0)'); gl.addColorStop(0.5,'rgba(255,255,255,'+(0.10*amp)+')'); gl.addColorStop(1,'rgba(255,255,255,0)');
-  g.fillStyle=gl; g.fillRect(0,0,cw,ch);
-}
 function vsyncPump(on){
   if(!on) return;
   if(!pumpCv){ pumpCv=document.createElement('canvas'); pumpCv.width=2; pumpCv.height=2;
@@ -8283,7 +8234,6 @@ function frame(now){
   perfTick(nowMs);
   vsyncPump(state.playing || !!recorder);
   const tick2=(frameNo&1)===0 || frameDt>24;
-  if(tick2){ try{ drawViz(); }catch(_){} }                     // a viz hiccup must never kill the frame loop                     // 30 Hz for meters / spectra / scopes — full rate when rAF itself is slow
   const fxOpen=!fxPanelEl.classList.contains('pcollapsed');
   const mixOpen=!mixerPanelEl.classList.contains('pcollapsed');
   if(fxOpen && selectedTrack){
@@ -10351,7 +10301,6 @@ mvol.onpointerdown=()=>pushHistory();
 mvol._midi={kind:'mvol'};
 Object.keys(MIDI_BTN_LABEL).forEach(id=>{ const el=document.getElementById(id); if(el) el._midi={kind:'btn',id}; });
 document.getElementById('midi-learn').onclick=()=>setMidiLearn(!midiLearn);
-{ const vz=document.getElementById('viz'); if(vz) vz.onclick=()=>{ vizOn=!vizOn; try{ localStorage.setItem('s16viz',vizOn?'1':'0'); }catch(_){} drawViz(); flash(vizOn?'Visualizer on':'Visualizer off'); }; }
 mvol.oninput=()=>{
   state.tracks.master.vol=parseFloat(mvol.value);
   if(master) master.gain.setTargetAtTime(parseFloat(mvol.value), ctx.currentTime, 0.01);

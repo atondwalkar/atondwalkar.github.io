@@ -499,7 +499,8 @@
     padding:4px 8px;border:1px solid rgba(139,147,163,.2);border-radius:5px;
   }
   .io-col{display:flex;flex-direction:column;align-items:center;gap:4px;width:56px}
-  .io-col .mbar{flex:none;width:100%;height:6px}
+  .io-col .mbar{flex:none;width:100%;height:3px;margin-top:2px}
+  .io-col .mbar.l{margin-top:4px}
   .io-col .mbar i{
     display:block;height:100%;width:0;
     background:linear-gradient(90deg,#5fd4c4,#ffb347 72%,#ff5d5d 94%);
@@ -3059,7 +3060,7 @@ function rebuildChain(track){
   const tr=state.tracks[track.id];
   if(!tr.input || !tr.gain) return;
   tr.input.disconnect();
-  track.fx.forEach(fx=>{ if(fx.nodes){ ['out','in','preAn','postAn'].forEach(k=>{ try{ fx.nodes[k]&&fx.nodes[k].disconnect(); }catch(e){} }); } fx.nodes=null; });
+  track.fx.forEach(fx=>{ if(fx.nodes){ ['out','in','preAn','postAn','preSplit','postSplit'].forEach(k=>{ try{ fx.nodes[k]&&fx.nodes[k].disconnect(); }catch(e){} }); } fx.nodes=null; });
   let prev=tr.input;
   track.fx.forEach(fx=>{
     if(fx.bypass || tr.fxBypass){ fx.nodes=null; return; }
@@ -3074,6 +3075,12 @@ function rebuildChain(track){
       fx.nodes.preBuf=new Float32Array(256); fx.nodes.postBuf=new Float32Array(256);
       prev.connect(fx.nodes.preAn);
       fx.nodes.out.connect(fx.nodes.postAn);
+      const splitTap=src=>{ const sp=ctx.createChannelSplitter(2), l=ctx.createAnalyser(), r=ctx.createAnalyser();
+        l.fftSize=1024; r.fftSize=1024; src.connect(sp); sp.connect(l,0); sp.connect(r,1); return {sp,l,r}; };
+      const pS=splitTap(prev), qS=splitTap(fx.nodes.out);          // per-channel L/R taps for the in/out meters
+      fx.nodes.preSplit=pS.sp; fx.nodes.preAnL=pS.l; fx.nodes.preAnR=pS.r;
+      fx.nodes.postSplit=qS.sp; fx.nodes.postAnL=qS.l; fx.nodes.postAnR=qS.r;
+      fx.nodes.mBuf=new Float32Array(256);
       prev.connect(fx.nodes.in);
       prev=fx.nodes.out;
       fx._broken=false;
@@ -6888,15 +6895,14 @@ function renderFxPanel(){
       const col=key=>{
         const c2=document.createElement('div'); c2.className='io-col';
         c2.appendChild(makeKnob(fx,key,def.params[key]));
-        const bar=document.createElement('div'); bar.className='mbar';
-        const fill=document.createElement('i');
-        bar.appendChild(fill);
-        c2.appendChild(bar);
+        const mk=cls=>{ const bar=document.createElement('div'); bar.className='mbar '+cls; const fill=document.createElement('i'); bar.appendChild(fill); c2.appendChild(bar); return fill; };
+        const l=mk('l'), r=mk('r');
         io.appendChild(c2);
-        return fill;
+        return {l,r};
       };
-      fx.meterIn=col('ingain');
-      fx.meterOut=col('outgain');
+      const mi=col('ingain'), mo=col('outgain');
+      fx.meterInL=mi.l; fx.meterInR=mi.r; fx.meterOutL=mo.l; fx.meterOutR=mo.r;
+      fx.meterIn=mi.l;                                             // legacy alias (updateFxMeters guard / air VU)
       slot.appendChild(io);
     }
     const btns=document.createElement('div'); btns.className='fx-btns';
@@ -6948,10 +6954,14 @@ function updateFxMeters(){
   if(!selectedTrack) return;
   selectedTrack.fx.forEach(fx=>{
     const n=fx.nodes;
-    if(!n || !fx.meterIn) return;
-    fx.meterIn.style.width=(meterLevel(n.preAn,n.preBuf)*100)+'%';
-    fx.meterOut.style.width=(meterLevel(n.postAn,n.postBuf)*100)+'%';
-    if(fx.airVu && fx.airVu.isConnected && n.postAn) fx.airVu.style.width=(meterLevel(n.postAn,n.postBuf)*100)+'%';
+    if(!n || !fx.meterInL) return;
+    const buf=n.mBuf||n.preBuf;
+    let iL=meterLevel(n.preAnL,buf), iR=meterLevel(n.preAnR,buf), oL=meterLevel(n.postAnL,buf), oR=meterLevel(n.postAnR,buf);
+    if(iR<0.02 && iL>0.02) iR=iL; if(iL<0.02 && iR>0.02) iL=iR;    // mono material → show dual-mono, not one-sided
+    if(oR<0.02 && oL>0.02) oR=oL; if(oL<0.02 && oR>0.02) oL=oR;
+    fx.meterInL.style.width=(iL*100)+'%'; fx.meterInR.style.width=(iR*100)+'%';
+    fx.meterOutL.style.width=(oL*100)+'%'; fx.meterOutR.style.width=(oR*100)+'%';
+    if(fx.airVu && fx.airVu.isConnected && n.postAnL) fx.airVu.style.width=(Math.max(oL,oR)*100)+'%';
   });
 }
 

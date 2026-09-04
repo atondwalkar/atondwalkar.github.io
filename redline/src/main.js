@@ -397,6 +397,21 @@ class Game {
       return;
     }
     if (this.phase === PHASE.ATTRACT) {
+      // The stage carousel takes the keyboard while it is up: an arcade
+      // select you cannot drive with arrows and a start button is furniture.
+      if (document.getElementById('stagesel').classList.contains('open')) {
+        if (code === 'ArrowLeft' || code === 'KeyA') this._stageShow(this._stageIdx - 1);
+        else if (code === 'ArrowRight' || code === 'KeyD') this._stageShow(this._stageIdx + 1);
+        else if (code === 'Enter' || code === 'Space') {
+          if (this._stageIdx <= unlockedUpTo()) {
+            document.getElementById('stagesel').classList.remove('open');
+            this.startCampaign(this._stageIdx);
+          }
+        } else if (code === 'Escape') {
+          document.getElementById('stagesel').classList.remove('open');
+        }
+        return;
+      }
       if (code === 'Enter' || code === 'Space') this.openName();
       // Every scene, playable from the title screen without racing to it.
       // Written before any campaign flow existed, because a cutscene that is
@@ -983,25 +998,45 @@ class Game {
   // the way to wherever it jumped.
   openStageSelect() {
     if (this.phase !== PHASE.ATTRACT) return;
-    const rows = document.getElementById('stage-rows');
+    const strip = document.getElementById('stage-strip');
     const open = unlockedUpTo();
-    rows.innerHTML = '';
+    strip.innerHTML = '';
     STAGES.forEach((st, i) => {
       const b = document.createElement('button');
       b.className = `stage${i > open ? ' locked' : ''}`;
-      b.innerHTML = `<span class="n">${String(i + 1).padStart(2, '0')}</span>`
+      // The photo is FROM the stage: the capture tool drives every layout and
+      // shoots it from its own grid, under its own sky. A locked one shows in
+      // greyscale behind its padlock — you can see what you have not earned,
+      // which is most of why you go and earn it.
+      b.innerHTML = `<img src="assets/stages/${st.id}.jpg" alt="">`
+        + (i > open ? '<span class="lock">LOCKED</span>' : '')
+        + `<span class="cap"><span class="n">${String(i + 1).padStart(2, '0')}</span>`
         + `<span class="nm">${st.name}</span>`
-        + `<span class="b">${i > open ? 'LOCKED' : st.blurb}</span>`;
+        + `<span class="b">${i > open ? '' : st.blurb}</span></span>`;
       if (i <= open) {
         b.addEventListener('click', () => {
+          if (this._stageIdx !== i) { this._stageShow(i); return; }
           document.getElementById('stagesel').classList.remove('open');
           this.startCampaign(i);
         });
       }
-      rows.appendChild(b);
+      strip.appendChild(b);
     });
+    // Open on the frontier: the newest unlocked stage, which is almost always
+    // the one you came here for.
+    this._stageShow(Math.min(open, STAGES.length - 1));
+    document.getElementById('stage-prev').onclick = () => this._stageShow(this._stageIdx - 1);
+    document.getElementById('stage-next').onclick = () => this._stageShow(this._stageIdx + 1);
     document.getElementById('stagesel').classList.add('open');
     this.audio.unlock();
+  }
+
+  _stageShow(i) {
+    this._stageIdx = clamp(i, 0, STAGES.length - 1);
+    const strip = document.getElementById('stage-strip');
+    strip.style.transform = `translateX(-${this._stageIdx * 100}%)`;
+    document.getElementById('stage-prev').disabled = this._stageIdx === 0;
+    document.getElementById('stage-next').disabled = this._stageIdx === STAGES.length - 1;
   }
 
   startCampaign(index = 0) {

@@ -2278,14 +2278,32 @@ function checkCheats() {
     const wasPhase = game.phase;
     game.phase = 'attract';
     game.openStageSelect();
-    const rows = [...document.querySelectorAll('#stage-rows .stage')];
+    const rows = [...document.querySelectorAll('#stage-strip .stage')];
     const lockedRows = rows.filter((r) => r.classList.contains('locked'));
     if (rows.length !== STAGES.length) bad.push(`the menu lists ${rows.length} of ${STAGES.length} stages`);
     if (lockedRows.length !== STAGES.length - 3) {
-      bad.push(`${lockedRows.length} rows locked with three stages open`);
+      bad.push(`${lockedRows.length} cards locked with three stages open`);
     }
-    for (const r of lockedRows) {
-      if (getComputedStyle(r).pointerEvents !== 'none') bad.push('a locked stage still takes the click');
+    // Every card is a photograph of ITS stage — the file the capture tool
+    // shipped, named for the stage id.
+    rows.forEach((r, i2) => {
+      const img = r.querySelector('img');
+      if (!img || !img.src.endsWith(`assets/stages/${STAGES[i2].id}.jpg`)) {
+        bad.push(`the ${STAGES[i2].id} card is not showing its own stage`);
+      }
+    });
+    // The carousel scrolls and clamps, opens on the frontier, and a locked
+    // card cannot be started even from the keyboard.
+    if (game._stageIdx !== 2) bad.push(`the carousel opened on ${game._stageIdx}, not the frontier`);
+    game._stageShow(99);
+    if (game._stageIdx !== STAGES.length - 1) bad.push('the carousel ran off the end');
+    game._stageShow(-5);
+    if (game._stageIdx !== 0) bad.push('the carousel ran off the start');
+    game._stageShow(5);                      // locked, with progress at 2
+    const modeBefore = game.mode;
+    game._press('Enter');
+    if (game.mode !== modeBefore || game.phase !== 'attract') {
+      bad.push('Enter started a LOCKED stage from the carousel');
     }
     document.getElementById('stagesel').classList.remove('open');
     game.phase = wasPhase;

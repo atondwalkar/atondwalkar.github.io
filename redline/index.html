@@ -465,25 +465,48 @@
   #stagesel {
     position: absolute; inset: 0; z-index: 31; display: none;
     align-items: center; justify-content: center; flex-direction: column;
-    gap: 14px; background: rgba(4, 6, 9, 0.9);
+    gap: 16px; background: rgba(4, 6, 9, 0.92);
   }
   #stagesel.open { display: flex; }
-  #stagesel h2 { font-size: 15px; letter-spacing: 9px; margin-bottom: 4px; }
-  #stage-rows { display: flex; flex-direction: column; gap: 7px; max-height: 62vh; overflow-y: auto; }
-  #stage-rows .stage {
-    display: flex; align-items: baseline; gap: 16px; width: min(78vw, 560px);
-    background: rgba(10, 14, 20, 0.7); color: #f4f6f8; text-align: left;
-    border: 1px solid rgba(232, 236, 240, 0.3);
-    padding: 11px 16px; font: inherit; cursor: pointer;
+  #stagesel h2 { font-size: 15px; letter-spacing: 9px; }
+  /* The carousel: one big photo card in a window, its neighbours off stage,
+     the strip sliding between them. An arcade cabinet's stage select, which
+     is what a campaign of photographed stages deserves. */
+  #stage-carousel { display: flex; align-items: center; gap: 14px; }
+  #stage-view { width: min(72vw, 560px); overflow: hidden; }
+  #stage-strip { display: flex; transition: transform 0.28s cubic-bezier(0.22, 1, 0.36, 1); }
+  #stage-strip .stage {
+    flex: 0 0 100%; box-sizing: border-box; position: relative;
+    background: rgba(10, 14, 20, 0.8); color: #f4f6f8; text-align: left;
+    border: 1px solid rgba(232, 236, 240, 0.3); padding: 0; font: inherit;
+    cursor: pointer;
   }
-  #stage-rows .stage:hover:not(.locked) { border-color: var(--hot); }
-  #stage-rows .stage .n { font-size: 11px; letter-spacing: 2px; opacity: 0.5; width: 20px; }
-  #stage-rows .stage .nm { font-size: 13px; letter-spacing: 4px; flex: 0 0 auto; }
-  #stage-rows .stage .b { font-size: 9px; letter-spacing: 2px; opacity: 0.55; margin-left: auto; text-align: right; }
-  #stage-rows .stage.locked {
-    opacity: 0.32; cursor: default; pointer-events: none;
-    filter: grayscale(1);
+  #stage-strip .stage img {
+    display: block; width: 100%; aspect-ratio: 2 / 1; object-fit: cover;
   }
+  #stage-strip .stage .cap {
+    display: flex; align-items: baseline; gap: 14px; padding: 11px 16px;
+  }
+  #stage-strip .stage .n { font-size: 11px; letter-spacing: 2px; opacity: 0.5; }
+  #stage-strip .stage .nm { font-size: 14px; letter-spacing: 4px; }
+  #stage-strip .stage .b { font-size: 9px; letter-spacing: 2px; opacity: 0.55; margin-left: auto; text-align: right; }
+  #stage-strip .stage:hover:not(.locked) { border-color: var(--hot); }
+  #stage-strip .stage.locked { cursor: default; }
+  #stage-strip .stage.locked img { filter: grayscale(1) brightness(0.45); }
+  #stage-strip .stage.locked .lock {
+    position: absolute; top: 0; left: 0; right: 0; aspect-ratio: 2 / 1;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 15px; letter-spacing: 9px; color: rgba(244, 246, 248, 0.8);
+    text-shadow: 0 2px 12px #000;
+  }
+  #stage-prev, #stage-next {
+    background: rgba(10, 14, 20, 0.7); color: #f4f6f8;
+    border: 1px solid rgba(232, 236, 240, 0.34); border-radius: 50%;
+    width: 46px; height: 46px; font: inherit; font-size: 14px; cursor: pointer;
+  }
+  #stage-prev:hover, #stage-next:hover { background: var(--hot); border-color: var(--hot); color: #0a0c10; }
+  #stage-prev:disabled, #stage-next:disabled { opacity: 0.25; cursor: default; }
+  #stage-hint { font-size: 9px; letter-spacing: 4px; opacity: 0.45; }
   #stagesel button#stagesel-close {
     background: rgba(10, 14, 20, 0.7); color: #f4f6f8;
     border: 1px solid rgba(232, 236, 240, 0.34);
@@ -679,7 +702,12 @@
 
 <div id="stagesel">
   <h2>CAMPAIGN</h2>
-  <div id="stage-rows"></div>
+  <div id="stage-carousel">
+    <button id="stage-prev">&#9664;</button>
+    <div id="stage-view"><div id="stage-strip"></div></div>
+    <button id="stage-next">&#9654;</button>
+  </div>
+  <div id="stage-hint">&#8592; &#8594; TO BROWSE &middot; ENTER TO START</div>
   <button id="stagesel-close">BACK</button>
 </div>
 

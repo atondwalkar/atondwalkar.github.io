@@ -1004,6 +1004,9 @@ function barSec(){ return stepDur()*STEPS; }
 function songSteps(){ return Math.max(STEPS, Math.ceil(contentEnd()/stepDur()/STEPS - 1e-6)*STEPS); }
 function songSec(){ return songSteps()*stepDur(); }
 function stepPx(){ return stepDur()*PPS; }
+const ITEM_MAXW=4096;                               // cap an item's canvas backing so a long take doesn't grow a multi-MB bitmap
+function itemBig(it){ return it.lenSteps*stepPx()>ITEM_MAXW; }
+function queueItemRender(it){ if(it._renderT) return; it._renderT=setTimeout(()=>{ it._renderT=null; renderItem(it); },120); }   // large items: coalesce full redraws to ~8 Hz
 
 /* ============================== FX definitions ============================== */
 const EQ_FREQS=[30,60,120,250,450,700,1000,1500,2200,3200,4500,6500,9000,12000,16000,20000];
@@ -5288,9 +5291,9 @@ function addMidiItem(track, kind, startStep, lenSteps){
   return item;
 }
 function renderItem(it){
-  const w=Math.max(8,Math.round(it.lenSteps*stepPx()));
+  const full=Math.max(8,Math.round(it.lenSteps*stepPx())), w=Math.min(ITEM_MAXW,full);   // backing capped; the clip's canvas is CSS-stretched (inset:0) to the full width
   it.el.style.left=Math.round(it.startStep*stepPx())+'px';
-  it.el.style.width=w+'px';
+  it.el.style.width=full+'px';
   const cv=it.canvas; cv.width=w; cv.height=54;
   const g=cv.getContext('2d');
   if(!g) return;
@@ -5337,9 +5340,9 @@ function drawItemDrum(it,id,step){
   g.fillRect(step*cw+1, 11+r*rh, Math.max(2,cw-2), rh-1.5); g.globalAlpha=1;
 }
 function growItemCanvas(it){                        // resize to the new length, preserving pixels (per-tick scale is constant during a take)
-  const cv=it.canvas, w=Math.max(8,Math.round(it.lenSteps*stepPx()));
-  it.el.style.left=Math.round(it.startStep*stepPx())+'px'; it.el.style.width=w+'px';
-  if(cv.width===w) return;
+  const cv=it.canvas, full=Math.max(8,Math.round(it.lenSteps*stepPx())), w=Math.min(ITEM_MAXW,full);
+  it.el.style.left=Math.round(it.startStep*stepPx())+'px'; it.el.style.width=full+'px';
+  if(cv.width>=w) return;
   const tmp=document.createElement('canvas'); tmp.width=cv.width; tmp.height=cv.height;
   try{ tmp.getContext('2d').drawImage(cv,0,0); cv.width=w; cv.height=54; cv.getContext('2d').drawImage(tmp,0,0); }catch(_){ cv.width=w; cv.height=54; }
 }
@@ -10130,7 +10133,8 @@ function midiRecordOn(tr,k,vel,h){
   const note={k, s:tick-it.startStep, l:Math.max(1,prGrid), v:+vel.toFixed(3)};
   it.pat.push(note); h.rec={it,note};
   if(it._byStep){ let a=it._byStep.get(note.s); if(!a){ a=[]; it._byStep.set(note.s,a); } a.push(note); }
-  drawItemNote(it,note); queueGhosts(); if(selMidiItem()===it) queuePianoRoll();
+  if(itemBig(it)) queueItemRender(it); else drawItemNote(it,note);
+  queueGhosts(); if(selMidiItem()===it) queuePianoRoll();
 }
 function midiRecordOff(h){
   if(!h.rec) return;
@@ -10138,16 +10142,18 @@ function midiRecordOff(h){
   if(state.playing){
     const end=midiTick(); note.l=Math.max(1,end-(it.startStep+note.s));
     if(note.s+note.l>it.lenSteps){ it.lenSteps=Math.ceil((note.s+note.l)/STEPS)*STEPS; growItemCanvas(it); }
-    const cv=it.canvas, g=cv&&cv.getContext&&cv.getContext('2d');
-    if(g){ const cw=cv.width/it.lenSteps, y=11+(1-note.k/87)*40; g.clearRect(note.s*cw, y-2, Math.max(2,Math.max(note.l,prGrid)*cw)+2, 6); }   // erase the note-on stub before repainting
+    if(!itemBig(it)){ const cv=it.canvas, g=cv&&cv.getContext&&cv.getContext('2d');
+      if(g){ const cw=cv.width/it.lenSteps, y=11+(1-note.k/87)*40; g.clearRect(note.s*cw, y-2, Math.max(2,Math.max(note.l,prGrid)*cw)+2, 6); } }
   }
-  drawItemNote(it,note); queueGhosts(); if(selMidiItem()===it) queuePianoRoll();   // repaint the finalized note
+  if(itemBig(it)) queueItemRender(it); else drawItemNote(it,note);
+  queueGhosts(); if(selMidiItem()===it) queuePianoRoll();   // repaint the finalized note
 }
 function midiRecordDrum(tr,id,vel){
   if(!midiRec || !state.playing) return;
   const tick=midiTick(), it=midiItemAt(tr,'drums',tick);
   const step=tick-it.startStep; it.pat[id][step]=Math.max(1,Math.round(vel*127));
-  drawItemDrum(it,id,step); queueGhosts(); if(selMidiItem()===it) queuePianoRoll();
+  if(itemBig(it)) queueItemRender(it); else drawItemDrum(it,id,step);
+  queueGhosts(); if(selMidiItem()===it) queuePianoRoll();
 }
 const MIDI_OVERLAP_MS=25;                                  // note-off this soon after a retrigger belongs to the previous instance
 function midiHeldKey(ch,note,tr){ return ch+':'+note+':'+tr.id; }

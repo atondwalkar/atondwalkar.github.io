@@ -3988,6 +3988,11 @@ const drawQueue=[];
 
 function curPos(){ return state.playing ? startPos + (ctx.currentTime - startCtx) : startPos; }
 
+function buildPianoIndex(it){                                  // Map<startStep, notes[]> so the scheduler finds a step's notes in O(1)
+  const m=new Map();
+  it.pat.forEach(nn=>{ let a=m.get(nn.s); if(!a){ a=[]; m.set(nn.s,a); } a.push(nn); });
+  return m;
+}
 function scheduleStep(step,t){
   tracksAll.forEach(tr=>{
     if(!tr.items.length) return;
@@ -4002,8 +4007,8 @@ function scheduleStep(step,t){
         DRUMS.forEach(d=>{ const lane=it.pat[d.id]; const v=lane&&lane[rel]; if(v) playDrum(d.id,t,drumDest(tr,d.id),ctx,{kit,vel:v/127,semi:hitPitch(it,d.id,rel)}); });
       }else if(it.kind==='piano'){
         if(!instLooked){ instLooked=true; mfx=tr.fx.find(f=>f.type==='sampler'); wfx=mfx?null:tr.fx.find(f=>f.type==='wt'); cfx=(mfx||wfx)?null:tr.fx.find(f=>f.type==='choir'); }
-        it.pat.forEach(nn=>{
-          if(nn.s!==rel) return;
+        const idx=it._byStep||(it._byStep=buildPianoIndex(it)); const hits=idx.get(rel);   // O(1) per step — no full note scan (was O(N) per tick → grew with the take)
+        if(hits) hits.forEach(nn=>{
           if(mfx) samplerVoice(t, nn.k, nn.l*stepDur(), dest, mfx.params, ctx, synthAn(mfx), noteVel(nn), mfx);
           else if(wfx){ const wi=wtNoteInfo(it,nn,wfx.params); if(wi) wavetableVoice(t, nn.k, wi.len*stepDur(), dest, wfx.params, ctx, synthAn(wfx), noteVel(nn), wfx, wi.fromK, wi.legato); }
           else if(gfxOf(tr)) eguitarVoice(t, nn.k, nn.l*stepDur(), dest, gfxOf(tr).params, ctx, undefined, noteVel(nn));
@@ -5299,6 +5304,7 @@ function renderItem(it){
     });
     g.globalAlpha=1;
   }
+  it._byStep=null;                                            // full re-render = the note set may have changed; rebuild the scheduler index lazily
   queueGhosts();
 }
 /* Incremental drawing during a live MIDI take: paint one note/hit onto the existing item canvas instead of
@@ -10109,6 +10115,7 @@ function midiRecordOn(tr,k,vel,h){
   if(!midiTakeHist){ pushHistory(); midiTakeHist=true; }
   const note={k, s:tick-it.startStep, l:Math.max(1,prGrid), v:+vel.toFixed(3)};
   it.pat.push(note); h.rec={it,note};
+  if(it._byStep){ let a=it._byStep.get(note.s); if(!a){ a=[]; it._byStep.set(note.s,a); } a.push(note); }
   drawItemNote(it,note); queueGhosts(); if(selMidiItem()===it) queuePianoRoll();
 }
 function midiRecordOff(h){

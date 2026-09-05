@@ -795,7 +795,7 @@
         <span class="val" id="zoom-val">100%</span>
         <button id="zoom-in" aria-label="Zoom in">+</button>
       </span>
-      <button id="import-audio">Import</button>
+      <button id="import-audio" title="Import an audio/video file, or a .mid → a new piano track">Import</button>
       <button id="import-yt" title="Needs the local helper: python3 yt_import.py">YT Import</button>
       <button id="add-track">+ Track</button>
     </div>
@@ -810,7 +810,7 @@
       </div>
     </div>
   </div>
-  <input type="file" id="file-in" accept="audio/*,video/*,.mp4,.m4v,.mov,.mkv,.webm,.avi" hidden>
+  <input type="file" id="file-in" accept="audio/*,video/*,.mid,.midi,audio/midi,.mp4,.m4v,.mov,.mkv,.webm,.avi" hidden>
   <input type="file" id="proj-in" accept=".sheesh,.zip,.json,application/json,application/zip" hidden>
 </section>
 
@@ -6050,10 +6050,61 @@ function extractVideoAudio(file){
     v.src=url;
   });
 }
+/* ---- Standard MIDI File → a new piano track (notes kept in musical time: MIDI quarter → TPQ ticks) ---- */
+function parseMidiToNotes(ab){
+  const d=new DataView(ab), u8=new Uint8Array(ab); let p=0;
+  const str=n=>{ let x=''; for(let i=0;i<n;i++) x+=String.fromCharCode(u8[p+i]); p+=n; return x; };
+  if(str(4)!=='MThd') throw new Error('Not a MIDI file');
+  const hl=d.getUint32(p); p+=4; const ntr=d.getUint16(p+2), div=d.getUint16(p+4); p+=hl;
+  if(div&0x8000) throw new Error('SMPTE-timecode MIDI is not supported');
+  const ppq=div||480, notes=[];
+  const vlq=()=>{ let v=0; for(;;){ const b=u8[p++]; v=(v<<7)|(b&0x7f); if(!(b&0x80)) break; } return v; };
+  for(let t=0;t<ntr;t++){
+    if(str(4)!=='MTrk') break; const len=d.getUint32(p); p+=4; const endP=p+len; let tick=0, run=0; const on={};
+    while(p<endP){
+      tick+=vlq();
+      let st=u8[p]; if(st<0x80){ st=run; } else { p++; }
+      if(st===0xFF){ p++; const ml=vlq(); p+=ml; continue; }
+      if(st===0xF0||st===0xF7){ const ml=vlq(); p+=ml; continue; }
+      run=st; const hi=st&0xF0, ch=st&0x0F, d1=u8[p++], d2=(hi===0xC0||hi===0xD0)?0:u8[p++];
+      const key=ch*128+d1;
+      if(hi===0x90 && d2>0){ if(on[key]) notes.push({t0:on[key].t, t1:tick, p:d1, v:on[key].v, ch}); on[key]={t:tick, v:d2/127}; }
+      else if(hi===0x80 || (hi===0x90 && d2===0)){ if(on[key]!=null){ notes.push({t0:on[key].t, t1:tick, p:d1, v:on[key].v, ch}); delete on[key]; } }
+    }
+    Object.keys(on).forEach(k=>{ const o=on[k]; notes.push({t0:o.t, t1:tick, p:(+k)%128, v:o.v, ch:Math.floor(k/128)}); });
+    p=endP;
+  }
+  return {notes, ppq};
+}
+function importMidiFile(ab, name){
+  const {notes, ppq}=parseMidiToNotes(ab);
+  let melodic=notes.filter(n=>n.ch!==9);                 // channel 10 = GM drums → skip, unless the file is only drums
+  if(!melodic.length) melodic=notes;
+  const sc=TPQ/ppq, pat=[]; let maxT=0;
+  melodic.forEach(n=>{ const k=n.p-21; if(k<0||k>87) return;
+    const s=Math.round(n.t0*sc), e=Math.max(s+1, Math.round(n.t1*sc));
+    pat.push({k, s, l:e-s, v:+Math.max(0.05,Math.min(1,n.v)).toFixed(3)}); if(e>maxT) maxT=e; });
+  if(!pat.length) throw new Error('no notes in the MIDI file');
+  pushHistory();
+  const startStep=Math.floor(Math.max(0,startPos)/stepDur()/STEPS)*STEPS;
+  const lenSteps=Math.max(STEPS, Math.ceil(maxT/STEPS)*STEPS);
+  const tr=addTrack(); tr.name=(name||'MIDI').slice(0,18); tr.chipEl.querySelector('.tname').textContent=tr.name;
+  addFxToTrack(tr,'piano');
+  const it=addMidiItem(tr,'piano',startStep,lenSteps);
+  it.pat.push(...pat); renderItem(it);
+  renderMixer(); selectTrack(tr); layoutTimeline();
+  flash('Imported '+pat.length+' notes → piano track "'+tr.name+'"');
+  return it;
+}
 fileIn.onchange=async ()=>{
   const f=fileIn.files[0]; fileIn.value='';
   if(!f) return;
   initAudio();
+  if(/\.midi?$/i.test(f.name) || /midi/.test(f.type)){          // Standard MIDI File → piano track
+    try{ importMidiFile(await f.arrayBuffer(), f.name.replace(/\.[^.]+$/,'')); }
+    catch(e){ flash('MIDI import failed: '+(e&&e.message||e)); }
+    return;
+  }
   const isVideo=/^video\//.test(f.type)||/\.(mp4|m4v|mov|mkv|webm|avi)$/i.test(f.name);
   let buf=null;
   try{

@@ -10001,11 +10001,27 @@ function midiVoiceOn(tr,k,vel){
 function midiTick(){ return Math.max(0,Math.round(curPos()/stepDur())); }
 function midiItemAt(tr,kind,tick){
   let it=tr.items.find(x=>x.kind===kind && tick>=x.startStep && tick<x.startStep+x.lenSteps);
-  if(!it){
-    if(!midiTakeHist){ pushHistory(); midiTakeHist=true; }
-    it=addMidiItem(tr,kind,Math.floor(tick/STEPS)*STEPS,STEPS);
+  if(it) return it;
+  // Recording just past an item's end: extend the nearest preceding same-kind item so a continued take keeps
+  // writing into the SAME item instead of spawning a new one (as long as it won't overlap a later item and the
+  // gap isn't huge — e.g. after a loop wrap or a long pause, where a fresh item is correct).
+  if(midiRec && state.playing){
+    let prev=null;
+    tr.items.forEach(x=>{ if(x.kind===kind && x.startStep+x.lenSteps<=tick && (!prev||x.startStep>prev.startStep)) prev=x; });
+    if(prev && tick-(prev.startStep+prev.lenSteps) < 2*STEPS){
+      let next=null;
+      tr.items.forEach(x=>{ if(x!==prev && x.startStep>=prev.startStep+prev.lenSteps && (!next||x.startStep<next.startStep)) next=x; });
+      let newLen=Math.ceil((tick+1-prev.startStep)/STEPS)*STEPS;
+      if(next) newLen=Math.min(newLen, next.startStep-prev.startStep);
+      if(newLen>prev.lenSteps && tick<prev.startStep+newLen){
+        if(!midiTakeHist){ pushHistory(); midiTakeHist=true; }
+        prev.lenSteps=newLen; renderItem(prev);
+        return prev;
+      }
+    }
   }
-  return it;
+  if(!midiTakeHist){ pushHistory(); midiTakeHist=true; }
+  return addMidiItem(tr,kind,Math.floor(tick/STEPS)*STEPS,STEPS);
 }
 function midiRecordOn(tr,k,vel,h){
   if(!midiRec || !state.playing) return;

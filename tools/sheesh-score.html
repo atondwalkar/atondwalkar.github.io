@@ -535,17 +535,26 @@ function onMidi(e){
 }
 /* live transcription while recording: debounced, held notes count up to "now"; the view follows the newest system */
 let liveTimer=null, liveBusy=false;
+const LIVE_WIN=24;                                  // seconds of trailing context for the live view — bounds analyze + render on long takes
+function liveNotes(now){
+  const heldArr=[...held].map(([p,h])=>({p, t0:h.t0, t1:Math.max(h.t0+0.05,now), v:h.v}));
+  let src=perf;
+  if(perf.length>140){                             // window only long takes; short ones transcribe in full live
+    const tCut=now-LIVE_WIN; const i0=perf.findIndex(n=>n.t1>=tCut); if(i0>0) src=perf.slice(i0);
+  }
+  return src.concat(heldArr);
+}
 function liveTranscribe(){
   if(!recording) return;
-  const wait=perf.length>600?600:perf.length>250?350:150;
+  const wait=perf.length>600?450:perf.length>250?300:150;
   clearTimeout(liveTimer); liveTimer=setTimeout(()=>{
     if(liveBusy) return liveTranscribe(); liveBusy=true;
     try{
-      const now=(performance.now()-recT0)/1000; const live=perf.concat([...held].map(([p,h])=>({p, t0:h.t0, t1:Math.max(h.t0+0.05,now), v:h.v})));
+      const now=(performance.now()-recT0)/1000; const live=liveNotes(now); const total=perf.length+held.size;
       const o=opts(); if(o.tempo==='file') o.tempo='auto';
       model=live.length?analyze(live,o):null; renderScore(model,$('score'));
       if(model){ const tempoTxt=model.marks.map(mk=>(mk.m?('bar '+(mk.m+1)+': '):'')+'♩='+mk.bpm).join(', ');
-        say('Recording… <b>'+live.length+'</b> notes → <b>'+model.measures.length+'</b> bars · '+model.meter+' · '+(model.key.endsWith('m')?model.key.slice(0,-1)+' minor':model.key+' major')+' · '+tempoTxt);
+        say('Recording… <b>'+total+'</b> notes → <b>'+model.measures.length+'</b> bars · '+model.meter+' · '+(model.key.endsWith('m')?model.key.slice(0,-1)+' minor':model.key+' major')+' · '+tempoTxt);
         const sc=$('score'); sc.scrollTop=sc.scrollHeight; const last=sc.querySelector('svg'); if(last && last.getBoundingClientRect().bottom>window.innerHeight) window.scrollTo({top:document.body.scrollHeight, behavior:'smooth'}); }
     }catch(e){ console.error(e); } finally{ liveBusy=false; }
   },wait);
@@ -616,7 +625,7 @@ $('play').onclick=async()=>{
   requestAnimationFrame(loop);
   pl.timer=setTimeout(()=>{ if(playing===pl){ playing=null; try{ pl.bus.disconnect(); }catch(_){} $('play').textContent='▶ Play'; clearPlayhead(); } },(total+1.0)*1000);
 };
-window.ScoreEngine={analyze, renderScore, toMusicXML, toMidiFile, parseMidiFile, trackBeats, onsetClusters, detectKey, splitDuration, accents, detectMeter, detectPhase, ensurePiano, pianoOn, pianoOff, pianoSustain, onMidi, liveTranscribe, get voices(){ return voices; }, get pnBufs(){ return pnBufs; }, get model(){ return model; }, get perf(){ return perf; }, get recording(){ return recording; }, setPlayhead, clearPlayhead};
+window.ScoreEngine={analyze, liveNotes, get LIVE_WIN(){ return LIVE_WIN; }, set perf(v){ perf=v; }, get held(){ return held; }, renderScore, toMusicXML, toMidiFile, parseMidiFile, trackBeats, onsetClusters, detectKey, splitDuration, accents, detectMeter, detectPhase, ensurePiano, pianoOn, pianoOff, pianoSustain, onMidi, liveTranscribe, get voices(){ return voices; }, get pnBufs(){ return pnBufs; }, get model(){ return model; }, get perf(){ return perf; }, get recording(){ return recording; }, setPlayhead, clearPlayhead};
 if(navigator.requestMIDIAccess && navigator.permissions){ navigator.permissions.query({name:'midi'}).then(p=>{ if(p.state==='granted') initMidi(); }).catch(()=>{}); }
 </script>
 </body>

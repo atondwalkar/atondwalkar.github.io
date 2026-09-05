@@ -3988,6 +3988,12 @@ const drawQueue=[];
 
 function curPos(){ return state.playing ? startPos + (ctx.currentTime - startCtx) : startPos; }
 
+function pedExtend(it,endStep){                                // note released inside a pedal-down interval → rings until pedal-up
+  const P=it.ped; if(!P||!P.length) return endStep;
+  for(let i=0;i<P.length;i++){ if(endStep>=P[i][0] && endStep<P[i][1]) return P[i][1]; }
+  return endStep;
+}
+function pedLen(it,nn){ const e=pedExtend(it,nn.s+nn.l); return e>nn.s+nn.l ? e-nn.s : nn.l; }
 function buildPianoIndex(it){                                  // Map<startStep, notes[]> so the scheduler finds a step's notes in O(1)
   const m=new Map();
   it.pat.forEach(nn=>{ let a=m.get(nn.s); if(!a){ a=[]; m.set(nn.s,a); } a.push(nn); });
@@ -4009,12 +4015,13 @@ function scheduleStep(step,t){
         if(!instLooked){ instLooked=true; mfx=tr.fx.find(f=>f.type==='sampler'); wfx=mfx?null:tr.fx.find(f=>f.type==='wt'); cfx=(mfx||wfx)?null:tr.fx.find(f=>f.type==='choir'); }
         const idx=it._byStep||(it._byStep=buildPianoIndex(it)); const hits=idx.get(rel);   // O(1) per step — no full note scan (was O(N) per tick → grew with the take)
         if(hits) hits.forEach(nn=>{
-          if(mfx) samplerVoice(t, nn.k, nn.l*stepDur(), dest, mfx.params, ctx, synthAn(mfx), noteVel(nn), mfx);
-          else if(wfx){ const wi=wtNoteInfo(it,nn,wfx.params); if(wi) wavetableVoice(t, nn.k, wi.len*stepDur(), dest, wfx.params, ctx, synthAn(wfx), noteVel(nn), wfx, wi.fromK, wi.legato); }
-          else if(gfxOf(tr)) eguitarVoice(t, nn.k, nn.l*stepDur(), dest, gfxOf(tr).params, ctx, undefined, noteVel(nn));
-          else if(bfxOf(tr)) ebassVoice(t, nn.k, nn.l*stepDur(), dest, bfxOf(tr).params, ctx, undefined, noteVel(nn));
-          else if(cfx) choirVoice(t, nn.k, nn.l*stepDur(), dest, cfx.params, ctx, noteVel(nn));
-          else pianoVoice(t, nn.k, nn.l*stepDur(), dest, ctx, noteVel(nn), (pfxOf(tr)||{}).params);
+          const eL=pedLen(it,nn);
+          if(mfx) samplerVoice(t, nn.k, eL*stepDur(), dest, mfx.params, ctx, synthAn(mfx), noteVel(nn), mfx);
+          else if(wfx){ const wi=wtNoteInfo(it,nn,wfx.params); if(wi) wavetableVoice(t, nn.k, Math.max(wi.len,eL)*stepDur(), dest, wfx.params, ctx, synthAn(wfx), noteVel(nn), wfx, wi.fromK, wi.legato); }
+          else if(gfxOf(tr)) eguitarVoice(t, nn.k, eL*stepDur(), dest, gfxOf(tr).params, ctx, undefined, noteVel(nn));
+          else if(bfxOf(tr)) ebassVoice(t, nn.k, eL*stepDur(), dest, bfxOf(tr).params, ctx, undefined, noteVel(nn));
+          else if(cfx) choirVoice(t, nn.k, eL*stepDur(), dest, cfx.params, ctx, noteVel(nn));
+          else pianoVoice(t, nn.k, eL*stepDur(), dest, ctx, noteVel(nn), (pfxOf(tr)||{}).params);
         });
       }
     });
@@ -5304,6 +5311,7 @@ function renderItem(it){
     });
     g.globalAlpha=1;
   }
+  if(it.kind==='piano' && it.ped) it.ped.forEach(iv=>drawItemPed(it,iv));
   it._byStep=null;                                            // full re-render = the note set may have changed; rebuild the scheduler index lazily
   queueGhosts();
 }
@@ -5311,6 +5319,10 @@ function renderItem(it){
    re-rendering all N notes per event (that was O(N) per note → O(N²) over a long recording). Additive same-colour
    rects, so overpainting a note-off's longer bar over the note-on stub is seamless; a full renderItem on any later
    edit restores an exact picture. */
+function drawItemPed(it,iv){                                  // sky-blue strip along the item's foot marks a sustain-pedal-down span
+  const cv=it.canvas, g=cv&&cv.getContext&&cv.getContext('2d'); if(!g) return;
+  const cw=cv.width/it.lenSteps; g.fillStyle='rgba(108,196,255,.6)'; g.fillRect(iv[0]*cw, 50.5, Math.max(2,(iv[1]-iv[0])*cw), 3);
+}
 function drawItemNote(it,nn){
   const cv=it.canvas, g=cv&&cv.getContext&&cv.getContext('2d'); if(!g) return;
   const cw=cv.width/it.lenSteps, y=11+(1-nn.k/87)*40;
@@ -5747,7 +5759,7 @@ function pasteItems(){
     }else{
       const step=Math.max(0,Math.round((t0+(en.dt||0))/stepDur()));
       const it=addMidiItem(tr,en.mkind,step,en.lenSteps);
-      restorePat(it,en); restorePitch(it,en.pt); it.name=en.name; it.scale=en.scale||''; it.el.querySelector('.cname').textContent=it.name;
+      restorePat(it,en); restorePitch(it,en.pt); it.ped=Array.isArray(en.ped)?en.ped.map(iv=>[iv[0],iv[1]]):[]; it.name=en.name; it.scale=en.scale||''; it.el.querySelector('.cname').textContent=it.name;
       renderItem(it); obj=it; sl={kind:'midi',item:it};
     }
     if(en.grp!=null){ grpMap[en.grp]=grpMap[en.grp]||++grpCounter; obj.grp=grpMap[en.grp]; updateGrpTag(obj); }
@@ -5763,7 +5775,7 @@ function serTrackData(t){
   return {name:t.name, compact:t.laneEl.classList.contains('compact'), vol:ts.vol, mute:!!ts.mute, solo:!!ts.solo, pan:ts.pan||0, fxBypass:!!ts.fxBypass,
     autoMode:t.autoMode||'read', busId:t.busId||null, midiIn:t.midiIn??null,
     fx:t.fx.map(f=>({type:f.type, params:{...f.params}, bypass:!!f.bypass, irBuffer:f.irBuffer||null, irName:f.irName||null, keyTrackId:f.keyTrackId||null, sampleBuffer:f.sampleBuffer||null, sampleName:f.sampleName||null, noiseProfile:f.noiseProfile||null, profSr:f.profSr||null, profN:f.profN||null, noiseSec:f.noiseSec||0})),
-    items:t.items.map(it=>({kind:it.kind, startStep:it.startStep, lenSteps:it.lenSteps, name:it.name, scale:it.scale||'', grp:it.grp??null, pat:serPat(it), pt:serPitch(it)})),
+    items:t.items.map(it=>({kind:it.kind, startStep:it.startStep, lenSteps:it.lenSteps, name:it.name, scale:it.scale||'', grp:it.grp??null, pat:serPat(it), pt:serPitch(it), ped:(it.ped&&it.ped.length)?it.ped.map(iv=>[iv[0],iv[1]]):undefined})),
     clips:t.clips.map(c=>({buffer:c.buffer, start:c.start, offset:c.offset, dur:c.dur, name:c.name, nativeBpm:c.nativeBpm, stretch:c.stretch||1, grp:c.grp??null, gain:c.gain||0, fadeIn:c.fadeIn||0, fadeOut:c.fadeOut||0, semis:c.semis||0, rev:!!c.rev})),
     autos:(t.autos||[]).map(a=>({kind:a.kind, fxIdx:a.fxId?t.fx.findIndex(f=>f.id===a.fxId):-1, key:a.key, hidden:!!a.hidden, pts:a.pts.map(p=>({s:p.s,v:p.v}))}))};
 }
@@ -8608,12 +8620,13 @@ async function renderRange(expStart,expEnd,opt){
           const cfx=(mfx||wfx)?null:tr.fx.find(f=>f.type==='choir');
           it.pat.forEach(nn=>{
             if(nn.s!==rel) return;
-            if(mfx) samplerVoice(t, nn.k, nn.l*sd, dests[tr.id], mfx.params, off, undefined, noteVel(nn), mfx);
-            else if(wfx){ const wi=wtNoteInfo(it,nn,wfx.params); if(wi) wavetableVoice(t, nn.k, wi.len*sd, dests[tr.id], wfx.params, off, undefined, noteVel(nn), null, wi.fromK, wi.legato); }
-            else if(gfxOf(tr)) eguitarVoice(t, nn.k, nn.l*sd, dests[tr.id], gfxOf(tr).params, off, undefined, noteVel(nn));
-            else if(bfxOf(tr)) ebassVoice(t, nn.k, nn.l*sd, dests[tr.id], bfxOf(tr).params, off, undefined, noteVel(nn));
-            else if(cfx) choirVoice(t, nn.k, nn.l*sd, dests[tr.id], cfx.params, off, noteVel(nn));
-            else pianoVoice(t, nn.k, nn.l*sd, dests[tr.id], off, noteVel(nn), (pfxOf(tr)||{}).params);
+            const eL=pedLen(it,nn);
+            if(mfx) samplerVoice(t, nn.k, eL*sd, dests[tr.id], mfx.params, off, undefined, noteVel(nn), mfx);
+            else if(wfx){ const wi=wtNoteInfo(it,nn,wfx.params); if(wi) wavetableVoice(t, nn.k, Math.max(wi.len,eL)*sd, dests[tr.id], wfx.params, off, undefined, noteVel(nn), null, wi.fromK, wi.legato); }
+            else if(gfxOf(tr)) eguitarVoice(t, nn.k, eL*sd, dests[tr.id], gfxOf(tr).params, off, undefined, noteVel(nn));
+            else if(bfxOf(tr)) ebassVoice(t, nn.k, eL*sd, dests[tr.id], bfxOf(tr).params, off, undefined, noteVel(nn));
+            else if(cfx) choirVoice(t, nn.k, eL*sd, dests[tr.id], cfx.params, off, noteVel(nn));
+            else pianoVoice(t, nn.k, eL*sd, dests[tr.id], off, noteVel(nn), (pfxOf(tr)||{}).params);
           });
         }
       }));
@@ -9078,7 +9091,7 @@ function snapState(){
       pan:state.tracks[t.id].pan||0, fxBypass:!!state.tracks[t.id].fxBypass,
       fx:t.fx.map(f=>serFx(f,ref)),
       items:t.items.map(it=>({
-        kind:it.kind, startStep:it.startStep, lenSteps:it.lenSteps, name:it.name, sc:it.scale||'', g:it.grp??null, pt:serPitch(it),
+        kind:it.kind, startStep:it.startStep, lenSteps:it.lenSteps, name:it.name, sc:it.scale||'', g:it.grp??null, pt:serPitch(it), ped:(it.ped&&it.ped.length)?it.ped.map(iv=>[iv[0],iv[1]]):undefined,
         pat: it.kind==='drums'
           ? Object.fromEntries(DRUMS.map(d=>[d.id,Array.from(it.pat[d.id])]))
           : it.kind==='piano' ? it.pat.map(nn=>({...nn}))
@@ -9286,7 +9299,7 @@ async function saveProject(){
         vol:state.tracks[t.id].vol, mute:state.tracks[t.id].mute, solo:state.tracks[t.id].solo, pan:state.tracks[t.id].pan||0, fxBypass:!!state.tracks[t.id].fxBypass,
         fx:t.fx.map(f=>serFx(f,bufRef)),
         items:t.items.map(it=>({
-          kind:it.kind, startStep:it.startStep, lenSteps:it.lenSteps, name:it.name, sc:it.scale||'', g:it.grp??null, pt:serPitch(it),
+          kind:it.kind, startStep:it.startStep, lenSteps:it.lenSteps, name:it.name, sc:it.scale||'', g:it.grp??null, pt:serPitch(it), ped:(it.ped&&it.ped.length)?it.ped.map(iv=>[iv[0],iv[1]]):undefined,
           pat: it.kind==='drums'
             ? Object.fromEntries(DRUMS.map(d=>[d.id,Array.from(it.pat[d.id])]))
             : it.kind==='piano' ? it.pat.map(nn=>({...nn}))
@@ -9500,6 +9513,7 @@ function applyProject(proj,buffers){
       updateAutoBtn(tr);
       (st.items||[]).forEach(si=>{
         const it=addMidiItem(tr, si.kind==='bass'?'piano':si.kind, si.startStep, si.lenSteps);
+        it.ped=Array.isArray(si.ped)?si.ped.map(iv=>[iv[0],iv[1]]):[];
         if(si.kind==='drums'){
           DRUMS.forEach(d=>{ if(si.pat && si.pat[d.id]) it.pat[d.id].set(si.pat[d.id].slice(0,it.lenSteps)); });
         }else if(si.kind==='piano'){
@@ -10174,8 +10188,21 @@ function midiNoteOff(note,ch){
     midiRelease(h);
   }
 }
-function midiSustainSet(on){
+function midiRecordPedal(on,ch){                              // capture the sustain pedal as intervals on the piano item(s) being recorded
+  if(!midiRec || !state.playing) return;
+  const tick=midiTick();
+  if(on){
+    midiTargets(ch|0).forEach(tr=>{ const it=tr.items.find(x=>x.kind==='piano' && tick>=x.startStep && tick<x.startStep+x.lenSteps);
+      if(it && it._pedDown==null) it._pedDown=tick-it.startStep; });
+  }else{
+    tracksAll.forEach(tr=>tr.items.forEach(it=>{ if(it._pedDown!=null){ const up=tick-it.startStep;
+      if(up>it._pedDown){ (it.ped=it.ped||[]).push([it._pedDown,up]); drawItemPed(it,[it._pedDown,up]); if(selMidiItem()===it) queuePianoRoll(); }
+      it._pedDown=null; } }));
+  }
+}
+function midiSustainSet(on,ch){
   midiSustain=on;
+  midiRecordPedal(on,ch);
   if(!on){ [...midiSustained].forEach(key=>{ midiSustained.delete(key); midiReleaseKey(key); }); }
 }
 function midiAllOff(){ [...midiHeld.keys()].forEach(midiReleaseKey); midiSustained.clear(); }
@@ -10330,7 +10357,7 @@ function onMidiMessage(e){
   }
   if(type===0x90 && d2>0) midiNoteOn(d1, d2/127, ch);
   else if(type===0x80 || (type===0x90 && d2===0)) midiNoteOff(d1, ch);
-  else if(type===0xB0 && d1===64) midiSustainSet(d2>=64);
+  else if(type===0xB0 && d1===64) midiSustainSet(d2>=64, ch);
   else if(type===0xB0 && (d1===120||d1===123)) midiAllOff();
 }
 function midiBind(){

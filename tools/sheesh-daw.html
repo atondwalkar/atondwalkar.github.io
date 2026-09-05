@@ -1240,7 +1240,7 @@ const FX_DEFS={
     trim:{min:-12,max:6,step:0.5,val:0,fmt:dbFmt,label:'trim'},
   }},
   deess:{name:'De-Esser', color:'#ffb8d9', params:{               // Pro-DS-style sibilance tamer: band-keyed downward dynamics
-    threshold:{min:-60,max:0,step:0.5,val:-30,fmt:v=>v+' dB',label:'threshold'},
+    threshold:{min:-60,max:0,step:0.5,val:-36,fmt:v=>v+' dB',label:'threshold'},
     range:{min:0,max:24,step:0.5,val:6,fmt:v=>(+v).toFixed(1).replace(/\.0$/,'')+' dB',label:'range'},
     freq:{min:2000,max:16000,step:100,val:6500,fmt:hzFmt,label:'freq'},
     link:{min:0,max:100,step:1,val:100,fmt:v=>Math.round(v)+'%',label:'stereo link'},
@@ -2118,7 +2118,7 @@ class S16Deess extends AudioWorkletProcessor{
 // (band vs full-band envelope) x noisiness (jitter of interpolated zero-crossing intervals) — a steady
 // HF tone barely triggers, an s-sound does. Split band = minimum-phase LR4, only the highs are ducked.
 static get parameterDescriptors(){return[
- {name:'threshold',defaultValue:-30,minValue:-60,maxValue:0},
+ {name:'threshold',defaultValue:-36,minValue:-60,maxValue:0},
  {name:'range',defaultValue:6,minValue:0,maxValue:24},
  {name:'freq',defaultValue:6500,minValue:2000,maxValue:16000},
  {name:'link',defaultValue:1,minValue:0,maxValue:1},
@@ -2945,7 +2945,7 @@ function applyFxTo(fx,n){
   }else if(fx.type==='deess'){
     if(n.deessNode){
       const sp=(k2,v)=>{ const ap=n.deessNode.parameters.get(k2); if(ap) ap.value=v; };
-      sp('threshold',p.threshold??-30); sp('range',p.range??6); sp('freq',p.freq??6500); sp('link',(p.link??100)/100);
+      sp('threshold',p.threshold??-36); sp('range',p.range??6); sp('freq',p.freq??6500); sp('link',(p.link??100)/100);
       sp('mode',p.mode||0); sp('band',p.band||0); sp('listen',p.listen||0);
     }
   }else if(fx.type==='air'){

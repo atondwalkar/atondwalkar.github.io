@@ -1004,7 +1004,7 @@ function barSec(){ return stepDur()*STEPS; }
 function songSteps(){ return Math.max(STEPS, Math.ceil(contentEnd()/stepDur()/STEPS - 1e-6)*STEPS); }
 function songSec(){ return songSteps()*stepDur(); }
 function stepPx(){ return stepDur()*PPS; }
-const ITEM_MAXW=4096, CLIP_MAXW=8192;   // cap canvas backing widths — a browser blanks a canvas wider than ~32767px (long clips at high zoom)                               // cap an item's canvas backing so a long take doesn't grow a multi-MB bitmap
+const ITEM_MAXW=4096, CLIP_MAXW=32000;   // cap canvas backing widths just under the browser's ~32767px limit (a wider canvas silently renders blank) — realistic zoom stays 1:1-crisp; only pathological widths (very long clips at max zoom) get CSS-stretched instead of going blank                               // cap an item's canvas backing so a long take doesn't grow a multi-MB bitmap
 function itemBig(it){ return it.lenSteps*stepPx()>ITEM_MAXW; }
 function queueItemRender(it){ if(it._renderT) return; it._renderT=setTimeout(()=>{ it._renderT=null; renderItem(it); },120); }   // large items: coalesce full redraws to ~8 Hz
 

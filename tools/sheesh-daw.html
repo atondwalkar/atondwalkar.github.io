@@ -1004,7 +1004,7 @@ function barSec(){ return stepDur()*STEPS; }
 function songSteps(){ return Math.max(STEPS, Math.ceil(contentEnd()/stepDur()/STEPS - 1e-6)*STEPS); }
 function songSec(){ return songSteps()*stepDur(); }
 function stepPx(){ return stepDur()*PPS; }
-const ITEM_MAXW=4096;                               // cap an item's canvas backing so a long take doesn't grow a multi-MB bitmap
+const ITEM_MAXW=4096, CLIP_MAXW=8192;   // cap canvas backing widths — a browser blanks a canvas wider than ~32767px (long clips at high zoom)                               // cap an item's canvas backing so a long take doesn't grow a multi-MB bitmap
 function itemBig(it){ return it.lenSteps*stepPx()>ITEM_MAXW; }
 function queueItemRender(it){ if(it._renderT) return; it._renderT=setTimeout(()=>{ it._renderT=null; renderItem(it); },120); }   // large items: coalesce full redraws to ~8 Hz
 
@@ -5071,9 +5071,9 @@ function addClip(track, buffer, start, name){
   return clip;
 }
 function renderClip(c){
-  const w=Math.max(6,Math.round(clipTlDur(c)*PPS));
+  const full=Math.max(6,Math.round(clipTlDur(c)*PPS)), w=Math.min(CLIP_MAXW,full), pxps=w/Math.max(1e-6,clipTlDur(c));
   c.el.style.left=Math.round(c.start*PPS)+'px';
-  c.el.style.width=w+'px';
+  c.el.style.width=full+'px';
   const cv=c.canvas; cv.width=w; cv.height=54;
   const g=cv.getContext('2d');
   if(!g) return;
@@ -5103,7 +5103,7 @@ function renderClip(c){
     g.fillStyle='rgba(0,0,0,.35)'; g.fillRect(0,27,w,1);
   }else drawWave(chans[0],27,24);
   // fades, transpose / gain / reverse badges
-  const fiPx=(c.fadeIn||0)*PPS, foPx=(c.fadeOut||0)*PPS;
+  const fiPx=(c.fadeIn||0)*pxps, foPx=(c.fadeOut||0)*pxps;
   g.fillStyle='rgba(0,0,0,.38)'; g.strokeStyle='rgba(255,230,200,.8)'; g.lineWidth=1;
   if(fiPx>1){ g.beginPath(); g.moveTo(0,54); g.lineTo(fiPx,0); g.lineTo(0,0); g.closePath(); g.fill(); g.beginPath(); g.moveTo(0,54); g.lineTo(fiPx,0); g.stroke(); }
   if(foPx>1){ g.beginPath(); g.moveTo(w,54); g.lineTo(w-foPx,0); g.lineTo(w,0); g.closePath(); g.fill(); g.beginPath(); g.moveTo(w,54); g.lineTo(w-foPx,0); g.stroke(); }
@@ -5435,10 +5435,13 @@ function renderBusGhosts(){
     const sum=busSumPeaks(bus);
     if(sum){
       const gcv=document.createElement('canvas'); gcv.className='ghost bghost sum';
-      gcv.width=sum.W; gcv.height=h; gcv.style.width=sum.W+'px'; gcv.style.height=h+'px'; gcv.style.left='0px'; gcv.style.top=top+'px';
+      const capW=Math.min(sum.W,CLIP_MAXW), k=sum.W/capW;
+      gcv.width=capW; gcv.height=h; gcv.style.width=sum.W+'px'; gcv.style.height=h+'px'; gcv.style.left='0px'; gcv.style.top=top+'px';
       const g2=gcv.getContext('2d');
-      if(g2){ for(let x=0;x<sum.W;x++){ const mxr=sum.max[x], mnr=sum.min[x]; if(mxr===0&&mnr===0) continue;
-        const mx=Math.min(1,mxr)*amp, mn=Math.max(-1,mnr)*amp, over=mxr>1||mnr<-1;
+      if(g2){ for(let cx=0;cx<capW;cx++){ const a=Math.floor(cx*k), b2=Math.max(a+1,Math.floor((cx+1)*k)); let mxr=0,mnr=0;
+        for(let x=a;x<b2;x++){ if(sum.max[x]>mxr) mxr=sum.max[x]; if(sum.min[x]<mnr) mnr=sum.min[x]; }
+        if(mxr===0&&mnr===0) continue;
+        const x=cx, mx=Math.min(1,mxr)*amp, mn=Math.max(-1,mnr)*amp, over=mxr>1||mnr<-1;
         g2.fillStyle=over?'rgba(255,110,110,.75)':'rgba(120,200,255,.55)';
         g2.fillRect(x, mid-mx, 1, Math.max(1, mx-mn)); } }
       bus.laneEl.appendChild(gcv);

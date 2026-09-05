@@ -10158,13 +10158,14 @@ function midiNoteOn(note,vel,ch){
     midiRecordOn(tr,k,vel,h);
   }));
 }
+function midiFinalizeRec(h){ if(!h) return; midiRecordOff(h); if(h.older) midiRecordOff(h.older); }   // write the recorded note length without releasing the voice
 function midiRelease(h){ if(!h) return; releaseVoice(h.v); midiRecordOff(h); }
 function midiReleaseKey(key){ const h=midiHeld.get(key); if(!h) return; midiHeld.delete(key); midiRelease(h.older); midiRelease(h); }
 function midiNoteOff(note,ch){
   ch=ch|0;
   for(const [key,h] of [...midiHeld]){
     if(h.note!==note || h.ch!==ch) continue;
-    if(midiSustain){ midiSustained.add(key); continue; }
+    if(midiSustain){ midiSustained.add(key); midiFinalizeRec(h); continue; }   // record the played (key) length now; the pedal only sustains the sound
     if(h.older){                                                          // retriggered key: a note-off right after the retrigger is the previous instance's late off;
       midiRelease(h.older); h.older=null;                                  // a later one is for the key itself (e.g. two note-ons, one note-off) — release everything
       if(performance.now()-h.t<MIDI_OVERLAP_MS) continue;

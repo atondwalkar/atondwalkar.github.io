@@ -4132,6 +4132,7 @@ function haltPlayback(){
   setPlayhead(-1);
   state.playing=false;
   playBtn.classList.remove('on'); playBtn.innerHTML='&#9654;';
+  if(ghostDirty){ ghostDirty=false; queueGhosts(); }        // flush ghost rebuilds deferred during playback
 }
 let tapBarArmed=false;
 function tapBarMeasure(){
@@ -5352,8 +5353,12 @@ function queuePianoRoll(){                          // coalesce piano-roll redra
   requestAnimationFrame(()=>{ prRollQueued=false; if(selMidiItem()) drawPianoRoll(); });
 }
 /* ghost MIDI ticks on routed piece tracks, mirroring the master drum items */
-let ghostQueued=false;
+let ghostQueued=false, ghostDirty=false;
 function queueGhosts(){
+  // ghosts (bus sum / drum blits) are decorative and don't change while the transport runs; rebuilding them
+  // (busSumPeaks scans every clip at full pixel resolution) can stall the main thread for 100s of ms, which
+  // starves the main-thread note scheduler → choppy playback with silent gaps. Defer to stop.
+  if(state.playing){ ghostDirty=true; return; }
   if(ghostQueued) return;
   ghostQueued=true;
   requestAnimationFrame(()=>{ ghostQueued=false; renderGhosts(); });

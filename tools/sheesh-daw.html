@@ -5301,6 +5301,35 @@ function renderItem(it){
   }
   queueGhosts();
 }
+/* Incremental drawing during a live MIDI take: paint one note/hit onto the existing item canvas instead of
+   re-rendering all N notes per event (that was O(N) per note → O(N²) over a long recording). Additive same-colour
+   rects, so overpainting a note-off's longer bar over the note-on stub is seamless; a full renderItem on any later
+   edit restores an exact picture. */
+function drawItemNote(it,nn){
+  const cv=it.canvas, g=cv&&cv.getContext&&cv.getContext('2d'); if(!g) return;
+  const cw=cv.width/it.lenSteps, y=11+(1-nn.k/87)*40;
+  g.fillStyle='rgba(138,223,154,.9)'; g.globalAlpha=0.4+0.6*noteVel(nn);
+  g.fillRect(nn.s*cw+1, y, Math.max(2,nn.l*cw-2), 2.5); g.globalAlpha=1;
+}
+function drawItemDrum(it,id,step){
+  const cv=it.canvas, g=cv&&cv.getContext&&cv.getContext('2d'); if(!g) return;
+  const r=DRUMS.findIndex(d=>d.id===id); if(r<0) return;
+  const cw=cv.width/it.lenSteps, rh=42/DRUMS.length, v=it.pat[id][step];
+  g.fillStyle='rgba(255,179,71,.85)'; g.globalAlpha=0.35+0.65*(v/127);
+  g.fillRect(step*cw+1, 11+r*rh, Math.max(2,cw-2), rh-1.5); g.globalAlpha=1;
+}
+function growItemCanvas(it){                        // resize to the new length, preserving pixels (per-tick scale is constant during a take)
+  const cv=it.canvas, w=Math.max(8,Math.round(it.lenSteps*stepPx()));
+  it.el.style.left=Math.round(it.startStep*stepPx())+'px'; it.el.style.width=w+'px';
+  if(cv.width===w) return;
+  const tmp=document.createElement('canvas'); tmp.width=cv.width; tmp.height=cv.height;
+  try{ tmp.getContext('2d').drawImage(cv,0,0); cv.width=w; cv.height=54; cv.getContext('2d').drawImage(tmp,0,0); }catch(_){ cv.width=w; cv.height=54; }
+}
+let prRollQueued=false;
+function queuePianoRoll(){                          // coalesce piano-roll redraws to one per frame (#1)
+  if(prRollQueued) return; prRollQueued=true;
+  requestAnimationFrame(()=>{ prRollQueued=false; if(selMidiItem()) drawPianoRoll(); });
+}
 /* ghost MIDI ticks on routed piece tracks, mirroring the master drum items */
 let ghostQueued=false;
 function queueGhosts(){
@@ -10015,7 +10044,7 @@ function midiItemAt(tr,kind,tick){
       if(next) newLen=Math.min(newLen, next.startStep-prev.startStep);
       if(newLen>prev.lenSteps && tick<prev.startStep+newLen){
         if(!midiTakeHist){ pushHistory(); midiTakeHist=true; }
-        prev.lenSteps=newLen; renderItem(prev);
+        prev.lenSteps=newLen; growItemCanvas(prev); queueGhosts();
         return prev;
       }
     }
@@ -10029,22 +10058,24 @@ function midiRecordOn(tr,k,vel,h){
   if(!midiTakeHist){ pushHistory(); midiTakeHist=true; }
   const note={k, s:tick-it.startStep, l:Math.max(1,prGrid), v:+vel.toFixed(3)};
   it.pat.push(note); h.rec={it,note};
-  renderItem(it); if(selMidiItem()===it) drawPianoRoll();
+  drawItemNote(it,note); queueGhosts(); if(selMidiItem()===it) queuePianoRoll();
 }
 function midiRecordOff(h){
   if(!h.rec) return;
   const {it,note}=h.rec; h.rec=null;
   if(state.playing){
     const end=midiTick(); note.l=Math.max(1,end-(it.startStep+note.s));
-    if(note.s+note.l>it.lenSteps){ it.lenSteps=Math.ceil((note.s+note.l)/STEPS)*STEPS; }
+    if(note.s+note.l>it.lenSteps){ it.lenSteps=Math.ceil((note.s+note.l)/STEPS)*STEPS; growItemCanvas(it); }
+    const cv=it.canvas, g=cv&&cv.getContext&&cv.getContext('2d');
+    if(g){ const cw=cv.width/it.lenSteps, y=11+(1-note.k/87)*40; g.clearRect(note.s*cw, y-2, Math.max(2,Math.max(note.l,prGrid)*cw)+2, 6); }   // erase the note-on stub before repainting
   }
-  renderItem(it); if(selMidiItem()===it) drawPianoRoll();
+  drawItemNote(it,note); queueGhosts(); if(selMidiItem()===it) queuePianoRoll();   // repaint the finalized note
 }
 function midiRecordDrum(tr,id,vel){
   if(!midiRec || !state.playing) return;
   const tick=midiTick(), it=midiItemAt(tr,'drums',tick);
-  it.pat[id][tick-it.startStep]=Math.max(1,Math.round(vel*127));
-  renderItem(it); if(selMidiItem()===it) drawPianoRoll();
+  const step=tick-it.startStep; it.pat[id][step]=Math.max(1,Math.round(vel*127));
+  drawItemDrum(it,id,step); queueGhosts(); if(selMidiItem()===it) queuePianoRoll();
 }
 const MIDI_OVERLAP_MS=25;                                  // note-off this soon after a retrigger belongs to the previous instance
 function midiHeldKey(ch,note,tr){ return ch+':'+note+':'+tr.id; }

@@ -1170,6 +1170,10 @@ const FX_DEFS={
     presence:{min:0,max:10,step:0.1,val:5,fmt:v=>(+v).toFixed(1)},
     resonance:{min:0,max:10,step:0.1,val:5,fmt:v=>(+v).toFixed(1)},
     power:{min:0,max:10,step:0.1,val:4,fmt:v=>(+v).toFixed(1)},
+    tight:{min:0,max:10,step:0.1,val:5,fmt:v=>(+v).toFixed(1)},
+    sag:{min:0,max:10,step:0.1,val:5,fmt:v=>(+v).toFixed(1)},
+    cab:{min:0,max:1,step:1,val:1,opts:['off','on'],fmt:v=>Math.round(v)?'on':'off',label:'cab'},
+    cabModel:{min:0,max:3,step:1,val:0,opts:['4x12 V30','4x12 dark','1x12','flat'],fmt:v=>['4x12 V30','4x12 dark','1x12','flat'][Math.round(v)],label:'cab model'},
   }},
   cab:{name:'Cab IR', color:'#d4a05f', params:{
     model:{min:0,max:3,step:1,val:0,fmt:v=>['4x12 tight','4x12 dark','1x12','flat'][Math.round(v)]},
@@ -1614,7 +1618,7 @@ function wtvEnvVal(e,tau,tauEnd){
 class WTBiquad{
  constructor(){ this.b0=1;this.b1=0;this.b2=0;this.a1=0;this.a2=0;this.db0=0;this.db1=0;this.db2=0;this.da1=0;this.da2=0;
   this.x1l=0;this.x2l=0;this.y1l=0;this.y2l=0;this.x1r=0;this.x2r=0;this.y1r=0;this.y2r=0;this.c=new Float64Array(5);this.init=false;this.l=0;this.r=0;}
- set(type,f,Q,slope){ wtBiquadCoef(type,f,Q,sampleRate,this.c); const c=this.c;
+ set(type,f,Q,slope,A){ wtBiquadCoef(type,f,Q,sampleRate,this.c,A); const c=this.c;
   if(slope&&this.init){ this.db0=(c[0]-this.b0)/128;this.db1=(c[1]-this.b1)/128;this.db2=(c[2]-this.b2)/128;this.da1=(c[3]-this.a1)/128;this.da2=(c[4]-this.a2)/128; }
   else{ this.b0=c[0];this.b1=c[1];this.b2=c[2];this.a1=c[3];this.a2=c[4];this.db0=0;this.db1=0;this.db2=0;this.da1=0;this.da2=0;this.init=true; } }
  tick2(l,r){ const yl=this.b0*l+this.b1*this.x1l+this.b2*this.x2l-this.a1*this.y1l-this.a2*this.y2l;
@@ -2243,7 +2247,112 @@ class S16Tap extends AudioWorkletProcessor{
   if(this.total && currentFrame+128>=this.total){ this.acc.push(this.mn[0],this.mx[0],this.mn[1],this.mx[1]); this.port.postMessage({frame:this.total,cols:this.acc}); this.acc=[]; this.total=0; }
   return true; }
 }
-registerProcessor('s16-tap',S16Tap);`;
+registerProcessor('s16-tap',S16Tap);
+// ---- s16-amp: NeuralDSP-style guitar amp+cab. Mono nonlinear core, 4x IIR oversampling, power-amp sag/bias, integrated cabinet.
+function ampFtanh(x){ if(x<-3)return -1; if(x>3)return 1; const x2=x*x; return x*(27+x2)/(27+9*x2); }   // fast bounded rational tanh (never NaN/Inf)
+function ampStage(x,drive,bias){ return ampFtanh((x+bias)*drive)-ampFtanh(bias*drive); }                 // asymmetric tube stage (bias -> even harmonics), DC-referenced
+function ampSetBq(bq,type,f,Q,sr,A){ wtBiquadCoef(type,f,Q,sr,bq.c,A); const c=bq.c; bq.b0=c[0];bq.b1=c[1];bq.b2=c[2];bq.a1=c[3];bq.a2=c[4]; bq.db0=0;bq.db1=0;bq.db2=0;bq.da1=0;bq.da2=0; bq.init=true; }
+const AMP_CABS=[
+ {hp:80,body:[110,4],dip:[400,-3],pres:[4500,5],lp:5200},   // 4x12 V30
+ {hp:75,body:[100,5],dip:[500,-4],pres:[3800,2],lp:4200},   // 4x12 dark
+ {hp:95,body:[130,3],dip:[600,-2],pres:[5000,6],lp:6000},   // 1x12
+ {hp:20,body:[200,0],dip:[600,0],pres:[4000,0],lp:20000}    // flat
+];
+class S16Amp extends AudioWorkletProcessor{
+ static get parameterDescriptors(){return[
+  {name:'channel',defaultValue:2,minValue:0,maxValue:2,automationRate:'k-rate'},
+  {name:'gain',defaultValue:6.5,minValue:1,maxValue:10,automationRate:'k-rate'},
+  {name:'low',defaultValue:2,minValue:-12,maxValue:12,automationRate:'k-rate'},
+  {name:'mid',defaultValue:-1,minValue:-12,maxValue:12,automationRate:'k-rate'},
+  {name:'high',defaultValue:2,minValue:-12,maxValue:12,automationRate:'k-rate'},
+  {name:'presence',defaultValue:5,minValue:0,maxValue:10,automationRate:'k-rate'},
+  {name:'resonance',defaultValue:5,minValue:0,maxValue:10,automationRate:'k-rate'},
+  {name:'power',defaultValue:4,minValue:0,maxValue:10,automationRate:'k-rate'},
+  {name:'tight',defaultValue:5,minValue:0,maxValue:10,automationRate:'k-rate'},
+  {name:'sag',defaultValue:5,minValue:0,maxValue:10,automationRate:'k-rate'},
+  {name:'cab',defaultValue:1,minValue:0,maxValue:1,automationRate:'k-rate'},
+  {name:'cabModel',defaultValue:0,minValue:0,maxValue:3,automationRate:'k-rate'}
+ ];}
+ constructor(){super();
+  const B=()=>new WTBiquad(); const os=4*sampleRate;
+  this.aiA=B();this.aiB=B();this.aaA=B();this.aaB=B();this.cpl1=B();this.cpl2=B();this.fizz=B();   // 4x-rate (static coeffs)
+  const fc=0.45*sampleRate;
+  ampSetBq(this.aiA,'lowpass',fc,-5.337,os);ampSetBq(this.aiB,'lowpass',fc,2.324,os);   // 4th-order Butterworth anti-image
+  ampSetBq(this.aaA,'lowpass',fc,-5.337,os);ampSetBq(this.aaB,'lowpass',fc,2.324,os);   // 4th-order Butterworth anti-alias
+  ampSetBq(this.cpl1,'highpass',24,-3.0103,os);ampSetBq(this.cpl2,'highpass',24,-3.0103,os);ampSetBq(this.fizz,'lowpass',9000,-3.0103,os);
+  this.preHP=B();this.preMid=B();this.tsLow=B();this.tsMid=B();this.tsHigh=B();this.pres=B();this.reso=B();   // base-rate (smoothed)
+  this.cabHP=B();this.cabBody=B();this.cabDip=B();this.cabPres=B();this.cabLP1=B();this.cabLP2=B();
+  this.preMid.set('peaking',720,0.7,false,Math.pow(10,3/40));   // fixed mid hump in front
+  this.dcx=0;this.dcy=0;this.dcR=1-6.3/sampleRate;
+  this.env=0;this.bias=0;
+  this.aAtt=1-Math.exp(-1/(0.020*sampleRate));this.aRel=1-Math.exp(-1/(0.300*sampleRate));
+  this._low=99;this._mid=99;this._high=99;this._prs=-9;this._rso=-9;this._tight=-9;this._cabB=-9;
+  this.outTrim=0.6;
+ }
+ buildTone(low,mid,high,prs,rso){ const A=db=>Math.pow(10,db/40);
+  this.tsLow.set('lowshelf',90,0.7,true,A(low));
+  this.tsMid.set('peaking',650,0.7,true,A(mid-0.12*(low+high)));   // Fender-style interaction: bass+treble scoop mids
+  this.tsHigh.set('highshelf',3000,0.7,true,A(high));
+  this.pres.set('highshelf',4500,0.7,true,A(prs*1.2));
+  this.reso.set('lowshelf',100,0.9,true,A(rso*0.9)); }
+ buildCab(m){ const A=db=>Math.pow(10,db/40); const C=AMP_CABS[m]||AMP_CABS[0];
+  this.cabHP.set('highpass',C.hp,-3.0103,true);
+  this.cabBody.set('peaking',C.body[0],0.8,true,A(C.body[1]));
+  this.cabDip.set('peaking',C.dip[0],0.9,true,A(C.dip[1]));
+  this.cabPres.set('peaking',C.pres[0],0.7,true,A(C.pres[1]));
+  this.cabLP1.set('lowpass',C.lp,-5.337,true);this.cabLP2.set('lowpass',C.lp,2.324,true); }
+ process(inputs,outputs,params){
+  const inp=inputs[0], out=outputs[0]; if(!out||!out.length) return true;
+  const oL=out[0], n=oL.length;
+  const L=inp&&inp[0], R=(inp&&inp[1])||L;
+  if(!L){ oL.fill(0); if(out[1])out[1].fill(0); return true; }
+  const ch=Math.round(params.channel[0]), g=params.gain[0], power=params.power[0], tight=params.tight[0], sagP=params.sag[0];
+  const low=params.low[0],mid=params.mid[0],high=params.high[0],prs=params.presence[0],rso=params.resonance[0];
+  if(tight!==this._tight){ this._tight=tight; this.preHP.set('highpass',20*Math.pow(15,tight/10),-3.0103,true); }
+  if(low!==this._low||mid!==this._mid||high!==this._high||prs!==this._prs||rso!==this._rso){ this._low=low;this._mid=mid;this._high=high;this._prs=prs;this._rso=rso; this.buildTone(low,mid,high,prs,rso); }
+  const cabOn=Math.round(params.cab[0]), cabModel=Math.round(params.cabModel[0]);
+  if(this._cabB!==cabModel){ this._cabB=cabModel; this.buildCab(cabModel); }
+  let d1,d2=0,d3=0,nst;
+  if(ch<=0){ nst=1; d1=1+g*0.25; }
+  else if(ch===1){ nst=2; d1=2+g*0.6; d2=1.5+g*0.3; }
+  else { nst=3; d1=3+g*0.9; d2=2+g*0.5; d3=1.3+g*0.2; }
+  const pdrive=0.6+power*0.18, sagAmt=sagP*0.1, trim=this.outTrim;
+  for(let i=0;i<n;i++){
+   let m=0.5*(L[i]+R[i]);
+   this.preHP.tick2(m,m); m=this.preHP.l; this.preMid.tick2(m,m); m=this.preMid.l;
+   const ax=m<0?-m:m;
+   this.env += (ax>this.env?this.aAtt:this.aRel)*(ax-this.env);
+   const sag=1/(1+sagAmt*3*this.env);
+   this.bias += 0.001*(0.03*(1+sagAmt*this.env*2)-this.bias);
+   const bias=this.bias;
+   let ds=0;
+   for(let j=0;j<4;j++){
+    let u=j===0?m*4:0;
+    u=this.aiA.tick1(u); u=this.aiB.tick1(u);
+    let s=ampStage(u,d1,0.05);
+    if(nst>=2){ s=this.cpl1.tick1(s); s=ampStage(s,d2,0.04); }
+    if(nst>=3){ s=this.cpl2.tick1(s); s=ampStage(s,d3,0.03); }
+    s=this.fizz.tick1(s);
+    s=ampFtanh((s+bias)*pdrive*sag)-ampFtanh(bias*pdrive*sag);
+    s=this.aaA.tick1(s); s=this.aaB.tick1(s);
+    if(j===0) ds=s;
+   }
+   let y=ds;
+   const dy=y-this.dcx+this.dcR*this.dcy; this.dcx=y; this.dcy=dy; y=dy;
+   this.tsLow.tick2(y,y); y=this.tsLow.l; this.tsMid.tick2(y,y); y=this.tsMid.l; this.tsHigh.tick2(y,y); y=this.tsHigh.l;
+   this.pres.tick2(y,y); y=this.pres.l; this.reso.tick2(y,y); y=this.reso.l;
+   if(cabOn){ this.cabHP.tick2(y,y); y=this.cabHP.l; this.cabBody.tick2(y,y); y=this.cabBody.l; this.cabDip.tick2(y,y); y=this.cabDip.l;
+    this.cabPres.tick2(y,y); y=this.cabPres.l; this.cabLP1.tick2(y,y); y=this.cabLP1.l; this.cabLP2.tick2(y,y); y=this.cabLP2.l; }
+   y*=trim; oL[i]=y; if(out[1]) out[1][i]=y;
+  }
+  this.aiA.endBlock();this.aiB.endBlock();this.aaA.endBlock();this.aaB.endBlock();this.cpl1.endBlock();this.cpl2.endBlock();this.fizz.endBlock();
+  this.preHP.endBlock();this.preMid.endBlock();this.tsLow.endBlock();this.tsMid.endBlock();this.tsHigh.endBlock();this.pres.endBlock();this.reso.endBlock();
+  this.cabHP.endBlock();this.cabBody.endBlock();this.cabDip.endBlock();this.cabPres.endBlock();this.cabLP1.endBlock();this.cabLP2.endBlock();
+  if(this.env<1e-12)this.env=0; if(Math.abs(this.dcy)<1e-15){this.dcx=0;this.dcy=0;}
+  return true;
+ }
+}
+registerProcessor('s16-amp',S16Amp);`;
 
 let WORKLET_SRC_CACHE=null;
 function workletSrc(){
@@ -2371,19 +2480,6 @@ function makeImpulse(decay,room,c){
 }
 const CURVE_CACHE=new Map();          // context-free Float32Array shaper curves, keyed by quantised params
 function curveMemo(key,make){ let c=CURVE_CACHE.get(key); if(!c){ c=make(); if(CURVE_CACHE.size>=64) CURVE_CACHE.delete(CURVE_CACHE.keys().next().value); CURVE_CACHE.set(key,c); } return c; }
-function ampStageCurve(drive,asym,hard){
-  return curveMemo('amp:'+drive.toFixed(4)+':'+asym+':'+(hard?1:0),()=>ampStageCurveRaw(drive,asym,hard));
-}
-function ampStageCurveRaw(drive,asym,hard){
-  const N=2048, cur=new Float32Array(N);
-  for(let i=0;i<N;i++){
-    const x=i/(N-1)*2-1;
-    let y=Math.tanh((x+asym)*drive)-Math.tanh(asym*drive);
-    if(hard) y=Math.max(-0.95,Math.min(0.88,y*1.18));
-    cur[i]=y*0.9;
-  }
-  return cur;
-}
 function distCurve(drive,mode){
   return curveMemo('dist:'+(+drive).toFixed(3)+':'+mode,()=>distCurveRaw(drive,mode));
 }
@@ -2527,30 +2623,12 @@ function buildFxCore(fx,c,useWorklet){
     return {in:inN, out:lp, hp, pre, ws1, hp2, ws2, scoop, pres, lp, builtGain:-1};
   }
   if(t==='amp'){
-    const inN=c.createGain();
-    const tight=c.createBiquadFilter(); tight.type='highpass'; tight.frequency.value=45;
-    const bright=c.createBiquadFilter(); bright.type='highshelf'; bright.frequency.value=2200;
-    const ws1=c.createWaveShaper(); ws1.oversample='4x';
-    const ih1=c.createBiquadFilter(); ih1.type='highpass'; ih1.frequency.value=25;
-    const g2=c.createGain(); g2.gain.value=0.7;
-    const ws2=c.createWaveShaper(); ws2.oversample='4x';
-    const ih2=c.createBiquadFilter(); ih2.type='highpass'; ih2.frequency.value=25;
-    const g3=c.createGain(); g3.gain.value=0.7;
-    const ws3=c.createWaveShaper(); ws3.oversample='4x';
-    const tsLow=c.createBiquadFilter(); tsLow.type='lowshelf'; tsLow.frequency.value=120;
-    const tsMid=c.createBiquadFilter(); tsMid.type='peaking'; tsMid.frequency.value=650; tsMid.Q.value=0.8;
-    const tsHigh=c.createBiquadFilter(); tsHigh.type='highshelf'; tsHigh.frequency.value=3200;
-    const pwr=c.createWaveShaper(); pwr.oversample='2x';
-    const pres=c.createBiquadFilter(); pres.type='highshelf'; pres.frequency.value=4500;
-    const reso=c.createBiquadFilter(); reso.type='lowshelf'; reso.frequency.value=110;
-    const lvl=c.createGain(); lvl.gain.value=0.55;
-    inN.connect(tight); tight.connect(bright); bright.connect(ws1);
-    ws1.connect(ih1); ih1.connect(g2); g2.connect(ws2);
-    ws2.connect(ih2); ih2.connect(g3); g3.connect(ws3);
-    ws3.connect(tsLow); tsLow.connect(tsMid); tsMid.connect(tsHigh);
-    tsHigh.connect(pwr); pwr.connect(pres); pres.connect(reso); reso.connect(lvl);
-    return {in:inN, out:lvl, tight, bright, ws1, ws2, ws3, tsLow, tsMid, tsHigh, pwr, pres, reso,
-            builtGain:-1, builtCh:-1, builtPower:-1};
+    if(useWorklet){
+      const node=watchProcessor(new AudioWorkletNode(c,'s16-amp',{outputChannelCount:[2]}),fx,'amp');
+      return {in:node, out:node, ampNode:node};
+    }
+    const g=c.createGain();                                   // no worklet support: transparent pass-through
+    return {in:g, out:g};
   }
   if(t==='cab'){
     const inN=c.createGain(), out=c.createGain();
@@ -2885,39 +2963,13 @@ function applyFxTo(fx,n){
       n.builtDrive=p.drive; n.builtMode=m;
     }
   }else if(fx.type==='amp'){
-    const ch=Math.round(p.channel??2), g=p.gain??6.5;
-    n.tsLow.gain.value=p.low??2;
-    n.tsMid.gain.value=p.mid??-1;
-    n.tsHigh.gain.value=p.high??2;
-    n.pres.gain.value=(p.presence??5)*0.8;
-    n.reso.gain.value=(p.resonance??5)*0.8;
-    n.bright.gain.value=Math.max(0,6-g*0.5);
-    if(n.builtGain!==g || n.builtCh!==ch){
-      const linear=curveMemo('lin',()=>new Float32Array([-0.9,0.9]));
-      if(ch===0){
-        n.ws1.curve=ampStageCurve(1+g*0.25,0.02,false);
-        n.ws2.curve=linear;
-        n.ws3.curve=linear;
-      }else if(ch===1){
-        n.ws1.curve=ampStageCurve(2+g*0.7,0.05,false);
-        n.ws2.curve=ampStageCurve(1.5+g*0.4,0.04,true);
-        n.ws3.curve=linear;
-      }else{
-        n.ws1.curve=ampStageCurve(3+g*1.1,0.06,false);
-        n.ws2.curve=ampStageCurve(2+g*0.7,0.05,false);
-        n.ws3.curve=ampStageCurve(1.6+g*0.5,0.04,true);
-      }
-      n.builtGain=g; n.builtCh=ch;
-    }
-    const pw=p.power??4;
-    if(n.builtPower!==pw){
-      n.pwr.curve=curveMemo('pwr:'+(+pw).toFixed(3),()=>{
-        const N=1024, pc=new Float32Array(N);
-        const d=0.6+pw*0.18;
-        for(let i=0;i<N;i++){ const x=i/(N-1)*2-1; pc[i]=Math.tanh(x*d)/Math.tanh(d); }
-        return pc;
-      });
-      n.builtPower=pw;
+    if(n.ampNode){
+      const P=n.ampNode.parameters, sp=(k,v)=>{ const ap=P.get(k); if(ap) ap.value=v; };
+      sp('channel',Math.round(p.channel??2)); sp('gain',p.gain??6.5);
+      sp('low',p.low??2); sp('mid',p.mid??-1); sp('high',p.high??2);
+      sp('presence',p.presence??5); sp('resonance',p.resonance??5); sp('power',p.power??4);
+      sp('tight',p.tight??5); sp('sag',p.sag??5);
+      sp('cab',Math.round(p.cab??1)); sp('cabModel',Math.round(p.cabModel??0));
     }
   }else if(fx.type==='cab'){
     n.wet.gain.value=p.mix??1;
@@ -3545,22 +3597,33 @@ function wtNoteInfo(it,nn,p){
   const joined=!!prev && prev.s+prev.l>=nn.s;
   return {len, fromK:(glide>0&&prev&&(voicing===1||joined))?prev.k:null, legato:voicing===2&&joined};
 }
-/* Web Audio BiquadFilterNode coefficients (lowpass/highpass use Q in dB, bandpass/notch linear Q) — shared with the worklet */
-function wtBiquadCoef(type,f,Q,sr,out){
+/* Web Audio BiquadFilterNode coefficients (lowpass/highpass use Q in dB, bandpass/notch/peaking/shelf linear Q) — shared with the worklet.
+   Optional 6th arg A=10^(dBgain/40) for peaking/lowshelf/highshelf (RBJ cookbook); defaults to 1 (unity) so all 5-arg callers are unchanged. */
+function wtBiquadCoef(type,f,Q,sr,out,A){
   const nyq=sr/2;
   const pass=()=>{ out[0]=1;out[1]=0;out[2]=0;out[3]=0;out[4]=0; }, mute=()=>{ out[0]=0;out[1]=0;out[2]=0;out[3]=0;out[4]=0; };
   if(type==='lowpass'){ if(f>=nyq) return pass(); if(f<=0) return mute(); }
   else if(type==='highpass'){ if(f>=nyq) return mute(); if(f<=0) return pass(); }
   else if(type==='bandpass'){ if(!(Q>0)) return pass(); if(f<=0||f>=nyq) return mute(); }
+  else if(type==='peaking'||type==='lowshelf'||type==='highshelf'){ if(!(Q>0)||f<=0||f>=nyq) return pass(); }
   else { if(!(Q>0)) return mute(); if(f<=0||f>=nyq) return pass(); }
   const w0=2*Math.PI*f/sr, c=Math.cos(w0), sn=Math.sin(w0);
   const al=(type==='lowpass'||type==='highpass')?sn/2*Math.pow(10,-Q/20):sn/(2*Q);
-  let b0,b1,b2;
-  if(type==='lowpass'){ b0=(1-c)/2; b1=1-c; b2=b0; }
-  else if(type==='highpass'){ b0=(1+c)/2; b1=-(1+c); b2=b0; }
-  else if(type==='bandpass'){ b0=al; b1=0; b2=-al; }
-  else { b0=1; b1=-2*c; b2=1; }
-  const a0=1+al, a1=-2*c, a2=1-al;
+  let b0,b1,b2,a0,a1,a2;
+  if(type==='peaking'){ const g=A||1; b0=1+al*g; b1=-2*c; b2=1-al*g; a0=1+al/g; a1=-2*c; a2=1-al/g; }
+  else if(type==='lowshelf'){ const g=A||1, sq=2*Math.sqrt(g)*al;
+    b0=g*((g+1)-(g-1)*c+sq); b1=2*g*((g-1)-(g+1)*c); b2=g*((g+1)-(g-1)*c-sq);
+    a0=(g+1)+(g-1)*c+sq; a1=-2*((g-1)+(g+1)*c); a2=(g+1)+(g-1)*c-sq; }
+  else if(type==='highshelf'){ const g=A||1, sq=2*Math.sqrt(g)*al;
+    b0=g*((g+1)+(g-1)*c+sq); b1=-2*g*((g-1)+(g+1)*c); b2=g*((g+1)+(g-1)*c-sq);
+    a0=(g+1)-(g-1)*c+sq; a1=2*((g-1)-(g+1)*c); a2=(g+1)-(g-1)*c-sq; }
+  else{
+    if(type==='lowpass'){ b0=(1-c)/2; b1=1-c; b2=b0; }
+    else if(type==='highpass'){ b0=(1+c)/2; b1=-(1+c); b2=b0; }
+    else if(type==='bandpass'){ b0=al; b1=0; b2=-al; }
+    else { b0=1; b1=-2*c; b2=1; }
+    a0=1+al; a1=-2*c; a2=1-al;
+  }
   out[0]=b0/a0; out[1]=b1/a0; out[2]=b2/a0; out[3]=a1/a0; out[4]=a2/a0;
 }
 function wtBiquadMag(c,w){

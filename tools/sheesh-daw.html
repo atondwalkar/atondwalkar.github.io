@@ -1207,7 +1207,6 @@ const FX_DEFS={
     inputType:{min:0,max:2,step:1,val:1,opts:['High','Mid','Bass'],fmt:v=>['High','Mid','Bass'][Math.round(v)]||'Mid',label:'range'},
     amount:{min:0,max:1,step:0.01,val:1,fmt:v=>Math.round(v*100)+'%',label:'strength'},
     retune:{min:0,max:400,step:1,val:40,fmt:v=>Math.round(v)+' ms',label:'smoothness'},
-    formant:{min:-12,max:12,step:0.1,val:0,fmt:v=>(v>0?'+':'')+(+v).toFixed(1)+' st',label:'formant'},
     transpose:{min:-12,max:12,step:1,val:0,fmt:v=>(v>0?'+':'')+v+' st',label:'shift'},
     vibrato:{min:0,max:1,step:0.01,val:0,fmt:v=>Math.round(v*100)+'%',label:'vibrato'},
     vibRate:{min:1,max:12,step:0.1,val:5.5,fmt:v=>(+v).toFixed(1)+' Hz',label:'vib rate'},
@@ -1219,8 +1218,6 @@ const FX_DEFS={
     mode:{min:0,max:2,step:1,val:0,opts:['Transpose','Quantize','Robot'],fmt:v=>['Transpose','Quantize','Robot'][Math.round(v)]||'Transpose',label:'mode'},
     key:{min:0,max:24,step:1,val:0,opts:TUNE_KEYS,fmt:v=>TUNE_KEYS[Math.round(v)]||'C maj',label:'key'},
     pitch:{min:-12,max:12,step:0.1,val:0,fmt:v=>(v>0?'+':'')+(+v).toFixed(1)+' st',label:'pitch'},
-    formant:{min:-12,max:12,step:0.1,val:0,fmt:v=>(v>0?'+':'')+(+v).toFixed(1)+' st',label:'formant'},
-    link:{min:0,max:1,step:1,val:0,opts:['off','on'],fmt:v=>Math.round(v)?'on':'off',label:'link'},
     drive:{min:0,max:1,step:0.01,val:0,fmt:v=>Math.round(v*100)+'%',label:'drive'},
     retune:{min:0,max:400,step:1,val:20,fmt:v=>Math.round(v)+' ms',label:'speed'},
     mix:{min:0,max:1,step:0.01,val:1,fmt:v=>Math.round(v*100)+'%'},
@@ -1783,7 +1780,6 @@ static get parameterDescriptors(){return[
  {name:'humanize',defaultValue:0,minValue:0,maxValue:1},
  {name:'root',defaultValue:0,minValue:0,maxValue:11},
  {name:'mask',defaultValue:2741,minValue:0,maxValue:4095},
- {name:'formant',defaultValue:0,minValue:-12,maxValue:12},
  {name:'transpose',defaultValue:0,minValue:-12,maxValue:12},
  {name:'vibrato',defaultValue:0,minValue:0,maxValue:1},
  {name:'vibRate',defaultValue:5.5,minValue:1,maxValue:12},
@@ -1794,17 +1790,17 @@ static get parameterDescriptors(){return[
  {name:'drive',defaultValue:0,minValue:0,maxValue:1},        // post tube saturation (Vox Transformer)
  {name:'robotNote',defaultValue:48,minValue:0,maxValue:127}]}
 constructor(){super();
- this.N=16384;this.MASK=16383;this.LAT=1536;
- this.b=[new Float32Array(16384),new Float32Array(16384)];
- this.oa=[new Float32Array(16384),new Float32Array(16384)];this.ws=new Float32Array(16384);   // PSOLA output accumulators + window sum
- this.t=0;                                                     // total input samples written (monotonic)
+ // Clean two-tap OLA resampler: at unity it is an exact delayed pass-through (m→0 → the 'pure' tap); it only
+ // engages the crossfaded grains while shifting. Formants track pitch (resampler) — independent/formant-preserving
+ // shifting needs a spectral engine (phase vocoder), a separate follow-up.
+ this.N=16384;this.G=2048;this.b=[new Float32Array(16384),new Float32Array(16384)];this.w=0;this.ph=1024;this.m=0;
  this.A=4096;this.an=new Float32Array(4096);this.aw=0;this.hop=0;
  this.W=2048;this.D=4;this.dw=new Float32Array(512);this.df=new Float32Array(172);this.cm=new Float32Array(172);
- this.f0=0;this.midi=0;this.tgt=0;this.lag=256;this.voiced=0;
+ this.ratio=1;this.ratioT=1;this.f0=0;this.midi=0;this.tgt=0;this.lag=256;this.voiced=0;
  this.hum=0;this.humT=0;this.rnd=seededRand(0x7A3E);this.post=0;this.last='';
- this.P=256;this.synMark=0;this.corr=0;this.beta=1;this.xfade=0;this.vibPh=0;this.tOnset=0;this.prevV=0;
+ this.vibPh=0;this.tOnset=0;this.prevV=0;this.t=0;
 }
-analyse(root,mask,tmin,tmax){                                  // YIN/CMNDF pitch detect + scale snap (unchanged core); sets lag/voiced/midi/tgt
+analyse(root,mask,tmin,tmax){                                  // YIN/CMNDF pitch detect + scale snap; sets lag/voiced/midi/tgt
  const sr=sampleRate,A=this.A,an=this.an,W=this.W,D=this.D,n4=W/D,dw=this.dw,df=this.df,cm=this.cm;
  const start=(this.aw-W+A)%A;
  let rms=0;
@@ -1833,60 +1829,48 @@ analyse(root,mask,tmin,tmax){                                  // YIN/CMNDF pitc
 }
 process(inputs,outputs,params){
  const inp=inputs[0],out=outputs[0]; if(!out||!out.length) return true;
- const oL=out[0],oR=out[1],nlen=oL.length,MASK=this.MASK,LAT=this.LAT,A=this.A,oa=this.oa,ws=this.ws,b=this.b;
+ const oL=out[0],oR=out[1],nlen=oL.length,N=this.N,G=this.G,A=this.A,b=this.b;
  const L=inp&&inp[0], R=(inp&&inp[1])||L;
  const retune=params.retune[0],amount=params.amount[0],humanize=params.humanize[0],root=Math.round(params.root[0]),mask=Math.round(params.mask[0]);
- const formant=params.formant[0],transpose=params.transpose[0],vibAmt=params.vibrato[0],vibRate=params.vibRate[0],vibDelay=params.vibDelay[0];
+ const transpose=params.transpose[0],vibAmt=params.vibrato[0],vibRate=params.vibRate[0],vibDelay=params.vibDelay[0];
  const inType=Math.round(params.inType[0]),mix=params.mix[0],mode=Math.round(params.mode[0]),drive=params.drive[0],robotNote=params.robotNote[0];
  const dg=1+drive*9, dmk=1/(1+drive*3);
  const tmin=inType===0?8:inType===2?20:12, tmax=inType===0?90:inType===2?171:140;
- const al=retune<=0?1:1-Math.exp(-1/(retune/1000*sampleRate));
- const bCoef=1-Math.exp(-128/(0.010*sampleRate)), pCoef=1-Math.exp(-128/(0.020*sampleRate)), xCoef=1-Math.exp(-1/(0.005*sampleRate));
- const fstep=Math.pow(2,formant/12), vibInc=2*Math.PI*vibRate/sampleRate;   // formant>0 → wider grain read → formants up
+ const al=retune<=0?1:1-Math.exp(-1/(retune/1000*sampleRate)), mStep=1/(0.01*sampleRate);
+ const vibInc=2*Math.PI*vibRate/sampleRate;
  for(let n=0;n<nlen;n++){
   const xl=L?L[n]:0, xr=R?R[n]:0;
-  const wi=this.t&MASK; b[0][wi]=xl; b[1][wi]=xr;
+  b[0][this.w]=xl; b[1][this.w]=xr;
   this.an[this.aw]=(xl+xr)*0.5; this.aw=(this.aw+1)%A;
   if(++this.hop>=256){ this.hop=0; this.analyse(root,mask,tmin,tmax);
-   this.beta+=(fstep-this.beta)*bCoef; if(this.voiced){ this.P+=(this.lag-this.P)*pCoef; if(this.P<32)this.P=32; if(this.P>700)this.P=700; }
    if(++this.post>=8){ this.post=0; const cents=Math.round((this.midi-this.tgt)*100); const msg=this.f0?(Math.round(this.midi*10)+','+this.tgt+','+cents):'-'; if(msg!==this.last){ this.last=msg; this.port.postMessage({f0:this.f0,m:this.midi,tgt:this.tgt,cents:cents}); } } }
   const voiced=this.voiced;
   if(voiced && !this.prevV){ this.tOnset=this.t; this.vibPh=0; } this.prevV=voiced;
-  const corrTarget = !voiced ? 0 : (mode===0 ? 0 : mode===2 ? (robotNote-this.midi) : amount*(this.tgt-this.midi) + (this.hum*25*humanize)/100);
-  this.corr += (corrTarget-this.corr)*al;
+  const corrRaw = !voiced ? 0 : (mode===0 ? 0 : mode===2 ? (robotNote-this.midi) : amount*(this.tgt-this.midi) + (this.hum*25*humanize)/100);
   this.vibPh+=vibInc; if(this.vibPh>6.283185307)this.vibPh-=6.283185307;
   const vibEnv=Math.max(0,Math.min(1,((this.t-this.tOnset)/sampleRate*1000-vibDelay)/150));
-  let semis=this.corr+transpose+vibEnv*vibAmt*Math.sin(this.vibPh);
-  let ratio=Math.pow(2,semis/12); if(ratio<0.5)ratio=0.5; if(ratio>2)ratio=2;
-  this.xfade+=((voiced?1:0)-this.xfade)*xCoef;
-  const P=this.P, Pout=P/ratio, beta=this.beta, rd=this.t-LAT;
-  if(this.synMark<rd-8192) this.synMark=rd;                    // lost-sync resync guard
-  let guard=0;
-  while(guard++<8192){                                         // emit PSOLA grains whose span reaches the read pointer
-   const sc=Math.round(this.synMark); if(sc-P>rd) break;
-   const anaCenter=Math.floor(sc/P)*P, inBase=anaCenter-(beta-1)*P;   // floor-snapped pitch mark bounds max forward read to anaCenter+P
-   const Pi=P|0;
-   for(let o=-Pi;o<=Pi;o++){
-    const outAbs=sc+o; if(outAbs<rd) continue;                 // never write behind the read pointer
-    const wv=0.5-0.5*Math.cos(Math.PI*(o+P)/P), oi=outAbs&MASK;
-    const inPos=inBase+beta*o, i0=Math.floor(inPos), fr=inPos-i0, j0=i0&MASK, j1=(i0+1)&MASK;
-    oa[0][oi]+=wv*(b[0][j0]+(b[0][j1]-b[0][j0])*fr);
-    oa[1][oi]+=wv*(b[1][j0]+(b[1][j1]-b[1][j0])*fr);
-    ws[oi]+=wv;
-   }
-   this.synMark+=Pout;
+  let semis=corrRaw+transpose+vibEnv*vibAmt*Math.sin(this.vibPh);
+  this.ratioT=Math.pow(2,semis/12); if(this.ratioT<0.5)this.ratioT=0.5; if(this.ratioT>2)this.ratioT=2;
+  this.ratio+=(this.ratioT-this.ratio)*al;
+  const ratio=this.ratio, shifting=Math.abs(ratio-1)>1e-4;
+  if(shifting){ this.m=Math.min(1,this.m+mStep); this.ph+=(1-ratio); }
+  else{ this.m=Math.max(0,this.m-mStep); if(this.m<=0) this.ph=G/2; }
+  const m=this.m;
+  let d1=this.ph%G; if(d1<0)d1+=G;
+  const d2=(d1+G/2)%G;
+  const a=Math.sin(Math.PI*d1/G),bw=Math.sin(Math.PI*d2/G);
+  const norm=1/Math.max(0.7071,Math.hypot(a,bw));
+  for(let c=0;c<out.length;c++){
+   const buf=b[Math.min(c,1)];
+   const rd=d=>{ const pos=this.w-1-d; const i0=Math.floor(pos),fr=pos-i0; const x0=buf[((i0%N)+N)%N],x1=buf[(((i0+1)%N)+N)%N]; return x0+(x1-x0)*fr; };
+   const pure=rd(G/2);                                          // input delayed by G/2 (latency-aligned dry)
+   let y = m>0 ? (a*rd(d1)+bw*rd(d2))*norm*m + pure*(1-m) : pure;
+   y = mix*y + (1-mix)*pure;                                    // internal mix vs the latency-aligned dry
+   if(drive>0) y=ampFtanh(y*dg)*dmk;                            // Vox Transformer tube drive (post)
+   if(y!==y)y=0;
+   out[c][n]=y;
   }
-  const ri=rd&MASK, wsum=ws[ri]; let yl=0,yr=0;
-  if(wsum>1e-6){ yl=oa[0][ri]/wsum; yr=oa[1][ri]/wsum; }
-  oa[0][ri]=0; oa[1][ri]=0; ws[ri]=0;                          // flush (also kills denormals)
-  if(rd>=0){ const dl=b[0][ri],dr=b[1][ri],xf=this.xfade;
-   yl=xf*yl+(1-xf)*dl; yr=xf*yr+(1-xf)*dr;
-   yl=mix*yl+(1-mix)*dl; yr=mix*yr+(1-mix)*dr;
-   if(drive>0){ yl=ampFtanh(yl*dg)*dmk; yr=ampFtanh(yr*dg)*dmk; }   // Vox Transformer tube drive (post)
-  } else { yl=0; yr=0; }
-  if(yl!==yl)yl=0; if(yr!==yr)yr=0;
-  oL[n]=yl; if(oR) oR[n]=yr;
-  this.t++;
+  this.w=(this.w+1)%N; this.t++;
  }
  return true}}
 registerProcessor('s16-tune',S16Tune);
@@ -3131,15 +3115,14 @@ function applyFxTo(fx,n){
       if(fx.type==='tune'){
         const km=tuneKeyMask(p);
         sp('root',km.root); sp('mask',km.mask); sp('retune',p.retune??40); sp('amount',p.amount??1); sp('humanize',p.humanize||0);
-        sp('formant',p.formant??0); sp('transpose',p.transpose??0); sp('vibrato',p.vibrato??0); sp('vibRate',p.vibRate??5.5); sp('vibDelay',p.vibDelay??0);
+        sp('transpose',p.transpose??0); sp('vibrato',p.vibrato??0); sp('vibRate',p.vibRate??5.5); sp('vibDelay',p.vibDelay??0);
         sp('inType',Math.round(p.inputType??1)); sp('mix',mix); sp('mode',1); sp('drive',0);   // mix handled inside (latency-aligned dry)
       }else if(fx.type==='voxtr'){
         const mode=Math.round(p.mode??0), km=tuneKeyMask({key:p.key,followRoll:0});
         sp('root',km.root); sp('mask',mode===1?km.mask:0);          // scale snap only in Quantize mode
         sp('robotNote',48+km.root);                                 // Robot fixes to the key's root (octave 3)
         sp('mode',mode); sp('amount',1); sp('humanize',0);
-        sp('transpose',p.pitch??0); sp('formant',(p.formant??0)+(Math.round(p.link??0)?(p.pitch??0):0));  // Link: formants track pitch
-        sp('drive',p.drive??0); sp('retune',p.retune??20); sp('mix',mix);
+        sp('transpose',p.pitch??0); sp('drive',p.drive??0); sp('retune',p.retune??20); sp('mix',mix);
         sp('inType',1); sp('vibrato',0);
       }else if(fx.type==='crush'){
         sp('bits',p.bits??8); sp('rate',p.rate??12000); sp('interp',p.interp||0); sp('dither',p.dither||0); sp('tone',p.tone??8000); sp('noise',p.noise||0);

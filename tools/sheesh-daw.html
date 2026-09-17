@@ -1215,6 +1215,16 @@ const FX_DEFS={
     humanize:{min:0,max:1,step:0.01,val:0,fmt:v=>Math.round(v*100)+'%'},
     mix:{min:0,max:1,step:0.01,val:1,fmt:v=>Math.round(v*100)+'%'},
   }},
+  voxtr:{name:'Vox Transformer', color:'#b98cff', params:{     // Little AlterBoy-style: manual pitch+formant transform, hard-tune, robot, drive
+    mode:{min:0,max:2,step:1,val:0,opts:['Transpose','Quantize','Robot'],fmt:v=>['Transpose','Quantize','Robot'][Math.round(v)]||'Transpose',label:'mode'},
+    key:{min:0,max:24,step:1,val:0,opts:TUNE_KEYS,fmt:v=>TUNE_KEYS[Math.round(v)]||'C maj',label:'key'},
+    pitch:{min:-12,max:12,step:0.1,val:0,fmt:v=>(v>0?'+':'')+(+v).toFixed(1)+' st',label:'pitch'},
+    formant:{min:-12,max:12,step:0.1,val:0,fmt:v=>(v>0?'+':'')+(+v).toFixed(1)+' st',label:'formant'},
+    link:{min:0,max:1,step:1,val:0,opts:['off','on'],fmt:v=>Math.round(v)?'on':'off',label:'link'},
+    drive:{min:0,max:1,step:0.01,val:0,fmt:v=>Math.round(v*100)+'%',label:'drive'},
+    retune:{min:0,max:400,step:1,val:20,fmt:v=>Math.round(v)+' ms',label:'speed'},
+    mix:{min:0,max:1,step:0.01,val:1,fmt:v=>Math.round(v*100)+'%'},
+  }},
   crush:{name:'Bitcrusher', color:'#ff8c66', params:{
     bits:{min:1,max:16,step:0.1,val:8,fmt:v=>(+v).toFixed(1)+' bit'},
     rate:{min:200,max:22050,step:50,val:12000,fmt:hzFmt},
@@ -1779,7 +1789,10 @@ static get parameterDescriptors(){return[
  {name:'vibRate',defaultValue:5.5,minValue:1,maxValue:12},
  {name:'vibDelay',defaultValue:0,minValue:0,maxValue:2000},
  {name:'inType',defaultValue:1,minValue:0,maxValue:2},
- {name:'mix',defaultValue:1,minValue:0,maxValue:1}]}
+ {name:'mix',defaultValue:1,minValue:0,maxValue:1},
+ {name:'mode',defaultValue:1,minValue:0,maxValue:2},        // 0 transpose (no snap), 1 quantize (scale), 2 robot (fixed note) — Vox Transformer
+ {name:'drive',defaultValue:0,minValue:0,maxValue:1},        // post tube saturation (Vox Transformer)
+ {name:'robotNote',defaultValue:48,minValue:0,maxValue:127}]}
 constructor(){super();
  this.N=16384;this.MASK=16383;this.LAT=1536;
  this.b=[new Float32Array(16384),new Float32Array(16384)];
@@ -1824,7 +1837,8 @@ process(inputs,outputs,params){
  const L=inp&&inp[0], R=(inp&&inp[1])||L;
  const retune=params.retune[0],amount=params.amount[0],humanize=params.humanize[0],root=Math.round(params.root[0]),mask=Math.round(params.mask[0]);
  const formant=params.formant[0],transpose=params.transpose[0],vibAmt=params.vibrato[0],vibRate=params.vibRate[0],vibDelay=params.vibDelay[0];
- const inType=Math.round(params.inType[0]),mix=params.mix[0];
+ const inType=Math.round(params.inType[0]),mix=params.mix[0],mode=Math.round(params.mode[0]),drive=params.drive[0],robotNote=params.robotNote[0];
+ const dg=1+drive*9, dmk=1/(1+drive*3);
  const tmin=inType===0?8:inType===2?20:12, tmax=inType===0?90:inType===2?171:140;
  const al=retune<=0?1:1-Math.exp(-1/(retune/1000*sampleRate));
  const bCoef=1-Math.exp(-128/(0.010*sampleRate)), pCoef=1-Math.exp(-128/(0.020*sampleRate)), xCoef=1-Math.exp(-1/(0.005*sampleRate));
@@ -1838,7 +1852,7 @@ process(inputs,outputs,params){
    if(++this.post>=8){ this.post=0; const cents=Math.round((this.midi-this.tgt)*100); const msg=this.f0?(Math.round(this.midi*10)+','+this.tgt+','+cents):'-'; if(msg!==this.last){ this.last=msg; this.port.postMessage({f0:this.f0,m:this.midi,tgt:this.tgt,cents:cents}); } } }
   const voiced=this.voiced;
   if(voiced && !this.prevV){ this.tOnset=this.t; this.vibPh=0; } this.prevV=voiced;
-  const corrTarget = voiced ? amount*(this.tgt-this.midi) + (this.hum*25*humanize)/100 : 0;
+  const corrTarget = !voiced ? 0 : (mode===0 ? 0 : mode===2 ? (robotNote-this.midi) : amount*(this.tgt-this.midi) + (this.hum*25*humanize)/100);
   this.corr += (corrTarget-this.corr)*al;
   this.vibPh+=vibInc; if(this.vibPh>6.283185307)this.vibPh-=6.283185307;
   const vibEnv=Math.max(0,Math.min(1,((this.t-this.tOnset)/sampleRate*1000-vibDelay)/150));
@@ -1868,6 +1882,7 @@ process(inputs,outputs,params){
   if(rd>=0){ const dl=b[0][ri],dr=b[1][ri],xf=this.xfade;
    yl=xf*yl+(1-xf)*dl; yr=xf*yr+(1-xf)*dr;
    yl=mix*yl+(1-mix)*dl; yr=mix*yr+(1-mix)*dr;
+   if(drive>0){ yl=ampFtanh(yl*dg)*dmk; yr=ampFtanh(yr*dg)*dmk; }   // Vox Transformer tube drive (post)
   } else { yl=0; yr=0; }
   if(yl!==yl)yl=0; if(yr!==yr)yr=0;
   oL[n]=yl; if(oR) oR[n]=yr;
@@ -1875,6 +1890,7 @@ process(inputs,outputs,params){
  }
  return true}}
 registerProcessor('s16-tune',S16Tune);
+registerProcessor('s16-voxtr',S16Tune);   // Vox Transformer (Little AlterBoy) shares the engine; mode/drive/robotNote drive the differences
 class S16Crush extends AudioWorkletProcessor{
 static get parameterDescriptors(){return[
  {name:'bits',defaultValue:8,minValue:1,maxValue:16},{name:'rate',defaultValue:12000,minValue:100,maxValue:96000},
@@ -2753,7 +2769,7 @@ function buildFxCore(fx,c,useWorklet){
     wet.gain.value=0;                    // no worklet: dry passthrough
     return {in:inN, out, dry, wet};
   }
-  if(t==='tune'||t==='crush'||t==='stutter'||t==='denoise'){
+  if(t==='tune'||t==='voxtr'||t==='crush'||t==='stutter'||t==='denoise'){
     const inN=c.createGain(), out=c.createGain();
     const dry=c.createGain(), wet=c.createGain();
     inN.connect(dry); dry.connect(out);
@@ -3108,7 +3124,7 @@ function applyFxTo(fx,n){
     }else{
       n.dry.gain.value=1;
     }
-  }else if(fx.type==='tune'||fx.type==='crush'||fx.type==='stutter'||fx.type==='denoise'){
+  }else if(fx.type==='tune'||fx.type==='voxtr'||fx.type==='crush'||fx.type==='stutter'||fx.type==='denoise'){
     const mix=p.mix??1;
     if(n.fxNode){
       const sp=(name,v)=>{ const ap=n.fxNode.parameters.get(name); if(ap) ap.value=v; };
@@ -3116,7 +3132,15 @@ function applyFxTo(fx,n){
         const km=tuneKeyMask(p);
         sp('root',km.root); sp('mask',km.mask); sp('retune',p.retune??40); sp('amount',p.amount??1); sp('humanize',p.humanize||0);
         sp('formant',p.formant??0); sp('transpose',p.transpose??0); sp('vibrato',p.vibrato??0); sp('vibRate',p.vibRate??5.5); sp('vibDelay',p.vibDelay??0);
-        sp('inType',Math.round(p.inputType??1)); sp('mix',mix);   // mix handled inside (latency-aligned dry)
+        sp('inType',Math.round(p.inputType??1)); sp('mix',mix); sp('mode',1); sp('drive',0);   // mix handled inside (latency-aligned dry)
+      }else if(fx.type==='voxtr'){
+        const mode=Math.round(p.mode??0), km=tuneKeyMask({key:p.key,followRoll:0});
+        sp('root',km.root); sp('mask',mode===1?km.mask:0);          // scale snap only in Quantize mode
+        sp('robotNote',48+km.root);                                 // Robot fixes to the key's root (octave 3)
+        sp('mode',mode); sp('amount',1); sp('humanize',0);
+        sp('transpose',p.pitch??0); sp('formant',(p.formant??0)+(Math.round(p.link??0)?(p.pitch??0):0));  // Link: formants track pitch
+        sp('drive',p.drive??0); sp('retune',p.retune??20); sp('mix',mix);
+        sp('inType',1); sp('vibrato',0);
       }else if(fx.type==='crush'){
         sp('bits',p.bits??8); sp('rate',p.rate??12000); sp('interp',p.interp||0); sp('dither',p.dither||0); sp('tone',p.tone??8000); sp('noise',p.noise||0);
       }else if(fx.type==='stutter'){
@@ -3127,7 +3151,7 @@ function applyFxTo(fx,n){
         else if(!fx.noiseProfile && n.fxNode._dnProf){ n.fxNode._dnProf=null; n.fxNode.port.postMessage({type:'clearProfile'}); }
         n.wet.gain.value=1; n.dry.gain.value=0;            // mix happens inside (latency-aligned dry)
       }
-      if(fx.type==='tune'){ n.wet.gain.value=1; n.dry.gain.value=0; }   // tune mixes internally with a latency-aligned dry
+      if(fx.type==='tune'||fx.type==='voxtr'){ n.wet.gain.value=1; n.dry.gain.value=0; }   // mixes internally with a latency-aligned dry
       else{ n.wet.gain.value=mix; n.dry.gain.value=1-mix; }
     }else{
       n.dry.gain.value=1;

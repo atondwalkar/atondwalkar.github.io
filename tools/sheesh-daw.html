@@ -10625,7 +10625,7 @@ function tileInto(it,preset){
 const DEFAULT_PROJECT=/*S16_DEFAULT_START*/{"app":"signal16","v":1,"bpm":180,"swing":0,"loopOn":false,"master":{"mvol":0.85,"fxBypass":false,"fx":[]},"routes":{},"tracks":[]}/*S16_DEFAULT_END*/;
 applyProject(DEFAULT_PROJECT,[]);
 /* hosted builds can start with a demo project: publish_web.sh fills DEFAULT_PROJECT_URL; ?project=<url> overrides */
-const DEFAULT_PROJECT_URL="sheesh-demo.sheesh";
+const DEFAULT_PROJECT_URL=/*S16_DEMO_URL*/null/*S16_DEMO_URL_END*/;
 (function(){
   const q=new URLSearchParams(location.search).get('project');
   const url=q||DEFAULT_PROJECT_URL;

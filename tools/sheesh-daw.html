@@ -10521,10 +10521,30 @@ function midiFillSel(){
   if(midiSel.value!==midiInId){ midiInId=midiSel.value; }
 }
 let midiBusy=false;
+function midiShowConnect(denied){                                  // dropdown placeholder while not connected
+  if(!midiSel) return;
+  midiSel.innerHTML=''; midiSel.appendChild(new Option(denied?'MIDI blocked':'connect MIDI\u2026','all'));
+  midiSel.title=denied
+    ? 'MIDI is blocked for this page \u2014 click the lock/tune icon in the address bar \u2192 Site settings \u2192 allow MIDI, then reload.'
+    : 'Click to connect your MIDI keyboard.';
+}
+async function midiPermState(){                                    // 'granted' | 'prompt' | 'denied' | 'unknown'
+  try{ if(navigator.permissions && navigator.permissions.query) return (await navigator.permissions.query({name:'midi'})).state; }catch(_){}
+  return 'unknown';
+}
 async function initMidi(fromGesture){
   if(!navigator.requestMIDIAccess){ if(midiWrap) midiWrap.hidden=true; return false; }
   if(midiWrap) midiWrap.hidden=false;
-  if(midiBusy) return false;
+  if(midiBusy || midiAccess) return !!midiAccess;
+  // Without a user gesture, only request when permission is ALREADY granted \u2014 firing requestMIDIAccess() at load
+  // (state 'prompt') is rejected by Chrome for lack of a gesture and looks like a denial. Just show "connect" and
+  // wait for the click, which supplies the gesture Chrome needs to show its prompt.
+  if(!fromGesture){
+    const st=await midiPermState();
+    if(st==='denied'){ midiShowConnect(true); return false; }
+    if(st==='prompt'||st==='unknown'){ midiShowConnect(false); return false; }
+    // 'granted' \u2192 fall through and connect silently
+  }
   midiBusy=true;
   try{
     midiAccess=await navigator.requestMIDIAccess({sysex:false});
@@ -10535,15 +10555,15 @@ async function initMidi(fromGesture){
     return true;
   }catch(e){
     midiAccess=null;
-    // Chrome auto-denies requests that don't come from a click: show a "connect" entry and retry on the next gesture
-    if(midiSel){ midiSel.innerHTML=''; midiSel.appendChild(new Option('connect MIDI\u2026','all')); midiSel.title='Click to connect your MIDI keyboard ('+(e&&e.name||'error')+': '+(e&&e.message||e)+')'; }
-    if(fromGesture) flash('MIDI not allowed: '+(e&&e.message||e)+' \u2014 allow MIDI for this page (lock icon \u2192 Site settings) and click again.');
+    const denied=e&&(e.name==='SecurityError'||e.name==='NotAllowedError');
+    midiShowConnect(denied && fromGesture);                        // a gesture-triggered denial = really blocked; otherwise just needs another click
+    if(fromGesture) flash(denied?'MIDI blocked \u2014 allow it via the lock/tune icon in the address bar \u2192 Site settings, then click again.':'MIDI unavailable: '+(e&&e.message||e));
     return false;
   }finally{ midiBusy=false; }
 }
-function midiWatchPermission(){                                    // re-request as soon as the user grants it in the browser UI
+function midiWatchPermission(){                                    // connect the moment the user grants it in the browser UI
   if(!(navigator.permissions && navigator.permissions.query)) return;
-  navigator.permissions.query({name:'midi'}).then(p=>{ p.onchange=()=>{ if(p.state!=='denied' && !midiAccess) initMidi(false); }; }).catch(()=>{});
+  navigator.permissions.query({name:'midi'}).then(p=>{ p.onchange=()=>{ if(p.state==='granted' && !midiAccess) initMidi(false); else if(p.state==='denied' && !midiAccess) midiShowConnect(true); }; }).catch(()=>{});
 }
 midiWatchPermission();
 if(midiSel){

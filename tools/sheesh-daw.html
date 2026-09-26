@@ -492,6 +492,7 @@
     padding:4px 8px;border:1px solid rgba(95,212,196,.25);border-radius:5px;
   }
   .eq-sel{font-size:10px;letter-spacing:.14em;color:var(--cyan);font-weight:700}
+  .knob-row.fx-groups{flex-wrap:wrap;gap:8px;align-items:flex-start}
   .fx-scope{
     flex:1;min-width:200px;height:90px;display:block;
     background:#0b0d11;border:1px solid #0c0e12;border-radius:4px;
@@ -1056,6 +1057,9 @@ function eqDb(y,ch){
 const eqDbFmt=v=>v<=EQ_GMIN?'\u2212\u221e':(v>0?'+':'')+(+v).toFixed(1).replace(/\.0$/,'')+' dB';
 const dbFmt=v=>(v>0?'+':'')+(+v).toFixed(1)+' dB';
 const hzFmt=v=>v>=1000?(v/1000).toFixed(1)+' kHz':Math.round(v)+' Hz';
+const DRUM_CHOKES=['off','808 (long)','808 + kick'];              // Drums: which trap-kit hits cut their own previous tail
+const HARM_INTS=['off','oct below','7th below','6th below','5th below','4th below','3rd below','2nd below','unison (double)','2nd above','3rd above','4th above','5th above','6th above','7th above','oct above'];   // index-8 = scale steps
+const panFmt=v=>{ const r=Math.round(v*100); return r===0?'C':Math.abs(r)+(r<0?'L':'R'); };
 const TUNE_KEYS=(()=>{ const n=['C','C#','D','D#','E','F','F#','G','G#','A','A#','B']; return n.map(x=>x+' maj').concat(n.map(x=>x+' min')).concat(['chromatic']); })();
 const STUT_DIVS=['1/4','1/8','1/16','1/32','1/64','1/8T','1/16T','1/32T'];
 const FX_DEFS={
@@ -1093,8 +1097,10 @@ const FX_DEFS={
       level:{min:0,max:1,step:0.01,val:0.85,fmt:v=>Math.round(v*100)+'%',label:'level'},
     }},
   drums:{name:'Drums', inst:true, noScope:true, color:'#ffb347',
-    params:{kit:{min:0,max:1,step:1,val:0,fmt:v=>['Acoustic','808 Trap'][Math.round(v)]||'Acoustic',opts:['Acoustic','808 Trap'],label:'kit'}},
-    groups:{KIT:['kit']}},
+    params:{kit:{min:0,max:1,step:1,val:0,fmt:v=>['Acoustic','808 Trap'][Math.round(v)]||'Acoustic',opts:['Acoustic','808 Trap'],label:'kit'},
+      fine:{min:-100,max:100,step:1,val:0,fmt:v=>(v>0?'+':'')+Math.round(v)+' ct',label:'fine tune'},
+      choke:{min:0,max:2,step:1,val:1,opts:DRUM_CHOKES,fmt:v=>DRUM_CHOKES[Math.round(v)]||'off',label:'choke'}},
+    groups:{KIT:['kit','fine','choke']}},
   piano:{name:'Piano', inst:true, noScope:true, color:'#8adf9a',
     groups:{KEYS:['rel','velAmp','dyn'],OUT:['level']},
     params:{
@@ -1184,6 +1190,7 @@ const FX_DEFS={
     threshold:{min:-60,max:0,step:1,val:-30,fmt:v=>v+' dB'},
     depth:{min:0,max:1,step:0.01,val:0.8,fmt:v=>Math.round(v*100)+'%'},
     speed:{min:1,max:30,step:0.5,val:8,fmt:v=>v+' Hz'},
+    keySrc:{min:0,max:1,step:1,val:0,opts:['post-fader','pre-FX'],fmt:v=>v?'pre-FX':'post-fader',label:'key'},   // pre-FX: the key track's raw instrument/clip signal, before its FX, fader, mute and solo
   }},
   limit:{name:'Limiter', color:'#ffd25f', params:{
     threshold:{min:-24,max:0,step:0.5,val:-6,fmt:v=>v+' dB'},
@@ -1221,6 +1228,25 @@ const FX_DEFS={
     drive:{min:0,max:1,step:0.01,val:0,fmt:v=>Math.round(v*100)+'%',label:'drive'},
     retune:{min:0,max:400,step:1,val:20,fmt:v=>Math.round(v)+' ms',label:'speed'},
     mix:{min:0,max:1,step:0.01,val:1,fmt:v=>Math.round(v*100)+'%'},
+  }},
+  harm:{name:'Harmonizer', color:'#ffa8e0',                  // scale-aware vocal harmony: up to 3 voices N scale steps from the sung note
+    groups:{KEY:['key','followRoll','inputType','retune','humanize','dry'],'VOICE 1':['v1','lvl1','pan1'],'VOICE 2':['v2','lvl2','pan2'],'VOICE 3':['v3','lvl3','pan3']},
+    params:{
+    key:{min:0,max:24,step:1,val:0,opts:TUNE_KEYS,fmt:v=>TUNE_KEYS[Math.round(v)]||'C maj',label:'key'},
+    followRoll:{min:0,max:1,step:1,val:0,opts:['own key','roll scale'],fmt:v=>v?'roll scale':'own key',label:'scale'},
+    inputType:{min:0,max:2,step:1,val:1,opts:['High','Mid','Bass'],fmt:v=>['High','Mid','Bass'][Math.round(v)]||'Mid',label:'range'},
+    retune:{min:0,max:400,step:1,val:30,fmt:v=>Math.round(v)+' ms',label:'glide'},
+    humanize:{min:0,max:1,step:0.01,val:0.3,fmt:v=>Math.round(v*100)+'%'},
+    dry:{min:0,max:1,step:0.01,val:1,fmt:v=>Math.round(v*100)+'%',label:'lead'},
+    v1:{min:0,max:15,step:1,val:10,opts:HARM_INTS,fmt:v=>HARM_INTS[Math.round(v)]||'off',label:'interval'},
+    lvl1:{min:0,max:1,step:0.01,val:0.6,fmt:v=>Math.round(v*100)+'%',label:'level'},
+    pan1:{min:-1,max:1,step:0.01,val:-0.5,fmt:panFmt,label:'pan'},
+    v2:{min:0,max:15,step:1,val:12,opts:HARM_INTS,fmt:v=>HARM_INTS[Math.round(v)]||'off',label:'interval'},
+    lvl2:{min:0,max:1,step:0.01,val:0.5,fmt:v=>Math.round(v*100)+'%',label:'level'},
+    pan2:{min:-1,max:1,step:0.01,val:0.5,fmt:panFmt,label:'pan'},
+    v3:{min:0,max:15,step:1,val:0,opts:HARM_INTS,fmt:v=>HARM_INTS[Math.round(v)]||'off',label:'interval'},
+    lvl3:{min:0,max:1,step:0.01,val:0.5,fmt:v=>Math.round(v*100)+'%',label:'level'},
+    pan3:{min:-1,max:1,step:0.01,val:0,fmt:panFmt,label:'pan'},
   }},
   crush:{name:'Bitcrusher', color:'#ff8c66', params:{
     bits:{min:1,max:16,step:0.1,val:8,fmt:v=>(+v).toFixed(1)+' bit'},
@@ -1875,6 +1901,73 @@ process(inputs,outputs,params){
  return true}}
 registerProcessor('s16-tune',S16Tune);
 registerProcessor('s16-voxtr',S16Tune);   // Vox Transformer (Little AlterBoy) shares the engine; mode/drive/robotNote drive the differences
+// Harmonizer: the Auto-Tune detector (YIN + scale snap) drives up to three extra voices, each its own two-tap OLA shifter.
+// A voice sits N scale steps from the snapped sung note (chromatic key = fixed parallel intervals); it shifts by
+// (harmony note - snapped note) so it keeps the singer's own vibrato and drift. Voices fade out on unvoiced input
+// (consonants/breaths come from the dry only) and hold their last interval, so words don't smear into chords.
+class S16Harm extends S16Tune{
+static get parameterDescriptors(){ const d=[
+ {name:'root',defaultValue:0,minValue:0,maxValue:11},{name:'mask',defaultValue:2741,minValue:0,maxValue:4095},
+ {name:'inType',defaultValue:1,minValue:0,maxValue:2},{name:'retune',defaultValue:30,minValue:0,maxValue:400},
+ {name:'humanize',defaultValue:0.3,minValue:0,maxValue:1},{name:'dry',defaultValue:1,minValue:0,maxValue:1}];
+ for(let v=1;v<=3;v++) d.push({name:'deg'+v,defaultValue:0,minValue:-8,maxValue:7},{name:'lvl'+v,defaultValue:0.7,minValue:0,maxValue:1},{name:'pan'+v,defaultValue:0,minValue:-1,maxValue:1});
+ return d; }
+constructor(){super();
+ this.bm=new Float32Array(this.N);
+ this.vx=[0,1,2].map(i=>({ph:this.G/2,ratio:1,m:0,semis:0,g:0,drift:0,driftT:0,rnd:seededRand(0x51A7+i*977)}));
+}
+harmNote(tgt,deg,root,mask){                                    // deg scale steps from tgt (tgt is in the scale)
+ if(mask===4095||!mask){ const up=[0,2,4,5,7,9,11,12],dn=[0,-2,-4,-5,-7,-9,-11,-12]; return tgt+(deg>=0?up[deg]:dn[-deg]); }
+ let n=tgt; const st=deg>0?1:-1;
+ for(let k=0;k<Math.abs(deg);k++){ do{ n+=st; }while(!((mask>>((((n-root)%12)+12)%12))&1)); }
+ return n;
+}
+process(inputs,outputs,params){
+ const inp=inputs[0],out=outputs[0]; if(!out||!out.length) return true;
+ const oL=out[0],oR=out[1]||out[0],nlen=oL.length,N=this.N,G=this.G,A=this.A,b=this.b,bm=this.bm;
+ const L=inp&&inp[0], R=(inp&&inp[1])||L;
+ const root=Math.round(params.root[0]),mask=Math.round(params.mask[0]),inType=Math.round(params.inType[0]);
+ const retune=params.retune[0],hum=params.humanize[0],dry=params.dry[0];
+ const tmin=inType===0?8:inType===2?20:12, tmax=inType===0?90:inType===2?171:140;
+ const al=retune<=0?1:1-Math.exp(-1/(retune/1000*sampleRate)), mStep=1/(0.01*sampleRate);
+ const gA=1-Math.exp(-1/(0.012*sampleRate)), gR=1-Math.exp(-1/(0.06*sampleRate));
+ const V=[1,2,3].map(v=>{ const deg=Math.round(params['deg'+v][0]), pan=params['pan'+v][0], th=(pan+1)*Math.PI/4;
+  return {on:deg>=-7, deg, lvl:params['lvl'+v][0], pl:Math.cos(th), pr:Math.sin(th)}; });
+ const rd=(buf,d)=>{ const pos=this.w-1-d; const i0=Math.floor(pos),fr=pos-i0; const x0=buf[((i0%N)+N)%N],x1=buf[(((i0+1)%N)+N)%N]; return x0+(x1-x0)*fr; };
+ for(let n=0;n<nlen;n++){
+  const xl=L?L[n]:0, xr=R?R[n]:0, xm=(xl+xr)*0.5;
+  b[0][this.w]=xl; b[1][this.w]=xr; bm[this.w]=xm;
+  this.an[this.aw]=xm; this.aw=(this.aw+1)%A;
+  if(++this.hop>=256){ this.hop=0; this.analyse(root,mask,tmin,tmax);
+   if(this.voiced) for(let i=0;i<3;i++){ const vo=this.vx[i]; if(V[i].on) vo.semis=this.harmNote(Math.round(this.tgt),V[i].deg,root,mask)-Math.round(this.tgt);
+    vo.driftT+=(vo.rnd()-0.5)*0.3; if(vo.driftT>1)vo.driftT=1; if(vo.driftT<-1)vo.driftT=-1; }
+   if(++this.post>=8){ this.post=0; const msg=this.voiced?(Math.round(this.tgt)+':'+this.vx.map((vo,i)=>V[i].on?vo.semis:'x').join(',')):'-';
+    if(msg!==this.last){ this.last=msg; this.port.postMessage({f0:this.f0,m:this.midi,tgt:Math.round(this.tgt),v:this.voiced?this.vx.map((vo,i)=>V[i].on?Math.round(this.tgt)+vo.semis:null):null}); } } }
+  let wl=0,wr=0;
+  for(let i=0;i<3;i++){
+   const P=V[i], vo=this.vx[i];
+   const gt=(P.on&&this.voiced)?P.lvl:0; vo.g+=(gt-vo.g)*(gt>vo.g?gA:gR);
+   if(vo.g<1e-4 && !P.on) continue;
+   vo.drift+=(vo.driftT-vo.drift)*0.00005;
+   const semis=vo.semis+vo.drift*0.12*hum;                   // humanize: up to +/-12 cent slow drift per voice (natural double-track)
+   let rt=Math.pow(2,semis/12); if(rt<0.45)rt=0.45; if(rt>2.2)rt=2.2;
+   vo.ratio+=(rt-vo.ratio)*al;
+   if(Math.abs(vo.ratio-1)>1e-4){ vo.m=Math.min(1,vo.m+mStep); vo.ph+=(1-vo.ratio); }
+   else{ vo.m=Math.max(0,vo.m-mStep); if(vo.m<=0) vo.ph=G/2; }
+   let d1=vo.ph%G; if(d1<0)d1+=G; if(vo.ph>1e7||vo.ph<-1e7) vo.ph=d1;
+   const d2=(d1+G/2)%G, a=Math.sin(Math.PI*d1/G), bw=Math.sin(Math.PI*d2/G), norm=1/Math.max(0.7071,Math.hypot(a,bw));
+   const pure=rd(bm,G/2);
+   let y=vo.m>0?(a*rd(bm,d1)+bw*rd(bm,d2))*norm*vo.m+pure*(1-vo.m):pure;
+   y*=vo.g; if(y!==y)y=0;
+   wl+=y*P.pl; wr+=y*P.pr;
+  }
+  let yl=rd(b[0],G/2)*dry+wl, yr=rd(b[1],G/2)*dry+wr;
+  if(yl!==yl)yl=0; if(yr!==yr)yr=0;
+  oL[n]=yl; if(out[1]) out[1][n]=yr;
+  this.w=(this.w+1)%N; this.t++;
+ }
+ return true}}
+registerProcessor('s16-harm',S16Harm);
 class S16Crush extends AudioWorkletProcessor{
 static get parameterDescriptors(){return[
  {name:'bits',defaultValue:8,minValue:1,maxValue:16},{name:'rate',defaultValue:12000,minValue:100,maxValue:96000},
@@ -2567,14 +2660,23 @@ function makeCabIRRaw(model,c){
   }
   return buf;
 }
+function duckKeyNode(fx){                                       // where a live ducker takes its key from
+  const kt=fx.keyTrackId && state.tracks[fx.keyTrackId];
+  return kt ? (fx.params.keySrc ? kt.input : kt.gain) : null;
+}
 function wireDucker(fx){
   const n=fx.nodes;
+  if(fx._keyFrom){ try{ fx._keyFrom.src.disconnect(fx._keyFrom.rect); }catch(e){} fx._keyFrom=null; }   // switching key source / track
   if(!n || !n.rect) return;
   const key=tracksAll.find(t=>t.id===fx.keyTrackId);
   if(!key) return;
   ensureTrackAudio(key);
-  const kg=state.tracks[key.id].gain;
-  if(kg) kg.connect(n.rect);
+  const src=duckKeyNode(fx);
+  if(src){ src.connect(n.rect); fx._keyFrom={src, rect:n.rect}; }
+}
+/* rebuildChain(track) disconnects that track's input node, which also drops pre-FX keys feeding duckers on other tracks: re-wire them */
+function rewireDuckersKeyedTo(track){
+  tracksAll.concat([MASTER_TRACK]).forEach(t=>t.fx.forEach(f=>{ if(f.type==='duck' && f.keyTrackId===track.id && f.params.keySrc && f.nodes) wireDucker(f); }));
 }
 function buildFxNodes(fx,c,useWorklet){
   const n=buildFxCore(fx,c,useWorklet);
@@ -2753,7 +2855,7 @@ function buildFxCore(fx,c,useWorklet){
     wet.gain.value=0;                    // no worklet: dry passthrough
     return {in:inN, out, dry, wet};
   }
-  if(t==='tune'||t==='voxtr'||t==='crush'||t==='stutter'||t==='denoise'){
+  if(t==='tune'||t==='voxtr'||t==='harm'||t==='crush'||t==='stutter'||t==='denoise'){
     const inN=c.createGain(), out=c.createGain();
     const dry=c.createGain(), wet=c.createGain();
     inN.connect(dry); dry.connect(out);
@@ -2764,6 +2866,9 @@ function buildFxCore(fx,c,useWorklet){
       inN.connect(node); node.connect(wet); wet.connect(out);
       if(t==='tune' && c===ctx){
         node.port.onmessage=e=>{ fx._tune=e.data; if(fx.tuneLab && fx.tuneLab.isConnected) fx.tuneLab.textContent=tuneReadout(e.data); };
+      }
+      if(t==='harm' && c===ctx){
+        node.port.onmessage=e=>{ fx._harm=e.data; if(fx.harmLab && fx.harmLab.isConnected) fx.harmLab.textContent=harmReadout(e.data); };
       }
       if(t==='denoise'){
         if(fx.noiseProfile) node._dnProf=fx.noiseProfile;
@@ -2812,6 +2917,12 @@ function tuneKeyMask(p){
   const key=Math.round(p.key||0);
   if(key>=24) return {root:0, mask:4095};
   return {root:key%12, mask:key<12?TUNE_MAJ:TUNE_MIN};
+}
+function harmReadout(d){                                        // sung note → harmony notes
+  const nn=['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+  const name=m=>nn[((m%12)+12)%12]+(Math.floor(m/12)-1);
+  if(!d || !d.v) return '\u2014 \u2192 \u2014';
+  return name(d.tgt)+' \u2192 '+d.v.map(m=>m==null?'\u00b7':name(m)).join(' / ');
 }
 function tuneReadout(d){
   if(!d || !d.f0) return '\u2014 \u2192 \u2014';
@@ -3029,9 +3140,10 @@ function applyFxTo(fx,n){
     n.depth.gain.value=-(p.depth??0.8);
     const thr=Math.pow(10,(p.threshold??-30)/20);
     if(n.builtThr!==thr){
-      n.thrShape.curve=curveMemo('duck:'+thr.toFixed(6),()=>{
-        const tc=new Float32Array(1024);
-        for(let i=0;i<1024;i++){ const x=i/511.5-1; tc[i]=x<=thr?0:Math.min(1,(x-thr)*12); }   // full duck ~0.08 above threshold
+      n.thrShape.curve=curveMemo('duck2:'+thr.toFixed(6),()=>{
+        // ramps in dB: 0 at the threshold, full duck 12 dB above it (a fixed linear +0.08 meant quiet keys could never fully duck)
+        const tc=new Float32Array(4096), thrDb=20*Math.log10(thr);
+        for(let i=0;i<4096;i++){ const x=i/2047.5-1; tc[i]=x<=thr?0:Math.min(1,(20*Math.log10(x)-thrDb)/12); }
         return tc;
       });
       n.builtThr=thr;
@@ -3108,7 +3220,7 @@ function applyFxTo(fx,n){
     }else{
       n.dry.gain.value=1;
     }
-  }else if(fx.type==='tune'||fx.type==='voxtr'||fx.type==='crush'||fx.type==='stutter'||fx.type==='denoise'){
+  }else if(fx.type==='tune'||fx.type==='voxtr'||fx.type==='harm'||fx.type==='crush'||fx.type==='stutter'||fx.type==='denoise'){
     const mix=p.mix??1;
     if(n.fxNode){
       const sp=(name,v)=>{ const ap=n.fxNode.parameters.get(name); if(ap) ap.value=v; };
@@ -3124,6 +3236,10 @@ function applyFxTo(fx,n){
         sp('mode',mode); sp('amount',1); sp('humanize',0);
         sp('transpose',p.pitch??0); sp('drive',p.drive??0); sp('retune',p.retune??20); sp('mix',mix);
         sp('inType',1); sp('vibrato',0);
+      }else if(fx.type==='harm'){
+        const km=tuneKeyMask(p);
+        sp('root',km.root); sp('mask',km.mask); sp('inType',Math.round(p.inputType??1)); sp('retune',p.retune??30); sp('humanize',p.humanize??0.3); sp('dry',p.dry??1);
+        [1,2,3].forEach(v=>{ const i=Math.round(p['v'+v]??0); sp('deg'+v,i>0?i-8:-8); sp('lvl'+v,p['lvl'+v]??0.5); sp('pan'+v,p['pan'+v]??0); });
       }else if(fx.type==='crush'){
         sp('bits',p.bits??8); sp('rate',p.rate??12000); sp('interp',p.interp||0); sp('dither',p.dither||0); sp('tone',p.tone??8000); sp('noise',p.noise||0);
       }else if(fx.type==='stutter'){
@@ -3134,7 +3250,7 @@ function applyFxTo(fx,n){
         else if(!fx.noiseProfile && n.fxNode._dnProf){ n.fxNode._dnProf=null; n.fxNode.port.postMessage({type:'clearProfile'}); }
         n.wet.gain.value=1; n.dry.gain.value=0;            // mix happens inside (latency-aligned dry)
       }
-      if(fx.type==='tune'||fx.type==='voxtr'){ n.wet.gain.value=1; n.dry.gain.value=0; }   // mixes internally with a latency-aligned dry
+      if(fx.type==='tune'||fx.type==='voxtr'||fx.type==='harm'){ n.wet.gain.value=1; n.dry.gain.value=0; }   // mixes internally with a latency-aligned dry
       else{ n.wet.gain.value=mix; n.dry.gain.value=1-mix; }
     }else{
       n.dry.gain.value=1;
@@ -3146,7 +3262,7 @@ function applyFxTo(fx,n){
   }
 }
 let autoApplying=false;       // true while automation itself writes params (don't treat as user edits)
-function applyFx(fx){ applyFxTo(fx,fx.nodes); if(fx.type==='wt') wtLiveUpdate(fx); autoNoteChanges(fx); }
+function applyFx(fx){ applyFxTo(fx,fx.nodes); if(fx.type==='wt') wtLiveUpdate(fx); if(fx.type==='duck' && fx.nodes && fx._keyFrom && fx._keyFrom.src!==duckKeyNode(fx)) wireDucker(fx); autoNoteChanges(fx); }
 /* every parameter edit that reaches applyFx() counts as a "touch" of that parameter (knobs, selects, LEDs, EQ dots, …) */
 function autoNoteChanges(fx){
   const prev=fx._autoPrev, p=fx.params;
@@ -3195,6 +3311,7 @@ function rebuildChain(track){
     }
   });
   prev.connect(tr.gain);
+  rewireDuckersKeyedTo(track);
 }
 function ensureTrackAudio(track){
   if(!ctx) return;
@@ -3361,7 +3478,8 @@ function buildTrapKit(sr){
 }
 function trapKit(sr){ return TRAP_KITS[sr]||(TRAP_KITS[sr]=buildTrapKit(sr)); }
 function kitBuf(id,kit,c){ return kit ? trapKit(c.sampleRate)[id] : sampleBufs[id]; }
-/* opts: {kit:0|1, vel:0..1, semi:-24..24} */
+/* opts: {kit:0|1, vel:0..1, semi:-24..24, fine:cents, choke:0 off|1 long 808|2 808 + kick} */
+const drumChokes=new WeakMap();                                 // dest node -> {id: last hit} (per context: dests are per-context nodes)
 function playDrum(id,t,dest,c,opts){
   c=c||ctx;
   const kit=opts&&opts.kit?1:0;
@@ -3370,9 +3488,19 @@ function playDrum(id,t,dest,c,opts){
   const src=c.createBufferSource();
   src.buffer=buf;
   const jit=(kit && (id==='kick'||id==='kickl'))?1:(0.985+Math.random()*0.03);
-  src.playbackRate.value=jit*Math.pow(2,((opts&&opts.semi)||0)/12);
+  src.playbackRate.value=jit*Math.pow(2,((opts&&opts.semi)||0)/12+((opts&&opts.fine)||0)/1200);
   const vel=(opts&&opts.vel!=null)?Math.max(0.02,Math.min(1,opts.vel)):1;
-  if(vel<0.999){ const g=c.createGain(); g.gain.value=vel; src.connect(g); g.connect(dest); }
+  const ch=kit?Math.round((opts&&opts.choke)||0):0;
+  const chokes=ch && (id==='kickl' || (ch===2 && id==='kick'));
+  if(vel<0.999 || chokes){
+    const g=c.createGain(); g.gain.value=vel; src.connect(g); g.connect(dest);
+    if(chokes){                                                   // a new 808 cuts the previous one's tail (mono, like a real 808)
+      let m=drumChokes.get(dest); if(!m){ m={}; drumChokes.set(dest,m); }
+      const prev=m[id];
+      if(prev && prev.t<t){ try{ prev.g.gain.setTargetAtTime(0,t,0.004); prev.src.stop(t+0.03); }catch(e){} }
+      m[id]={src,g,t};
+    }
+  }
   else src.connect(dest);
   src.start(t);
   if(c===ctx){ activeSources.add(src); src.onended=()=>activeSources.delete(src); }
@@ -3383,7 +3511,7 @@ function setHitPitch(it,id,s,p){
   let a=it.pitch[id]; if(!a || a.length<it.lenSteps){ const n=new Int8Array(Math.max(it.lenSteps,s+1)); if(a) n.set(a); a=it.pitch[id]=n; }
   a[s]=Math.max(-24,Math.min(24,Math.round(p)));
 }
-function drumKitOf(tr){ const f=tr && tr.fx.find(x=>x.type==='drums'); return f?Math.round(f.params.kit||0):0; }
+function drumOpts(tr){ const f=tr && tr.fx.find(x=>x.type==='drums'); return f?{kit:Math.round(f.params.kit||0), fine:+f.params.fine||0, choke:Math.round(f.params.choke??1)}:{kit:0}; }
 const VOWELS=[
   {f:[650,1080,2650], g:[1.4,0.85,0.5]},   // ah
   {f:[400,1700,2600], g:[1.4,0.75,0.5]},   // eh
@@ -4126,8 +4254,8 @@ function scheduleStep(step,t){
       if(rel<0 || rel>=it.lenSteps) return;
       if(!trackHasInst(tr,it.kind)) return;
       if(it.kind==='drums'){
-        const kit=drumKitOf(tr);
-        DRUMS.forEach(d=>{ const lane=it.pat[d.id]; const v=lane&&lane[rel]; if(v) playDrum(d.id,t,drumDest(tr,d.id),ctx,{kit,vel:v/127,semi:hitPitch(it,d.id,rel)}); });
+        const dop=drumOpts(tr);
+        DRUMS.forEach(d=>{ const lane=it.pat[d.id]; const v=lane&&lane[rel]; if(v) playDrum(d.id,t,drumDest(tr,d.id),ctx,{...dop,vel:v/127,semi:hitPitch(it,d.id,rel)}); });
       }else if(it.kind==='piano'){
         if(!instLooked){ instLooked=true; mfx=tr.fx.find(f=>f.type==='sampler'); wfx=mfx?null:tr.fx.find(f=>f.type==='wt'); cfx=(mfx||wfx)?null:tr.fx.find(f=>f.type==='choir'); }
         const idx=it._byStep||(it._byStep=buildPianoIndex(it)); const hits=idx.get(rel);   // O(1) per step — no full note scan (was O(N) per tick → grew with the take)
@@ -7003,15 +7131,29 @@ function renderFxPanel(){
       slot.appendChild(aw);
     }else if(!def.inst){
       const sw2=document.createElement('div'); sw2.className='eq-wrap';
-      if(fx.type!=='reverb' && fx.type!=='denoise'){
+      if(fx.type!=='reverb' && fx.type!=='denoise' && fx.type!=='harm'){
         const cv=document.createElement('canvas'); cv.className='fx-scope';
         cv.title='Input (ghost) and output level history';
         fx.scopeCv=cv;
         sw2.appendChild(cv);
       }
       const kr=document.createElement('div'); kr.className='knob-row';
-      Object.entries(def.params).forEach(([key,p])=>{ if(!p.io) kr.appendChild(p.opts?wtSel(fx,key,p,def.name+' '+(p.label||key)):makeKnob(fx,key,p)); });
+      const ctl=(key,p,lab)=>p.opts?wtSel(fx,key,p,lab+' '+(p.label||key)):makeKnob(fx,key,p);
+      if(def.groups){                                           // labelled columns (Harmonizer voices)
+        kr.classList.add('fx-groups');
+        Object.entries(def.groups).forEach(([lab,keys])=>{
+          const col=document.createElement('div'); col.className='eq-bandknobs';
+          const l2=document.createElement('span'); l2.className='eq-sel'; l2.textContent=lab;
+          const row=document.createElement('div'); row.className='knob-row';
+          keys.forEach(key=>{ const p=def.params[key]; if(p) row.appendChild(ctl(key,p,def.name+' '+lab)); });
+          col.append(l2,row); kr.appendChild(col);
+        });
+      }else Object.entries(def.params).forEach(([key,p])=>{ if(!p.io) kr.appendChild(ctl(key,p,def.name)); });
       sw2.appendChild(kr);
+      if(fx.type==='harm'){
+        const hl=document.createElement('div'); hl.className='tune-lab'; hl.title='Sung note → voice 1 / voice 2 / voice 3';
+        hl.textContent=harmReadout(fx._harm); fx.harmLab=hl; sw2.appendChild(hl);
+      }
       if(fx.type==='tune'){
         const tl=document.createElement('div'); tl.className='tune-lab'; tl.title='Detected note (cents off) \u2192 target note';
         tl.textContent=tuneReadout(fx._tune); fx.tuneLab=tl; sw2.appendChild(tl);
@@ -7769,7 +7911,7 @@ function rollCfg(){
     canAdd:r=>!!KEY_TO_DRUM[PR_KEYS-1-r],
     audition:r=>{
       const id=KEY_TO_DRUM[PR_KEYS-1-r]; if(!id) return;
-      ensureSamples().then(()=>{ if(track) playDrum(id, ctx.currentTime, drumDest(track,id), ctx, {kit:drumKitOf(track)}); });
+      ensureSamples().then(()=>{ if(track) playDrum(id, ctx.currentTime, drumDest(track,id), ctx, drumOpts(track)); });
     },
     notes(){
       const out=[];
@@ -8716,7 +8858,7 @@ async function renderRange(expStart,expEnd,opt){
     dests[tr.id]=inp;
   });
   offDucks.forEach(d2=>{
-    const kg=d2.fx.keyTrackId && offGains[d2.fx.keyTrackId];
+    const kg=d2.fx.keyTrackId && (d2.fx.params.keySrc ? dests[d2.fx.keyTrackId] : offGains[d2.fx.keyTrackId]);
     if(kg && d2.n.rect) kg.connect(d2.n.rect);
   });
   tracksAll.forEach(tr=>{
@@ -8756,7 +8898,7 @@ async function renderRange(expStart,expEnd,opt){
           DRUMS.forEach(d=>{
             if(!it.pat[d.id][rel]) return;
             const rd=state.pieces[d.id].route;
-            playDrum(d.id,t,(rd&&dests[rd])||dests[tr.id],off,{kit:drumKitOf(tr),vel:it.pat[d.id][rel]/127,semi:hitPitch(it,d.id,rel)});
+            playDrum(d.id,t,(rd&&dests[rd])||dests[tr.id],off,{...drumOpts(tr),vel:it.pat[d.id][rel]/127,semi:hitPitch(it,d.id,rel)});
           });
         }else if(it.kind==='piano'){
           const mfx=tr.fx.find(f=>f.type==='sampler');
@@ -10305,7 +10447,7 @@ function midiNoteOn(note,vel,ch){
     const inst=trackInstrument(tr); if(!inst || !tracksAll.includes(tr)) return;
     if(inst==='drums'){
       const id=KEY_TO_DRUM[note-21]; if(!id) return;
-      playDrum(id,ctx.currentTime,drumDest(tr,id),ctx,{kit:drumKitOf(tr),vel,semi:0});
+      playDrum(id,ctx.currentTime,drumDest(tr,id),ctx,{...drumOpts(tr),vel,semi:0});
       midiRecordDrum(tr,id,vel); return;
     }
     const k=note-21; if(k<0||k>87) return;

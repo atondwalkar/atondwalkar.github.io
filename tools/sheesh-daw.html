@@ -542,6 +542,34 @@
     .wt-glob,.wt-voi{flex-direction:row !important;justify-content:center;align-items:center}
     .wt-macros{grid-template-columns:repeat(4,1fr)} }
   .smp-box{flex:1 1 100%;min-width:260px} .smp-cv{height:70px}
+  .smp-envwrap{display:flex;align-items:center;gap:10px}
+  .smp-envside{display:flex;flex-direction:column;gap:3px;align-items:stretch}
+  .smp-envbyp{font-size:9px;letter-spacing:.12em;padding:1px 6px} .smp-envbyp.on{background:#ffb347;color:#111;border-color:#ffb347}
+  .byp>.smp-envwrap>.knob-row{opacity:.35}
+  .lib-box{align-items:stretch} .lib-head{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+  .lib-head{min-height:26px} .lib-pv>button:disabled{opacity:.4}
+  .lib-status{flex:1 1 220px;white-space:normal;font-size:9px;letter-spacing:.06em}
+  .lib-q{background:#161a22;color:var(--ink);border:1px solid var(--line);border-radius:4px;font-size:11px;padding:3px 6px;width:150px}
+  .lib-terms{font-size:9px;color:#ffcf8a;line-height:1.35}
+  .lib-list{height:260px;overflow:auto;border:1px solid #0c0e12;border-radius:4px;background:#0b0d11}
+  .lib-row{display:grid;grid-template-columns:16px minmax(0,1fr) 90px auto 52px auto;gap:8px;align-items:center;padding:3px 8px 3px 40px;font-size:11px;cursor:pointer;border-bottom:1px solid #12151c}
+  .lib-row:hover,.lib-row:focus{background:#161b25;outline:none} .lib-row.on{background:rgba(255,143,210,.12)} .lib-row.on .lib-nm{color:#ff8fd2}
+  .lib-pl{color:var(--ink-dim);font-size:9px} .lib-row.play .lib-pl{color:#5fd4c4}
+  .lib-nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .lib-meta{color:var(--ink-dim);font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap} .lib-dur{text-align:right}
+  .lib-tag{color:#ffb347;font-size:10px;white-space:nowrap} .lib-hot{font-style:normal;margin-left:6px;color:#ff8a8a;font-size:9px}
+  .lib-load{padding:1px 8px;font-size:10px}
+  .lib-fold{display:flex;gap:8px;align-items:center;padding:4px 8px;font-size:11px;cursor:pointer;border-bottom:1px solid #12151c;user-select:none}
+  .lib-fold.d1{padding-left:24px} .lib-fold:hover,.lib-fold:focus{background:#161b25;outline:none}
+  .lib-ar{width:10px;color:var(--ink-dim)} .lib-fnm{font-weight:600;letter-spacing:.04em} .lib-fold.d0 .lib-fnm{color:#5fd4c4} .lib-fold.d1 .lib-fnm{color:var(--ink)}
+  .lib-fold .lib-meta{margin-left:auto} .lib-list>.lib-terms{padding:3px 8px 3px 24px;border-bottom:1px solid #12151c}
+  .lib-wave{display:block;width:90px;height:18px}
+  .lib-row.sel{background:#1b2230;box-shadow:inset 2px 0 0 #5fd4c4}
+  .lib-pv{display:grid;grid-template-columns:1fr auto;grid-template-areas:"cv cv" "lab btn";gap:4px 8px;align-items:center}
+  .wt-cv.lib-pcv{grid-area:cv;height:64px;cursor:pointer} .lib-plab{grid-area:lab;font-size:10px;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .lib-pv>button{grid-area:btn} .lib-empty{padding:10px;text-align:center;color:var(--ink-dim);font-size:11px}
+  @media (max-width:700px){ .lib-row{grid-template-columns:16px minmax(0,1fr) 60px auto auto;padding-left:28px} .lib-wave{width:60px} .lib-row .lib-dur{display:none} } .wt-cv.smp-envcv{flex:none;width:150px;height:36px}
+  .wt-cv.smp-outcv{height:84px;cursor:ew-resize} .smp-outlab{white-space:normal;text-align:center;font-size:9px;letter-spacing:.04em}
   .wt-subnz{display:flex;gap:10px;min-width:0}
   .wt-subnz>.wt-box{flex:1 1 0;min-width:0}
   .wt-hgrp{display:flex;align-items:center;gap:4px;min-width:0}
@@ -853,7 +881,7 @@
 <!-- ============ ITEM EDITOR ============ -->
 <section class="panel">
   <div class="panel-head">
-    <h2 id="editor-title">Editor <span class="itemlab" id="editor-lab"></span> <select id="roll-grid" class="duck-key" aria-label="Editor grid" title="Note grid for the editor (also the unit for Arp / Solo / Roll)"></select></h2>
+    <h2 id="editor-title">Editor <span class="itemlab" id="editor-lab"></span> <select id="roll-grid" class="duck-key" aria-label="Editor grid" title="Note grid for the editor (also the unit for Arp / Solo / Roll)"></select> <select id="roll-len" class="duck-key" aria-label="New note length" title="Length of newly drawn notes (click to place; drag to set a length by hand)"></select></h2>
     <div class="tools" id="drum-tools" hidden>
       <button id="item-start-d" title="Move the playhead to the start of this item">&#9198; Item</button>
       <button id="preset-death">Death</button>
@@ -930,6 +958,10 @@ function setTsig(n,d){
 }
 const GRID_OPTS=[['1/4',24],['1/8',12],['1/8T',8],['1/16',6],['1/16T',4],['1/32',3],['1/32T',2],['off',1]];
 let tlGrid=+(localStorage.getItem('s16-tlgrid')||6)||6, prGrid=+(localStorage.getItem('s16-prgrid')||6)||6;
+// new-note length, separate from the grid: 0 = follow the grid, -1 = the last note drawn / resized, else ticks
+const LEN_OPTS=[['len = grid',0],['len: last drawn',-1],['len 1/32',3],['len 1/16',6],['len 1/8',12],['len 1/4',24],['len 1/2',48],['len 1 bar',96],['len 2 bars',192]];
+let prLen=+(localStorage.getItem('s16-prlen')||0)||0, prLastLen=+(localStorage.getItem('s16-prlastlen')||0)||0;
+function newNoteLen(){ return prLen>0 ? prLen : prLen===-1 ? (prLastLen||prGrid) : prGrid; }
 const snapT=(t,g)=>Math.round(t/g)*g, floorT=(t,g)=>Math.floor(t/g)*g;
 let PPS = 70;
 const PIECE_COLORS={
@@ -1072,10 +1104,12 @@ const FX_DEFS={
       end:{min:0,max:1,step:0.001,val:1,fmt:v=>Math.round(v*100)+'%',label:'end'},
       loop:{min:0,max:1,step:1,val:0,fmt:v=>v?'on':'off',label:'loop'},
       oneShot:{min:0,max:1,step:1,val:0,fmt:v=>v?'on':'off',label:'one-shot'},
-      atk:{min:0.001,max:2,step:0.001,val:0.003,fmt:v=>v>=1?(+v).toFixed(2)+' s':Math.round(v*1000)+' ms',label:'atk'},
-      dec:{min:0.01,max:4,step:0.01,val:0.3,fmt:v=>v>=1?(+v).toFixed(2)+' s':Math.round(v*1000)+' ms',label:'dec'},
-      sus:{min:0,max:1,step:0.01,val:1,fmt:v=>Math.round(v*100)+'%',label:'sus'},
-      rel:{min:0.01,max:4,step:0.01,val:0.08,fmt:v=>v>=1?(+v).toFixed(2)+' s':Math.round(v*1000)+' ms',label:'rel'},
+      // same ranges, defaults and curves as the Wavetable's ENV 1 (saved projects keep their own values)
+      atk:{min:0.001,max:4,step:0.001,val:0.005,fmt:v=>v>=1?(+v).toFixed(2)+' s':Math.round(v*1000)+' ms',label:'atk'},
+      dec:{min:0.01,max:4,step:0.01,val:0.2,fmt:v=>v>=1?(+v).toFixed(2)+' s':Math.round(v*1000)+' ms',label:'dec'},
+      sus:{min:0,max:1,step:0.01,val:0.7,fmt:v=>Math.round(v*100)+'%',label:'sus'},
+      rel:{min:0.01,max:4,step:0.01,val:0.3,fmt:v=>v>=1?(+v).toFixed(2)+' s':Math.round(v*1000)+' ms',label:'rel'},
+      envOff:{min:0,max:1,step:1,val:0,opts:['on','bypassed'],fmt:v=>v?'bypassed':'on',label:'envelope'},   // bypass: full level, whole sample, note-off ignored
       level:{min:0,max:1,step:0.01,val:0.8,fmt:v=>Math.round(v*100)+'%',label:'level'},
       velAmp:{min:0,max:1,step:0.01,val:0.6,fmt:v=>Math.round(v*100)+'%',label:'vel>amp'},
     },
@@ -2492,8 +2526,21 @@ registerProcessor('s16-amp',S16Amp);`;
 let WORKLET_SRC_CACHE=null;
 function workletSrc(){
   if(!WORKLET_SRC_CACHE){
-    WORKLET_SRC_CACHE=GATE_SRC+'\n'+'const VOWELS='+JSON.stringify(VOWELS)+';\n'+'const WT_CHAOS_SEED='+WT_CHAOS_SEED+';\n'+
-      seededRand.toString()+'\n'+fftRadix2.toString()+'\n'+wtBaseFrame.toString()+'\n'+wtChaosPts.toString()+'\n'+wtBiquadCoef.toString()+'\n'+WT_PROC_SRC+'\n'+WT_VOICE_SRC+'\n'+FX2_SRC;
+    // every processor is registered through __s16reg: a {__dispose} message makes it return false from process() (the
+    // audio thread stops running it at once instead of whenever the node is garbage-collected), and {__live} replies
+    // with how many processors are still running -- torn-down FX chains must not keep eating the audio thread
+    const WRAP=`const __s16live={n:0};
+function __s16reg(name,cls){ registerProcessor(name, class extends cls{
+  constructor(o){ super(o); this.__dead=false; __s16live.n++;
+    this.port.addEventListener('message',e=>{ const d=e.data;
+      if(d&&d.__dispose){ if(!this.__dead){ this.__dead=true; __s16live.n--; } }
+      else if(d&&d.__live) this.port.postMessage({__live:__s16live.n}); });
+    this.port.start(); }
+  process(i,o,p){ if(this.__dead) return false; return super.process(i,o,p); } }); }
+`;
+    WORKLET_SRC_CACHE=(WRAP+GATE_SRC+'\n'+'const VOWELS='+JSON.stringify(VOWELS)+';\n'+'const WT_CHAOS_SEED='+WT_CHAOS_SEED+';\n'+
+      seededRand.toString()+'\n'+fftRadix2.toString()+'\n'+wtBaseFrame.toString()+'\n'+wtChaosPts.toString()+'\n'+wtBiquadCoef.toString()+'\n'+WT_PROC_SRC+'\n'+WT_VOICE_SRC+'\n'+FX2_SRC)
+      .replace(/(^|[^_.\w])registerProcessor\(/g,'$1__s16reg(').replace('function __s16reg(name,cls){ __s16reg(','function __s16reg(name,cls){ registerProcessor(');
   }
   return WORKLET_SRC_CACHE;
 }
@@ -3275,12 +3322,31 @@ function autoNoteChanges(fx){
   }
   fx._autoPrev=Object.assign({},p);
 }
+/* Tear down audio nodes for good: disconnect every AudioNode in the object (one level into arrays / plain objects),
+   stop sources, and tell worklet processors to stop (returning false) instead of running on the audio thread until
+   the node happens to be garbage-collected. Undo / redo / project load rebuild every track, so anything left
+   connected here piled up with each edit (53 processors -> 1000+ after ten undo/redo) until playback broke up. */
+function disposeNodes(o,seen){
+  if(!o) return;
+  seen=seen||new Set();
+  const one=v=>{
+    if(!v || seen.has(v)) return; seen.add(v);
+    if(v instanceof AudioNode){
+      if(typeof AudioWorkletNode!=='undefined' && v instanceof AudioWorkletNode){ try{ v.port.postMessage({__dispose:1}); }catch(e){} }
+      if(typeof v.stop==='function'){ try{ v.stop(); }catch(e){} }
+      try{ v.disconnect(); }catch(e){}
+    }else if(Array.isArray(v)) v.forEach(x=>{ if(x instanceof AudioNode) one(x); });
+    else if(typeof v==='object' && Object.getPrototypeOf(v)===Object.prototype) Object.values(v).forEach(x=>{ if(x instanceof AudioNode||Array.isArray(x)) one(x); });
+  };
+  Object.values(o).forEach(one);
+}
+function disposeFx(fx){ if(!fx) return; if(fx._keyFrom){ try{ fx._keyFrom.src.disconnect(fx._keyFrom.rect); }catch(e){} fx._keyFrom=null; } disposeNodes(fx.nodes); fx.nodes=null; }
 function rebuildChain(track){
   if(!ctx) return;
   const tr=state.tracks[track.id];
   if(!tr.input || !tr.gain) return;
   tr.input.disconnect();
-  track.fx.forEach(fx=>{ if(fx.nodes){ ['out','in','preAn','postAn','preSplit','postSplit'].forEach(k=>{ try{ fx.nodes[k]&&fx.nodes[k].disconnect(); }catch(e){} }); } fx.nodes=null; });
+  track.fx.forEach(disposeFx);
   let prev=tr.input;
   track.fx.forEach(fx=>{
     if(fx.bypass || tr.fxBypass){ fx.nodes=null; return; }
@@ -3306,7 +3372,7 @@ function rebuildChain(track){
       fx._broken=false;
     }catch(e){                                             // a broken unit is skipped, the track keeps passing audio
       diagLog('error',(FX_DEFS[fx.type]||{}).name+' on '+track.name+' failed to build: '+(e&&e.message||e)+' — bypassed');
-      try{ if(fx.nodes){ ['out','in'].forEach(k=>{ try{ fx.nodes[k]&&fx.nodes[k].disconnect(); }catch(_){} }); } }catch(_){}
+      try{ disposeFx(fx); }catch(_){}
       fx.nodes=null; fx._broken=true;
     }
   });
@@ -3402,8 +3468,8 @@ function regVoice(c,env,srcs,stopT){
 }
 /* release one live voice early (MIDI note-off): worklet voices get an 'off' message, graph voices ramp their envelope */
 function releaseVoice(v,rel){
-  if(!v || !ctx) return;
-  const now=ctx.currentTime, r=Math.max(0.02,rel||0.25);
+  if(!v || !ctx || v.hold) return;                                // sampler with its envelope bypassed: plays the whole sample
+  const now=ctx.currentTime, r=v.fastRel?0.015:Math.max(0.02,rel||0.25);
   if(v.node){ try{ v.node.port.postMessage({off:true}); }catch(_){} return; }
   try{
     const g=v.env.gain; g.cancelScheduledValues(now); g.setValueAtTime(Math.max(1e-4,g.value),now); g.setTargetAtTime(1e-4,now,r/3);
@@ -3530,12 +3596,20 @@ function samplerVoice(t,k,dur,dest,p,c,tap,vel,fx){
   const src=c.createBufferSource(); src.buffer=buf; src.playbackRate.value=rate;
   const loop=!!p.loop, oneShot=!!p.oneShot;
   if(loop){ src.loop=true; src.loopStart=s0; src.loopEnd=s1; }
-  const relT=Math.max(0.01,p.rel??0.08);
+  const relT=Math.max(0.01,p.rel??0.3);
   const end=oneShot ? t+(loop?Math.max(0.05,dur):span) : t+Math.max(0.05,dur);
   const stopT=(oneShot&&!loop) ? Math.min(end, t+span)+relT*2+0.05 : end+relT*2+0.05;
   const velAmp=p.velAmp??0.6, lvl=Math.max(0.001,(p.level??0.8)*(1-velAmp+velAmp*vel));
-  const a=Math.max(0.001,p.atk??0.003), d=Math.max(0.01,p.dec??0.3), sus=Math.max(0.0001,lvl*(p.sus??1));
+  const a=Math.max(0.001,p.atk??0.005), d=Math.max(0.01,p.dec??0.2), sus=Math.max(0.0001,lvl*(p.sus??0.7));
   const g=c.createGain();
+  if(p.envOff){                                                   // envelope bypassed: sample as-is at full level
+    g.gain.setValueAtTime(lvl,t);
+    src.connect(g); g.connect(dest); if(tap) g.connect(tap);
+    if(loop){ const e2=t+Math.max(0.05,dur); src.start(t,s0); g.gain.setValueAtTime(lvl,e2); g.gain.linearRampToValueAtTime(0,e2+0.005); src.stop(e2+0.01);   // loops run to note-off (5 ms declick)
+      const v=regVoice(c,g,[src],e2+0.01); if(v) v.fastRel=true; return v; }
+    src.start(t,s0,Math.max(0.001,s1-s0)); src.stop(t+span+0.01);                                  // one pass of the whole region, whatever the note length
+    const v=regVoice(c,g,[src],t+span+0.01); if(v) v.hold=true; return v;
+  }
   g.gain.setValueAtTime(0.0001,t);
   g.gain.exponentialRampToValueAtTime(lvl,t+a);
   g.gain.setTargetAtTime(sus,t+a,d/3);
@@ -5274,6 +5348,8 @@ function removeTrack(track){
   track.headEl.remove();
   (track.autos||[]).forEach(a=>{ a.laneEl.remove(); a.headEl.remove(); });
   tracksAll=tracksAll.filter(t=>t!==track); tracksVer++;
+  (track.fx||[]).forEach(disposeFx);                            // its FX chain and track nodes stop and leave the graph
+  { const ts=state.tracks[track.id]; if(ts) disposeNodes({input:ts.input, gain:ts.gain, panner:ts.panner, l:ts.meterAnL, r:ts.meterAnR}); }
   delete state.tracks[track.id];
   DRUMS.forEach(d=>{ if(state.pieces[d.id].route===track.id) state.pieces[d.id].route=null; });
   tracksAll.forEach(t=>{ if(t.busId===track.id){ t.busId=null; applyBusRouting(t); } });
@@ -6405,6 +6481,9 @@ const snapBtn=document.getElementById('snap-btn');
   fill(gs,tlGrid); fill(rg,prGrid);
   gs.onchange=()=>{ tlGrid=+gs.value||1; localStorage.setItem('s16-tlgrid',tlGrid); layoutTimeline(); };
   rg.onchange=()=>{ prGrid=+rg.value||1; localStorage.setItem('s16-prgrid',prGrid); if(selMidiItem()) drawPianoRoll(); };
+  const rl=document.getElementById('roll-len');
+  LEN_OPTS.forEach(([lab,t])=>rl.appendChild(new Option(lab,t))); rl.value=String(prLen); if(rl.selectedIndex<0){ rl.value='0'; prLen=0; }
+  rl.onchange=()=>{ prLen=+rl.value||0; localStorage.setItem('s16-prlen',prLen); };
 })();
 snapBtn.onclick=()=>{
   snapOn=!snapOn;
@@ -6514,6 +6593,7 @@ function addFxToTrack(track,type){
   return fx;
 }
 function removeFxFromTrack(track,fx){
+  disposeFx(fx);
   track.fx=track.fx.filter(f=>f!==fx);
   rebuildChain(track);
   updateChipInst(track);
@@ -6705,12 +6785,349 @@ function buildSamplerExtras(gw,fx,def){
   };
   bar.append(nm,ld,use);
   box.append(cap,cv,bar); gw.appendChild(box);
+  buildLibraryBox(gw,fx);                                        // always open, fixed size: nothing below it jumps
+  // OUTPUT: one note at the root key, rendered offline through samplerVoice itself (exact loop/one-shot/envelope behaviour)
+  const obox=document.createElement('div'); obox.className='eq-bandknobs smp-box';
+  const ocap=document.createElement('span'); ocap.className='eq-sel'; ocap.textContent='OUTPUT';
+  const ocv=document.createElement('canvas'); ocv.className='wt-cv smp-outcv'; fx.smpOutCv=ocv;
+  ocv.title='One note at the root key as the sampler plays it. Drag to move the note-off; double-click resets it.';
+  const olab=document.createElement('span'); olab.className='wt-hl smp-outlab'; fx.smpOutLab=olab;
+  obox.append(ocap,ocv,olab); gw.appendChild(obox);
+  ocv.addEventListener('pointerdown',e=>{ const o=fx._smpOut; if(!fx.sampleBuffer||!o) return;
+    const r=ocv.getBoundingClientRect(); fx._smpDragV=o.V; try{ ocv.setPointerCapture(e.pointerId); }catch(_){}
+    const set=ev=>{ fx._smpHold=Math.max(0.05,Math.min(12,(ev.clientX-r.left)/r.width*fx._smpDragV)); drawSmpOut(fx); };
+    set(e); ocv.onpointermove=set;
+    ocv.onpointerup=ocv.onpointercancel=()=>{ ocv.onpointermove=null; fx._smpDragV=0; fx._smpOutKey=null; drawSmpOut(fx); }; });
+  ocv.addEventListener('dblclick',()=>{ fx._smpHold=null; fx._smpOutKey=null; drawSmpOut(fx); });
+  fx._smpOutKey=null;
   // start / end marker drag
   let drag=null;
   cv.addEventListener('pointerdown',e=>{ if(!fx.sampleBuffer) return; const r=cv.getBoundingClientRect(); const x=(e.clientX-r.left)/r.width; const ds=Math.abs(x-(fx.params.start||0)), de=Math.abs(x-(fx.params.end??1)); drag=ds<=de?'start':'end'; pushHistory(); try{ cv.setPointerCapture(e.pointerId); }catch(_){}
     cv.onpointermove=ev=>{ const x2=Math.max(0,Math.min(1,(ev.clientX-r.left)/r.width)); if(drag==='start') fx.params.start=Math.min(x2,(fx.params.end??1)-0.001); else fx.params.end=Math.max(x2,(fx.params.start||0)+0.001); fx.params[drag]=+fx.params[drag].toFixed(3); applyFx(fx); const kn=fx._knobs&&fx._knobs[drag]; if(kn&&kn._refresh) kn._refresh(fx.params[drag]); drawSampler(fx); };
     cv.onpointerup=cv.onpointercancel=()=>{ cv.onpointermove=null; drag=null; }; });
   fx._smpKey=null; drawSampler(fx);
+}
+/* ---------- sample library: BUILT-IN (samples-lib/ next to daw.html, written by sample_library.py; local only,
+   never published) or, as a fallback, any folder the user picks ---------- */
+const SLIB={handle:null, files:null, catalog:null, name:'', source:'', state:'none', builtin:null, cache:new Map(),
+  ui:{q:'',open:new Set(),scroll:0}, playing:null, sel:null, pending:{}};
+const LIB_AUDIO=/\.(wav|mp3|flac|ogg|oga|aiff?|m4a)$/i, LIB_DIR='samples-lib/';
+function libIdb(op,key,val){                                       // tiny key-value store (a picked folder survives reloads)
+  return new Promise((res,rej)=>{ let rq; try{ rq=indexedDB.open('sheesh-daw',1); }catch(e){ rej(e); return; }
+    rq.onupgradeneeded=()=>rq.result.createObjectStore('kv');
+    rq.onerror=()=>rej(rq.error);
+    rq.onsuccess=()=>{ const db=rq.result, tx=db.transaction('kv',op==='get'?'readonly':'readwrite'), st=tx.objectStore('kv');
+      const r=op==='get'?st.get(key):st.put(val,key); r.onsuccess=()=>res(r.result); r.onerror=()=>rej(r.error); tx.oncomplete=()=>db.close(); }; });
+}
+function libRefreshPanels(){ selectedTrack && selectedTrack.fx.some(f=>f.type==='sampler') && renderFxPanel(); }
+function libScript(src){ return new Promise((res,rej)=>{ const sc=document.createElement('script'); sc.src=src; sc.onload=()=>{ sc.remove(); res(); }; sc.onerror=()=>{ sc.remove(); rej(new Error('missing '+src)); }; document.head.appendChild(sc); }); }
+async function libBuiltin(){                                       // catalog.js defines window.SHEESH_LIB_CATALOG
+  if(SLIB.builtin!==null) return SLIB.builtin;
+  try{ if(!window.SHEESH_LIB_CATALOG) await libScript(LIB_DIR+'catalog.js'); }catch(e){}
+  const c=window.SHEESH_LIB_CATALOG;
+  SLIB.builtin=(c && Array.isArray(c.samples) && c.samples.length) ? c : false;
+  return SLIB.builtin;
+}
+function libUseBuiltin(){ const c=SLIB.builtin; if(!c) return false; SLIB.catalog=c; SLIB.source='builtin'; SLIB.name='Built-in library'; SLIB.state='ready'; SLIB.cache.clear(); return true; }
+async function libRestore(){                                       // first open: built-in library, else a remembered folder
+  if(SLIB.state!=='none') return;
+  SLIB.state='checking';
+  if(await libBuiltin()){ libUseBuiltin(); libRefreshPanels(); return; }
+  try{
+    const h=await libIdb('get','sampleLib');
+    if(h && h.queryPermission){ SLIB.handle=h; SLIB.name=h.name; SLIB.source='folder';
+      SLIB.state=(await h.queryPermission({mode:'read'}))==='granted'?'loading':'reconnect';
+      if(SLIB.state==='loading'){ await libLoad(); return; } }
+    else SLIB.state='empty';
+  }catch(e){ SLIB.state='empty'; }
+  libRefreshPanels();
+}
+async function libPick(){                                          // user gesture: use a folder instead of the built-in library
+  if(window.showDirectoryPicker){
+    try{ const h=await showDirectoryPicker({id:'sheesh-samples',mode:'read'}); SLIB.handle=h; SLIB.files=null; SLIB.name=h.name; SLIB.source='folder'; libIdb('put','sampleLib',h).catch(()=>{}); await libLoad(); }
+    catch(e){ if(!(e&&e.name==='AbortError')) flash('Could not open that folder: '+(e&&e.message||e)); }
+    return;
+  }
+  const inp=document.createElement('input'); inp.type='file'; inp.webkitdirectory=true; inp.multiple=true;   // Firefox & co: session-only
+  inp.onchange=async()=>{ const fl=[...inp.files]; if(!fl.length) return;
+    SLIB.handle=null; SLIB.files=new Map(); SLIB.source='folder'; SLIB.name=(fl[0].webkitRelativePath||'').split('/')[0]||'Samples';
+    fl.forEach(f=>{ const rp=(f.webkitRelativePath||f.name).split('/').slice(1).join('/'); SLIB.files.set(rp,f); });
+    await libLoad(); };
+  inp.click();
+}
+async function libReconnect(){ try{ if((await SLIB.handle.requestPermission({mode:'read'}))==='granted'){ await libLoad(); return; } }catch(e){} flash('Permission not granted — choose the folder again.'); }
+async function libFile(path){
+  if(SLIB.files) return SLIB.files.get(path)||null;
+  let d=SLIB.handle; const seg=path.split('/'); const fn=seg.pop();
+  for(const s2 of seg) d=await d.getDirectoryHandle(s2);
+  return (await d.getFileHandle(fn)).getFile();
+}
+async function libScan(){                                          // folder without catalog.json: kit/category from the folders
+  const out=[];
+  const push=rel=>{ const seg=rel.split('/'), nm=seg[seg.length-1];
+    out.push({path:rel, bundle:seg.length>2?seg[0]:'', kit:seg.length>2?seg[seg.length-3]:(seg.length>1?seg[0]:SLIB.name), category:seg.length>1?seg[seg.length-2]:'Other',
+      name:nm.replace(/\.[^.]+$/,''), ext:(nm.match(/\.([^.]+)$/)||['',''])[1].toLowerCase(), type:/loop|melod/i.test(rel)?'loop':'oneshot'}); };
+  if(SLIB.files){ for(const k of SLIB.files.keys()) if(LIB_AUDIO.test(k)) push(k); }
+  else{ const walk=async(d,pre,depth)=>{ if(depth>7||out.length>20000) return; for await(const [n,h] of d.entries()){ if(n.startsWith('.')) continue; if(h.kind==='directory') await walk(h,pre+n+'/',depth+1); else if(LIB_AUDIO.test(n)) push(pre+n); } }; await walk(SLIB.handle,'',0); }
+  out.sort((a,b)=>a.path.localeCompare(b.path));
+  const kits={}; out.forEach(d=>{ const k=kits[d.kit]||(kits[d.kit]={bundle:d.bundle,kit:d.kit,terms:[],count:0}); k.count++; });
+  return {kits:Object.values(kits), samples:out, scanned:true};
+}
+async function libLoad(){                                          // (re)read the picked folder
+  SLIB.state='loading'; SLIB.cache.clear(); libRefreshPanels();
+  try{
+    let cat=null;
+    try{ const f=await libFile('catalog.json'); if(f) cat=JSON.parse(await f.text()); }catch(e){ cat=null; }
+    if(!cat || !Array.isArray(cat.samples)) cat=await libScan();
+    SLIB.catalog=cat; SLIB.state='ready';
+  }catch(e){ SLIB.state='error'; SLIB.err=String(e&&e.message||e); }
+  libRefreshPanels();
+}
+window.SHEESH_LIB_DATA=(id,b64)=>{ const p=SLIB.pending[id]; if(p){ delete SLIB.pending[id]; p(b64); } };
+async function libBytes(d){
+  if(SLIB.source==='builtin'){
+    const b64=await new Promise((res,rej)=>{ SLIB.pending[d.id]=res; libScript(LIB_DIR+'s/'+d.id+'.js').catch(e=>{ delete SLIB.pending[d.id]; rej(e); }); });
+    const bin=atob(b64), u8=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++) u8[i]=bin.charCodeAt(i);
+    return u8.buffer;
+  }
+  const f=await libFile(d.path); if(!f) throw new Error('file missing: '+d.path);
+  return f.arrayBuffer();
+}
+async function libBuffer(d){
+  const key=SLIB.source+':'+d.path;
+  if(SLIB.cache.has(key)){ const b=SLIB.cache.get(key); SLIB.cache.delete(key); SLIB.cache.set(key,b); return b; }
+  initAudio();
+  const b=await ctx.decodeAudioData(await libBytes(d));
+  SLIB.cache.set(key,b); while(SLIB.cache.size>40) SLIB.cache.delete(SLIB.cache.keys().next().value);
+  if(!d.peaks){                                                    // scanned folder: overview from the decoded audio
+    const x=b.getChannelData(0), nb=200, pk=[]; for(let i=0;i<nb;i++){ let m=0; const a=Math.floor(i*x.length/nb), e=Math.max(a+1,Math.floor((i+1)*x.length/nb)); for(let j=a;j<e;j++){ const v=Math.abs(x[j]); if(v>m) m=v; } pk.push(Math.min(255,Math.round(m*255))); }
+    d.peaks=pk; d.dur=d.dur??b.duration;
+  }
+  return b;
+}
+function libDrawWave(cv,d,prog){                                   // overview from d.peaks (0..255 of full scale), optional playhead 0..1
+  const dd=wtDpr(cv); if(!dd) return; const {g,cw,ch}=dd, mid=ch/2;
+  const pk=d&&d.peaks;
+  if(!pk){ g.strokeStyle='rgba(139,147,163,.25)'; g.beginPath(); g.moveTo(0,mid); g.lineTo(cw,mid); g.stroke(); return; }
+  const n=pk.length, played=prog!=null?prog*cw:-1;
+  for(let x=0;x<cw;x++){ const a=Math.floor(x/cw*n), e=Math.max(a+1,Math.floor((x+1)/cw*n)); let m=0; for(let i=a;i<e&&i<n;i++) if(pk[i]>m) m=pk[i];
+    const h=Math.max(1,m/255*(ch/2-1)*2); g.fillStyle=x<played?'rgba(95,212,196,.9)':'rgba(255,143,210,.8)'; g.fillRect(x,mid-h/2,1,h); }
+  if(prog!=null){ g.fillStyle='#5fd4c4'; g.fillRect(Math.min(cw-1,played),0,1.5,ch); }
+}
+function libStopAudition(){ const p=SLIB.playing; SLIB.playing=null; if(p){ try{ p.src.stop(); }catch(e){} p.row&&p.row.classList.remove('play'); cancelAnimationFrame(p.raf); if(p.prev&&p.prev.isConnected) libDrawWave(p.prev,p.d,null); } }
+async function libAudition(d,row,prev){                             // dry preview straight to the speakers (click the playing one to stop)
+  const same=SLIB.playing&&SLIB.playing.path===d.path; libStopAudition(); if(same) return;
+  const token={}; SLIB.auTok=token;
+  try{ const b=await libBuffer(d); if(SLIB.auTok!==token) return;      // a newer click won while this one was loading
+    initAudio(); if(ctx.state==='suspended') await ctx.resume();
+    const src=ctx.createBufferSource(), g=ctx.createGain(); src.buffer=b; g.gain.value=0.7; src.connect(g); g.connect(ctx.destination);
+    const t0=ctx.currentTime; src.start(t0);
+    const pl={path:d.path,src,row,prev,d,raf:0}; SLIB.playing=pl; row&&row.classList.add('play');
+    const tick=()=>{ if(SLIB.playing!==pl) return; if(prev&&prev.isConnected) libDrawWave(prev,d,Math.min(1,(ctx.currentTime-t0)/b.duration)); pl.raf=requestAnimationFrame(tick); };
+    tick();
+    src.onended=()=>{ if(SLIB.playing===pl) libStopAudition(); };
+  }catch(e){ flash('Could not play '+d.name+': '+(e&&e.message||e)); }
+}
+async function libLoadInto(fx,d){
+  try{
+    const b=await libBuffer(d);
+    pushHistory();
+    fx.sampleBuffer=b; fx.sampleName=d.name.slice(0,24); fx.sampleSrc=d.path;
+    const P=fx.params; P.start=0; P.end=1; P.loop=0;
+    if(d.midi!=null){ P.root=Math.max(0,Math.min(87,d.midi-21)); P.fine=Math.max(-100,Math.min(100,-(d.cents||0))); P.oneShot=d.category==='808'?0:1; }   // tonal: in tune on the roll; 808s follow note length, other pitched hits play whole
+    else{ P.root=39; P.fine=0; P.oneShot=d.type==='loop'?0:1; }                                                                   // hits: full one-shot; loops: as recorded at C4
+    fx._smpKey=null; fx._smpOutKey=null; fx._smpHold=null;
+    applyFx(fx); renderFxPanel();
+    flash('Loaded '+d.name+(d.note?' — root '+d.note+(d.cents?' ('+(d.cents>0?'+':'')+d.cents+'¢ corrected)':''):''));
+  }catch(e){ flash('Could not load '+d.name+': '+(e&&e.message||e)); }
+}
+function buildLibraryBox(gw,fx){
+  const box=document.createElement('div'); box.className='eq-bandknobs smp-box lib-box';
+  const cap=document.createElement('span'); cap.className='eq-sel'; cap.textContent='LIBRARY';
+  const head=document.createElement('div'); head.className='lib-head';
+  const status=document.createElement('span'); status.className='wt-hl lib-status';
+  const btn=(t,title,fn)=>{ const b=document.createElement('button'); b.className='ir-btn'; b.textContent=t; b.title=title; b.onclick=fn; return b; };
+  // fixed-size preview + list exist in every state, so the panel never changes height
+  const pv=document.createElement('div'); pv.className='lib-pv';
+  const pcv=document.createElement('canvas'); pcv.className='wt-cv lib-pcv'; pcv.title='Selected sample — click to play / stop';
+  const plab=document.createElement('div'); plab.className='lib-plab';
+  const pload=btn('Load into sampler','Load the selected sample into this sampler',()=>{ if(SLIB.sel) libLoadInto(fx,SLIB.sel); });
+  pv.append(pcv,plab,pload);
+  const list=document.createElement('div'); list.className='lib-list'; list.setAttribute('role','tree'); list.setAttribute('aria-label','Sample library');
+  const msg=t=>{ list.innerHTML=''; const e=document.createElement('div'); e.className='lib-empty'; e.textContent=t; list.appendChild(e); };
+  box.append(cap,head,pv,list); gw.appendChild(box);
+  const fmtT=v=>v>=60?Math.floor(v/60)+':'+String(Math.round(v%60)).padStart(2,'0'):v>=1?v.toFixed(1)+' s':Math.round(v*1000)+' ms';
+  const tagOf=d=>d.type==='loop'?[d.bpm?d.bpm+' bpm':'',d.key||'',d.bars?d.bars+' bars':''].filter(Boolean).join(' · '):(d.note?d.note+(d.cents?' '+(d.cents>0?'+':'')+d.cents+'¢':''):'');
+  const showSel=()=>{ const d=SLIB.sel; pload.disabled=!d;
+    plab.textContent=d?d.name+' — '+d.kit+' · '+d.category+(d.dur!=null?' · '+fmtT(d.dur):'')+(tagOf(d)?' · '+tagOf(d):'')+(d.fullScale?' · peaks at 0 dBFS':''):'Select a sample to preview it';
+    requestAnimationFrame(()=>libDrawWave(pcv,d,d&&SLIB.playing&&SLIB.playing.path===d.path?0:null)); };
+  showSel();
+  if(SLIB.state==='none'){ libRestore(); }
+  const st=SLIB.state, C=SLIB.catalog;
+  if(st==='none'||st==='checking'||st==='loading'){ status.textContent=st==='loading'?'Reading '+(SLIB.name||'library')+'…':'Opening the sample library…'; head.append(status); msg('Loading…'); return; }
+  if(st==='reconnect'){ status.textContent='Library "'+SLIB.name+'" — Chrome needs your OK again after a restart.'; head.append(status,btn('Reconnect','Allow read access to '+SLIB.name,libReconnect),btn('Choose folder…','Pick a different library folder',libPick)); msg(''); return; }
+  if(st!=='ready'||!C){ status.textContent=st==='error'?'Could not read the library: '+SLIB.err:'No built-in library here'; head.append(status,btn('Choose folder…','Pick a folder of samples',libPick));
+    msg(st==='error'?'':'The built-in library lives next to your local daw.html (build it with sample_library.py). You can also open any folder of samples.'); return; }
+  const q=document.createElement('input'); q.type='search'; q.className='lib-q'; q.placeholder='search…'; q.value=SLIB.ui.q; q.setAttribute('aria-label','Search samples');
+  status.textContent=SLIB.name+' · '+C.samples.length+' samples'+(C.scanned?' (no catalog.json: folders only)':'');
+  const allOpen=btn('▾ all','Expand every folder',()=>{ tree.forEach(k=>{ SLIB.ui.open.add(k.key); k.cats.forEach(c=>SLIB.ui.open.add(c.key)); }); fill(); });
+  const allShut=btn('▸ all','Collapse every folder',()=>{ SLIB.ui.open.clear(); fill(); });
+  head.append(status,q,allOpen,allShut);
+  if(SLIB.source==='folder' && SLIB.builtin) head.append(btn('Built-in library','Back to the built-in library',()=>{ libUseBuiltin(); renderFxPanel(); }));
+  head.append(btn(SLIB.source==='builtin'?'Other folder…':'Change folder…','Browse a folder of samples instead',libPick));
+  if(SLIB.source==='folder') head.append(btn('Rescan','Re-read catalog.json / the folder',libLoad));
+  // kit -> category -> samples
+  const tree=[], byKit=new Map();
+  C.samples.forEach(d=>{ const kk=(d.bundle||'')+'/'+d.kit; let k=byKit.get(kk);
+    if(!k){ k={key:'k:'+kk, name:d.kit, bundle:d.bundle, info:C.kits.find(x=>x.kit===d.kit&&(x.bundle||'')===(d.bundle||'')), cats:new Map()}; byKit.set(kk,k); tree.push(k); }
+    let c=k.cats.get(d.category); if(!c){ c={key:'c:'+kk+'/'+d.category, name:d.category, items:[]}; k.cats.set(d.category,c); } c.items.push(d); });
+  tree.forEach(k=>{ k.cats=[...k.cats.values()].sort((a,b)=>(a.name==='Loops')-(b.name==='Loops')||a.name.localeCompare(b.name)); });
+  const select=(d,r,play)=>{ SLIB.sel=d; list.querySelectorAll('.lib-row.sel').forEach(x=>x.classList.remove('sel')); r&&r.classList.add('sel'); showSel();
+    if(play) libAudition(d,r,pcv).then(()=>{ showSel(); const w=r&&r.querySelector('.lib-wave'); w&&libDrawWave(w,d,null); }); };
+  pcv.onclick=()=>{ const d=SLIB.sel; if(d) libAudition(d,list.querySelector('.lib-row.sel'),pcv); };
+  const nav=(r,e)=>{ const vis=[...list.querySelectorAll('.lib-row,.lib-fold')]; const i=vis.indexOf(r); const n=vis[i+(e.key==='ArrowDown'?1:-1)];
+    if(n){ n.focus(); if(n.classList.contains('lib-row')) n.click(); } };
+  const fill=()=>{
+    const qs=SLIB.ui.q.trim().toLowerCase().split(/\s+/).filter(Boolean), searching=qs.length>0;
+    const hit=d=>qs.every(w=>(d.name+' '+d.kit+' '+d.category+' '+(d.key||'')+' '+(d.note||'')+' '+(d.bpm||'')).toLowerCase().includes(w));
+    list.innerHTML=''; const waves=[]; let shown=0;
+    const folder=(key,label,count,depth,open,extra)=>{
+      const f=document.createElement('div'); f.className='lib-fold d'+depth+(open?' open':''); f.tabIndex=0; f.setAttribute('role','treeitem'); f.setAttribute('aria-expanded',String(open));
+      const ar=document.createElement('span'); ar.className='lib-ar'; ar.textContent=open?'▾':'▸';
+      const nm=document.createElement('span'); nm.className='lib-fnm'; nm.textContent=label;
+      const ct=document.createElement('span'); ct.className='lib-meta'; ct.textContent=count;
+      f.append(ar,nm,ct); if(extra) f.title=extra;
+      const toggle=()=>{ if(searching) return; SLIB.ui.open.has(key)?SLIB.ui.open.delete(key):SLIB.ui.open.add(key); SLIB.ui.scroll=list.scrollTop; fill(); const again=list.querySelector('[data-k="'+CSS.escape(key)+'"]'); again&&again.focus(); };
+      f.dataset.k=key; f.onclick=toggle;
+      f.onkeydown=e=>{ if(e.key==='Enter'||e.key===' '||(e.key==='ArrowRight'&&!open)||(e.key==='ArrowLeft'&&open)){ e.preventDefault(); toggle(); } else if(e.key==='ArrowDown'||e.key==='ArrowUp'){ e.preventDefault(); nav(f,e); } };
+      list.appendChild(f); return f;
+    };
+    tree.forEach(k=>{
+      const kCats=k.cats.map(c=>({c, items:searching?c.items.filter(hit):c.items})).filter(x=>x.items.length);
+      const n=kCats.reduce((a,x)=>a+x.items.length,0); if(!n) return;
+      const kOpen=searching||SLIB.ui.open.has(k.key), full=k.info&&k.info.terms&&k.info.terms.length?k.info.terms.join('\n\n'):'';
+      const terms=(k.info&&k.info.summary)||(full?full.replace(/\s+/g,' ').slice(0,200):'');   // short usage summary; full text on hover
+      folder(k.key,k.name,n+(searching?' found':' samples'),0,kOpen,(k.bundle?k.bundle+'\n':'')+(terms?'Terms: '+terms:''));
+      if(!kOpen) return;
+      if(terms){ const t=document.createElement('div'); t.className='lib-terms'; t.textContent='⚖ '+terms; t.title=full; list.appendChild(t); }
+      kCats.forEach(({c,items})=>{
+        const cOpen=searching||SLIB.ui.open.has(c.key);
+        folder(c.key,c.name,items.length,1,cOpen);
+        if(!cOpen) return;
+        items.forEach(d=>{ if(shown>=600) return; shown++;
+          const r=document.createElement('div'); r.className='lib-row'+(fx.sampleSrc===d.path?' on':'')+(SLIB.sel&&SLIB.sel.path===d.path?' sel':'')+(SLIB.playing&&SLIB.playing.path===d.path?' play':''); r.setAttribute('role','treeitem'); r.tabIndex=0;
+          r.title=d.path+'\nclick / ↑↓: select + audition · double-click / Enter: load into this sampler';
+          const pl=document.createElement('span'); pl.className='lib-pl'; pl.textContent='▶';
+          const nm=document.createElement('span'); nm.className='lib-nm'; nm.textContent=d.name;
+          const wv=document.createElement('canvas'); wv.className='lib-wave'; waves.push([wv,d]);
+          const info=document.createElement('span'); info.className='lib-tag'; info.textContent=tagOf(d);
+          if(d.fullScale){ const h=document.createElement('i'); h.className='lib-hot'; h.textContent='0dB'; h.title='Peaks at 0 dBFS (a hot, limited sample)'; info.appendChild(h); }
+          const du=document.createElement('span'); du.className='lib-meta lib-dur'; du.textContent=d.dur!=null?fmtT(d.dur):'';
+          const ld=document.createElement('button'); ld.className='ir-btn lib-load'; ld.textContent='Load'; ld.title='Load into this sampler';
+          ld.onclick=e=>{ e.stopPropagation(); libLoadInto(fx,d); };
+          r.onclick=()=>select(d,r,true); r.ondblclick=()=>libLoadInto(fx,d);
+          r.onkeydown=e=>{ if(e.key==='Enter'){ e.preventDefault(); libLoadInto(fx,d); } else if(e.key===' '){ e.preventDefault(); libAudition(d,r,pcv); }
+            else if(e.key==='ArrowDown'||e.key==='ArrowUp'){ e.preventDefault(); nav(r,e); } };
+          r.append(pl,nm,wv,info,du,ld); list.appendChild(r);
+        });
+      });
+    });
+    if(!list.children.length) msg(searching?'No samples match.':'The library is empty.');
+    requestAnimationFrame(()=>waves.forEach(([wv,d])=>libDrawWave(wv,d,null)));
+  };
+  q.oninput=()=>{ SLIB.ui.q=q.value; fill(); };
+  list.onscroll=()=>{ SLIB.ui.scroll=list.scrollTop; };
+  fill(); requestAnimationFrame(()=>{ list.scrollTop=SLIB.ui.scroll; });
+}
+function drawSmpEnv(fx){                                         // sampler amp envelope (same curves samplerVoice schedules)
+  const cv=fx.smpEnvCv; if(!cv||!cv.isConnected) return;
+  const p=fx.params, a=Math.max(0.001,p.atk??0.005), dd=Math.max(0.01,p.dec??0.2), su=Math.max(0,Math.min(1,p.sus??0.7)), r=Math.max(0.01,p.rel??0.3);
+  const key=[a,dd,su,r,p.envOff,cv.clientWidth].join('|'); if(fx._smpEnvKey===key) return;
+  const d=wtDpr(cv); if(!d) return; fx._smpEnvKey=key;
+  const {g,cw,ch}=d;
+  if(p.envOff){ const y1=6; g.strokeStyle='rgba(255,179,71,.55)'; g.lineWidth=1.6; g.beginPath(); g.moveTo(4,ch-4); g.lineTo(4,y1); g.lineTo(cw-4,y1); g.stroke();
+    g.fillStyle='rgba(255,179,71,.08)'; g.fillRect(4,y1,cw-8,ch-4-y1); g.font='8px system-ui'; g.fillStyle='rgba(139,147,163,.9)'; g.fillText('whole sample, full level',8,ch/2+6); return; }
+  g.strokeStyle='rgba(139,147,163,.18)'; g.lineWidth=1; g.beginPath(); g.moveTo(0,ch/2); g.lineTo(cw,ch/2); g.stroke();
+  const T=Math.max(0.05,a+dd+r), susW=0.22*cw, sc=(cw-susW-8)/T, x0=4, y=v=>ch-4-v*(ch-10);
+  g.beginPath(); g.moveTo(x0,y(0));
+  for(let i=1;i<=24;i++){ const t=i/24*a; g.lineTo(x0+t*sc, y(Math.pow(1e4,t/a)*1e-4)); }            // exponential ramp from -80 dB
+  for(let i=1;i<=24;i++){ const t=i/24*dd; g.lineTo(x0+(a+t)*sc, y(su+(1-su)*Math.exp(-3*t/dd))); }   // setTarget, tau = dec/3
+  const xs=x0+(a+dd)*sc; g.lineTo(xs+susW,y(su));
+  for(let i=1;i<=24;i++){ const t=i/24*r; g.lineTo(xs+susW+t*sc, y(su*Math.exp(-3*t/r))); }           // setTarget, tau = rel/3
+  g.strokeStyle='#ffb347'; g.lineWidth=1.6; g.stroke();
+  g.lineTo(xs+susW+r*sc,y(0)); g.lineTo(x0,y(0)); g.fillStyle='rgba(255,179,71,.12)'; g.fill();
+  [[x0+a*sc,1],[xs,su],[xs+susW,su]].forEach(([x,v])=>{ g.fillStyle='#5fd4c4'; g.beginPath(); g.arc(x,y(v),3,0,7); g.fill(); });
+  g.font='8px system-ui'; g.fillStyle='rgba(139,147,163,.8)'; g.fillText('note off',Math.min(cw-34,xs+susW-14),9);
+  g.strokeStyle='rgba(139,147,163,.35)'; g.setLineDash([2,3]); g.beginPath(); g.moveTo(xs+susW,12); g.lineTo(xs+susW,ch-4); g.stroke(); g.setLineDash([]);
+}
+function smpOutPlan(fx){                                          // the timeline samplerVoice produces for one note at the root key
+  const p=fx.params, b=fx.sampleBuffer;
+  const rate=Math.pow(2,(p.semi||0)/12+(p.fine||0)/1200);
+  const st=Math.max(0,Math.min(0.999,p.start||0)), en=Math.max(st+0.001,Math.min(1,p.end??1));
+  const span=(en-st)*b.duration/rate, loop=!!p.loop, oneShot=!!p.oneShot, a=Math.max(0.001,p.atk??0.005), relT=Math.max(0.01,p.rel??0.3);
+  const hold=fx._smpHold ?? Math.max(0.05,Math.min(12, loop ? Math.max(a+(p.dec??0.2)+0.2, 2.5*span) : span));
+  if(p.envOff){ const e2=loop?Math.max(0.05,hold):span; return {rate,span,loop,oneShot:!loop,hold,end:e2,stop:e2+0.01,relT:0,byp:true}; }   // bypass: whole region / loop to note-off
+  const end=oneShot ? (loop?Math.max(0.05,hold):span) : Math.max(0.05,hold);
+  const stop=(oneShot&&!loop) ? Math.min(end,span)+relT*2+0.05 : end+relT*2+0.05;
+  return {rate,span,loop,oneShot,hold,end,stop,relT};
+}
+function drawSmpOut(fx){
+  const cv=fx.smpOutCv; if(!cv||!cv.isConnected) return;
+  const p=fx.params, b=fx.sampleBuffer;
+  const key=(b?b.length+':'+b.sampleRate:0)+'|'+['start','end','loop','oneShot','atk','dec','sus','rel','semi','fine','level','envOff'].map(k=>p[k]).join('|')+'|'+fx._smpHold+'|'+fx._smpDragV+'|'+cv.clientWidth;
+  if(fx._smpOutKey===key) return;
+  fx._smpOutKey=key;
+  if(!b){ const d=wtDpr(cv); if(!d) return; d.g.fillStyle='rgba(139,147,163,.5)'; d.g.font='10px system-ui'; d.g.fillText('Load a sample to see the output',8,d.ch/2); if(fx.smpOutLab) fx.smpOutLab.textContent=''; fx._smpOut=null; return; }
+  clearTimeout(fx._smpOutT);
+  fx._smpOutT=setTimeout(()=>renderSmpOut(fx,key).catch(e=>console.warn('sampler output view',e)),fx._smpDragV?30:90);
+}
+async function renderSmpOut(fx,key){
+  const b=fx.sampleBuffer, P=smpOutPlan(fx), p=fx.params;
+  const V=fx._smpDragV || Math.min(20,P.stop*1.06), sr=22050, n=Math.max(64,Math.ceil(V*sr));
+  const off=new OfflineAudioContext(2,n,sr);
+  const mg=off.createChannelMerger(2); mg.connect(off.destination);
+  const dL=off.createGain(), dR=off.createGain(); dL.connect(mg,0,0); dR.connect(mg,0,1);
+  if(!fx._smpOnes || fx._smpOnes.length!==b.length || fx._smpOnes.sampleRate!==b.sampleRate){
+    const o=new AudioBuffer({length:b.length,sampleRate:b.sampleRate,numberOfChannels:1}); o.getChannelData(0).fill(1); fx._smpOnes=o; }
+  const root=p.root??39;
+  samplerVoice(0,root,P.hold,dL,p,off,undefined,1,fx);                         // the sound
+  samplerVoice(0,root,P.hold,dR,p,off,undefined,1,{sampleBuffer:fx._smpOnes});  // same voice on a constant = its exact gain envelope
+  const r=await off.startRendering();
+  if(fx._smpOutKey!==key) return;                                  // superseded while rendering
+  fx._smpOut={...P, V, sr, key, wav:r.getChannelData(0), env:r.getChannelData(1)};
+  paintSmpOut(fx);
+}
+function paintSmpOut(fx){
+  const cv=fx.smpOutCv, o=fx._smpOut; if(!cv||!cv.isConnected||!o) return;
+  const d=wtDpr(cv); if(!d) return; const {g,cw,ch}=d, mid=ch/2, amp=ch/2-4;
+  const X=t=>t/o.V*cw, spp=o.wav.length/cw;
+  g.strokeStyle='rgba(139,147,163,.18)'; g.lineWidth=1; g.beginPath(); g.moveTo(0,mid); g.lineTo(cw,mid); g.stroke();
+  if(o.loop) for(let t=o.span, i=0; t<o.stop && i<400; t+=o.span, i++){ g.fillStyle=i%2?'rgba(95,212,196,.05)':'rgba(95,212,196,.1)'; g.fillRect(X(t),0,Math.max(1,X(Math.min(o.stop,t+o.span))-X(t)),ch); }
+  g.fillStyle='rgba(255,143,210,.8)';                                 // rendered waveform (min/max per pixel)
+  for(let x=0;x<cw;x++){ const a=Math.floor(x*spp), e=Math.min(o.wav.length,Math.floor((x+1)*spp)); let mn=0,mx=0; for(let i=a;i<e;i++){ const v=o.wav[i]; if(v<mn)mn=v; if(v>mx)mx=v; } if(mx>mn) g.fillRect(x,mid-mx*amp,1,Math.max(1,(mx-mn)*amp)); }
+  g.beginPath();                                                       // gain envelope (+/-)
+  for(let x=0;x<cw;x++){ const v=o.env[Math.min(o.env.length-1,Math.floor(x*spp))]; x?g.lineTo(x,mid-v*amp):g.moveTo(x,mid-v*amp); }
+  for(let x=cw-1;x>=0;x--){ const v=o.env[Math.min(o.env.length-1,Math.floor(x*spp))]; g.lineTo(x,mid+v*amp); }
+  g.closePath(); g.fillStyle='rgba(255,179,71,.08)'; g.fill(); g.strokeStyle='#ffb347'; g.lineWidth=1.3; g.stroke();
+  g.font='8px system-ui'; g.setLineDash([3,3]); g.lineWidth=1;
+  const mark=(t,col,label,top)=>{ if(t<=0||t>=o.V) return; const x=X(t); g.strokeStyle=col; g.beginPath(); g.moveTo(x,0); g.lineTo(x,ch); g.stroke(); if(label){ g.fillStyle=col; g.fillText(label,Math.min(cw-g.measureText(label).width-2,x+3),top); } };
+  if(o.loop){ let i=0; for(let t=o.span; t<o.stop && i<400; t+=o.span, i++) mark(t,'rgba(95,212,196,.55)', X(o.span)>26 && i<6 ? '\u21ba' : '', 9); }
+  else if(o.span<o.stop-0.001) mark(o.span,'rgba(95,212,196,.8)','sample end',ch-4);
+  if(o.byp && !o.loop){ mark(o.end,'#ffb347','end (envelope bypassed)',9); }
+  else if(o.oneShot && !o.loop){ mark(o.end,'#ffb347','release (one-shot)',9); }
+  else mark(o.hold,'#ffb347','note off',9);
+  g.setLineDash([]);
+  if(!(o.oneShot&&!o.loop)){ const x=X(o.hold); g.fillStyle='#ffb347'; g.beginPath(); g.moveTo(x-4,0); g.lineTo(x+4,0); g.lineTo(x,6); g.fill(); }
+  g.fillStyle='rgba(139,147,163,.8)'; const tl=o.V.toFixed(2)+' s'; g.fillText('0',2,ch-3); g.fillText(tl,cw-g.measureText(tl).width-2,ch-3);
+  if(fx.smpOutLab){
+    const nn=['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'], k=Math.round(fx.params.root??39), rn=nn[(21+k)%12]+(Math.floor((21+k)/12)-1);
+    const ms=v=>v>=1?v.toFixed(2)+' s':Math.round(v*1000)+' ms';
+    const loops=o.loop?(Math.max(o.end,0)/o.span):0;
+    if(o.byp){ fx.smpOutLab.textContent='root '+rn+' \u00b7 envelope bypassed: '+(o.loop?'loop '+ms(o.span)+' runs until note-off ('+ms(o.hold)+')':'plays the whole sample ('+ms(o.span)+') at full level, whatever the note length'); return; }
+    fx.smpOutLab.textContent='root '+rn+' \u00b7 '+(o.oneShot&&!o.loop?'one-shot: plays the region ('+ms(o.span)+') whatever the note length':'note held '+ms(o.hold))
+      +(o.loop?' \u00b7 loop '+ms(o.span)+(o.span<0.02?' (very short: buzzes at '+Math.round(1/o.span)+' Hz)':'')+', \u00d7'+loops.toFixed(1)+' before note-off':(!o.oneShot&&o.hold>o.span+0.001?' \u00b7 sample runs out at '+ms(o.span)+' (no loop)':''))
+      +' \u00b7 release '+ms(o.relT);
+  }
 }
 function drawSampler(fx){
   const cv=fx.smpCv; if(!cv||!cv.isConnected) return;
@@ -7112,6 +7529,18 @@ function renderFxPanel(){
         const row=document.createElement('div'); row.className='knob-row';
         keys.forEach(key=>{ const p=def.params[key]; if(!p) return; row.appendChild(p.opts?wtSel(fx,key,p,lab+' '+(p.label||key)):makeKnob(fx,key,p)); });
         col.append(l2,row);
+        if(def.sampler && lab==='ENV'){                        // amp envelope curve, like the Wavetable's ENV tab
+          const ecv=document.createElement('canvas'); ecv.className='wt-cv smp-envcv'; ecv.title='Amp envelope: attack, decay to sustain, hold, release';
+          const wrap=document.createElement('div'); wrap.className='smp-envwrap';          // curve beside the knobs: section keeps the same height as its neighbours
+          const side=document.createElement('div'); side.className='smp-envside';
+          const byp=document.createElement('button'); byp.className='ir-btn smp-envbyp';
+          const syncByp=()=>{ const on=!!fx.params.envOff; byp.textContent=on?'BYPASSED':'BYPASS'; byp.classList.toggle('on',on); byp.setAttribute('aria-pressed',String(on));
+            byp.title=on?'Envelope bypassed: every note plays the whole sample at full level (loops run until note-off). Click to use the envelope again.':'Bypass the envelope: play the whole sample as-is, at full level, whatever the note length';
+            col.classList.toggle('byp',on); };
+          byp.onclick=()=>{ pushHistory(); fx.params.envOff=fx.params.envOff?0:1; applyFx(fx); syncByp(); fx._smpEnvKey=null; drawSmpEnv(fx); fx._smpOutKey=null; drawSmpOut(fx); };
+          syncByp();
+          fx.smpEnvCv=ecv; fx._smpEnvKey=null; col.insertBefore(wrap,row); side.append(ecv,byp); wrap.append(row,side);
+        }
         gw.appendChild(col);
       });
       if(def.sampler) buildSamplerExtras(gw,fx,def);
@@ -7648,10 +8077,11 @@ function drawWtMod(fx){
   if(tab[0]==='e'){
     const n=tab[3], a=p['e'+n+'A'], dd=p['e'+n+'D'], su=p['e'+n+'S'], r=p['e'+n+'R'];
     const T=Math.max(0.05,a+dd+r), susW=0.22*cw, sc=(cw-susW-8)/T, x0=4, y=v=>ch-4-v*(ch-10);
-    g.beginPath(); g.moveTo(x0,y(0)); g.lineTo(x0+a*sc,y(1));
-    for(let i=1;i<=24;i++){ const t=i/24*dd; g.lineTo(x0+(a+t)*sc, y(su+(1-su)*Math.exp(-5*t/dd))); }
+    g.beginPath(); g.moveTo(x0,y(0));
+    for(let i=1;i<=24;i++){ const t=i/24*a; g.lineTo(x0+t*sc, y(Math.pow(1e4,t/a)*1e-4)); }            // exponential attack from -80 dB (as WTAmpEnv)
+    for(let i=1;i<=24;i++){ const t=i/24*dd; g.lineTo(x0+(a+t)*sc, y(su+(1-su)*Math.exp(-3*t/dd))); }   // tau = dec/3, as the audio
     const xs=x0+(a+dd)*sc; g.lineTo(xs+susW,y(su));
-    for(let i=1;i<=24;i++){ const t=i/24*r; g.lineTo(xs+susW+t*sc, y(su*Math.exp(-5*t/r))); }
+    for(let i=1;i<=24;i++){ const t=i/24*r; g.lineTo(xs+susW+t*sc, y(su*Math.exp(-3*t/r))); }
     g.strokeStyle='#ffb347'; g.lineWidth=1.6; g.stroke();
     g.lineTo(xs+susW+r*sc,y(0)); g.lineTo(x0,y(0)); g.fillStyle='rgba(255,179,71,.12)'; g.fill();
     [[x0+a*sc,1],[xs,su],[xs+susW,su]].forEach(([x,v])=>{ g.fillStyle='#5fd4c4'; g.beginPath(); g.arc(x,y(v),3,0,7); g.fill(); });
@@ -7958,10 +8388,10 @@ function rollCfg(){
       return nn?{row, s:nn.s, l:nn.l, ref:nn}:null;
     },
     add(row,step){
-      const nn={k:PR_KEYS-1-row, s:step, l:prGrid};
+      const nn={k:PR_KEYS-1-row, s:step, l:Math.max(1,Math.min(newNoteLen(), it.lenSteps-step))};
       it.pat.push(nn);
       this.audition(row);
-      return {row, s:step, l:1, ref:nn};
+      return {row, s:step, l:nn.l, ref:nn, fresh:true};
     },
     move(h,row,step){ h.ref.k=PR_KEYS-1-row; h.ref.s=step; h.row=row; h.s=step; },
     resize(h,len){ h.ref.l=len; h.l=len; },
@@ -8175,7 +8605,9 @@ prCv.onpointerdown=e=>{
       drawPianoRoll(); return;
     }
     if(prMode2==='resize'){
+      if(prDragHandle.fresh && !moved) return;                    // just placed: keep the new-note length unless it's really dragged
       cfg.resize(prDragHandle, Math.max(G,Math.min(cfg.it.lenSteps-prDragHandle.s, snapT(st2-prDragHandle.s+1,G))));
+      prDragHandle.sized=true;
     }else if(prDragOrig && prDragOrig.length>1){
       prMoveGroup(cfg,prDragOrig,row2-row0,snapT(st2-step0,G));
       const me=prDragOrig.find(o=>o.h.ref?o.h.ref===prDragHandle.ref:(o.h.piece===prDragHandle.piece)); if(me) prDragHandle=me.h;
@@ -8192,6 +8624,7 @@ prCv.onpointerdown=e=>{
       const anchor=prSelList(cfg).find(h=>prKey(cfg,h)!==prKey(cfg,hit))||hit;
       prSelRange(cfg,anchor,hit);
     }
+    if(prDragHandle && prMode2==='resize' && (prDragHandle.fresh||prDragHandle.sized) && prDragHandle.l>0){ prLastLen=prDragHandle.l; localStorage.setItem('s16-prlastlen',prLastLen); }
     prDragHandle=null; prMode2=null; prDragOrig=null;
     renderItem(cfg.it);
     drawPianoRoll();
@@ -8640,7 +9073,7 @@ function frame(now){
     selectedTrack.fx.forEach(fx=>{
       if(fx.type==='eq'){ if((tick2 || (fx.nodes&&fx.nodes.dynOn)) && fx.eqCv && fx.eqCv.isConnected) drawEq(fx); }
       else if(fx.type==='wt'){ if(tick2 && fx.wtRoot && fx.wtRoot.isConnected){ drawWt(fx,'A'); drawWt(fx,'B'); drawWt(fx,'C'); drawWtFilter(fx,''); drawWtFilter(fx,'2'); drawWtMod(fx); if(tick2 && fx.synthCv) drawSynthScope(fx); } }
-      else if(fx.type==='sampler'){ if(fx.smpCv && fx.smpCv.isConnected) drawSampler(fx); }
+      else if(fx.type==='sampler'){ if(fx.smpCv && fx.smpCv.isConnected) drawSampler(fx); drawSmpEnv(fx); drawSmpOut(fx); }
       else if(tick2){ if(fx.scopeCv && fx.scopeCv.isConnected) drawScope(fx); if(fx.dnCv && fx.dnCv.isConnected) drawDnChart(fx); if(fx.pitchCv && fx.pitchCv.isConnected) drawTuneMeter(fx); }
     });
   }
@@ -9726,6 +10159,7 @@ function applyProject(proj,buffers){
     }
     state.tracks.master.fxBypass=!!(proj.master&&proj.master.fxBypass);
     masterFxb.classList.toggle('off',state.tracks.master.fxBypass);
+    MASTER_TRACK.fx.forEach(disposeFx);
     MASTER_TRACK.fx=[];
     ((proj.master&&proj.master.fx)||[]).forEach(sf=>{
       if(!FX_DEFS[sf.type]) return;

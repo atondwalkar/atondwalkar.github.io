@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>SHEESH DAW v0.9.1</title>
+<title>SHEESH DAW v0.9.2</title>
 <!--
   Drum kit sampled from "The Open Source Drum Kit" by Real Music Media
   (github.com/crabacus/the-open-source-drumkit), processed for metal.
@@ -715,6 +715,17 @@
 
   header .file-tools{margin-left:auto;display:flex;gap:6px;position:relative;align-items:center}
   header .file-tools button{padding:6px 10px;font-size:11px}
+  .file-menu{position:relative}
+  #file-btn .caret{font-size:9px;margin-left:3px;color:var(--ink-dim)}
+  #file-btn[aria-expanded="true"]{background:var(--amber);border-color:var(--amber);color:#221a08}
+  #file-btn[aria-expanded="true"] .caret{color:#221a08}
+  .file-drop{position:absolute;right:0;top:calc(100% + 4px);z-index:75;min-width:190px;display:flex;flex-direction:column;gap:2px;
+    background:#1e2229;border:1px solid var(--line);border-radius:8px;padding:4px;box-shadow:0 10px 30px rgba(0,0,0,.65)}
+  .file-drop[hidden]{display:none}
+  header .file-tools .file-drop button{display:flex;justify-content:space-between;align-items:center;gap:14px;text-align:left;
+    background:transparent;border-color:transparent;padding:7px 10px}
+  header .file-tools .file-drop button:hover,header .file-tools .file-drop button:focus-visible{background:var(--panel-2);border-color:var(--line)}
+  .file-drop kbd{font-family:inherit;font-size:10px;font-weight:500;letter-spacing:.04em;color:var(--ink-dim)}
   .io-lcd select{
     max-width:128px;background:#161a22;color:var(--ink);border:1px solid var(--line);
     border-radius:4px;font-size:11px;padding:2px 3px;
@@ -727,7 +738,7 @@
 
 <header>
   <div class="hrow">
-    <div class="brand"><b>SHEESH&nbsp;DAW<span class="ver">v0.9.1</span><a class="gh" href="https://github.com/atondwalkar/sheesh-daw" target="_blank" rel="noopener" title="SHEESH DAW on GitHub" aria-label="SHEESH DAW on GitHub"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg></a></b></div>
+    <div class="brand"><b>SHEESH&nbsp;DAW<span class="ver">v0.9.2</span><a class="gh" href="https://github.com/atondwalkar/sheesh-daw" target="_blank" rel="noopener" title="SHEESH DAW on GitHub" aria-label="SHEESH DAW on GitHub"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg></a></b></div>
     <button id="play" class="play-btn" aria-label="Play or stop">&#9654;</button>
     <button id="rec" class="rec-btn" aria-label="Record from microphone">&#9679;</button>
     <button id="loop" class="loop-btn" aria-pressed="false">LOOP</button>
@@ -738,10 +749,16 @@
     </div>
     <div class="tools file-tools">
       <button id="hk-btn" class="hk-btn" title="Show all keyboard shortcuts (?)" aria-expanded="false">Hotkeys</button>
-      <button id="new-proj" title="Save the current project, then start an empty one">New</button>
-      <button id="save-proj">Save</button>
-      <button id="open-proj">Open</button>
-      <button id="export-wav" title="Export a bar range as WAV">Export</button>
+      <div class="file-menu">
+        <button id="file-btn" aria-haspopup="menu" aria-expanded="false" aria-controls="file-drop">File <span class="caret">&#9662;</span></button>
+        <div id="file-drop" class="file-drop" role="menu" hidden>
+          <button id="new-proj" role="menuitem" title="Save the current project, then start an empty one">New</button>
+          <button id="open-proj" role="menuitem">Open…</button>
+          <button id="save-proj" role="menuitem">Save<kbd>Ctrl+S</kbd></button>
+          <button id="saveas-proj" role="menuitem">Save As…<kbd>Ctrl+Shift+S</kbd></button>
+          <button id="export-wav" role="menuitem" title="Export a bar range as WAV">Export…</button>
+        </div>
+      </div>
     </div>
   </div>
   <div class="hrow hrow2">
@@ -1094,6 +1111,19 @@ const HARM_INTS=['off','oct below','7th below','6th below','5th below','4th belo
 const panFmt=v=>{ const r=Math.round(v*100); return r===0?'C':Math.abs(r)+(r<0?'L':'R'); };
 const TUNE_KEYS=(()=>{ const n=['C','C#','D','D#','E','F','F#','G','G#','A','A#','B']; return n.map(x=>x+' maj').concat(n.map(x=>x+' min')).concat(['chromatic']); })();
 const STUT_DIVS=['1/4','1/8','1/16','1/32','1/64','1/8T','1/16T','1/32T'];
+const STUT_BEATS=[1,0.5,0.25,0.125,0.0625,1/3,1/6,1/12];                 // beats per repeat for each STUT_DIVS entry
+function stutRateFmt(v){                                                    // '8.0 Hz' + the note value it matches at the current tempo
+  const hz=(+v)<10?(+v).toFixed(1):Math.round(+v), bpm=(typeof state!=='undefined'&&state.bpm)||120;
+  let best=null; STUT_BEATS.forEach((b,i)=>{ const f=bpm/60/b, e=Math.abs(Math.log(v/f)); if(e<0.04 && (!best||e<best.e)) best={e,n:STUT_DIVS[i]}; });
+  return hz+' Hz'+(best?' \u2248'+best.n:'');
+}
+/* projects saved with the old note-fraction stutter ('div') keep their speed: convert to Hz at the project tempo */
+function migrateStutter(fx,prms){
+  if(fx.type!=='stutter' || !prms || prms.div==null || prms.rate!=null) return;
+  const beats=STUT_BEATS[Math.round(prms.div)]||0.25;
+  fx.params.rate=+Math.max(1,Math.min(64,(state.bpm||120)/60/beats)).toFixed(2);
+  delete fx.params.div;
+}
 const FX_DEFS={
   sampler:{name:'Sampler', inst:true, sampler:true, noScope:true, color:'#ff8fd2',
     params:{
@@ -1293,7 +1323,7 @@ const FX_DEFS={
   }},
   stutter:{name:'Stutter', color:'#ffe066', params:{
     on:{min:0,max:1,step:1,val:0,opts:['off','on'],fmt:v=>v?'on':'off',label:'latch'},
-    div:{min:0,max:7,step:1,val:2,opts:STUT_DIVS,fmt:v=>STUT_DIVS[Math.round(v)]||'1/16',label:'div'},
+    rate:{min:1,max:64,step:0.1,val:8,log:true,fmt:v=>stutRateFmt(v),label:'rate'},    // repeats per second (was a note fraction: 'div')
     gate:{min:0,max:1,step:0.01,val:1,fmt:v=>Math.round(v*100)+'%'},
     pitch:{min:-24,max:24,step:1,val:0,fmt:v=>(v>0?'+':'')+v+' st/s',label:'pitch ramp'},
     decay:{min:0,max:1,step:0.01,val:0,fmt:v=>Math.round(v*100)+'%'},
@@ -2033,27 +2063,30 @@ process(inputs,outputs,params){
 registerProcessor('s16-crush',S16Crush);
 class S16Stutter extends AudioWorkletProcessor{
 static get parameterDescriptors(){return[
- {name:'div',defaultValue:2,minValue:0,maxValue:7},{name:'on',defaultValue:0,minValue:0,maxValue:1},
+ {name:'rate',defaultValue:8,minValue:1,maxValue:64},{name:'on',defaultValue:0,minValue:0,maxValue:1},
  {name:'gate',defaultValue:1,minValue:0,maxValue:1},{name:'pitch',defaultValue:0,minValue:-24,maxValue:24},
  {name:'decay',defaultValue:0,minValue:0,maxValue:1},{name:'bpm',defaultValue:120,minValue:30,maxValue:300}]}
 constructor(){super();this.R=Math.ceil(sampleRate*2);this.buf=[new Float32Array(this.R),new Float32Array(this.R)];this.w=0;
- this.active=false;this.wasOn=false;this.capLen=1;this.cap0=0;this.pos=0;this.rep=0;this.g=1;this.rel=0;this.first=true;this.frozen=false;this.BEATS=[1,0.5,0.25,0.125,0.0625,1/3,1/6,1/12];}
+ this.active=false;this.wasOn=false;this.capLen=1;this.cap0=0;this.capN=0;this.capMax=Math.min(this.R-1,sampleRate);this.pos=0;this.rep=0;this.g=1;this.rel=0;this.first=true;this.frozen=false;
+ // transport: stopped -> silent and forget the slice; started -> a latched stutter captures a fresh slice from the play position
+ this.running=true;
+ this.port.onmessage=e=>{ const d=e.data||{}; if(d.transport==null) return;
+  this.running=!!d.transport; this.active=false; this.frozen=false; this.rel=0; this.pos=0; this.wasOn=false; };}
 process(inputs,outputs,params){
  const inp=inputs[0],out=outputs[0]; if(!inp||!inp.length) return true;
- const on=params.on[0]>=0.5,gate=params.gate[0],pitch=params.pitch[0],decay=params.decay[0],bpm=params.bpm[0];
+ const on=this.running && params.on[0]>=0.5,gate=params.gate[0],pitch=params.pitch[0],decay=params.decay[0];
  const R=this.R,fadeN=Math.round(0.005*sampleRate),gateN=Math.round(0.002*sampleRate),relStep=1/(0.01*sampleRate);
  if(on&&!this.wasOn){
-  const beats=this.BEATS[Math.round(params.div[0])]||0.25;
-  this.capLen=Math.max(fadeN*2,Math.min(R-1,Math.round(60/bpm*beats*sampleRate)));
-  this.cap0=this.w; this.pos=0; this.rep=0; this.g=1; this.active=true; this.first=true; this.frozen=false; this.rel=1;
+  this.capLen=Math.max(fadeN*2,Math.min(R-1,Math.round(sampleRate/Math.max(1,params.rate[0]))));
+  this.cap0=this.w; this.capN=0; this.pos=0; this.rep=0; this.g=1; this.active=true; this.first=true; this.frozen=false; this.rel=1;
  }
  if(!on&&this.wasOn){ this.active=false; this.frozen=false; }
  this.wasOn=on;
  const n0=inp[0],n1=inp[1]||inp[0],o0=out[0],o1=out[1],b0=this.buf[0],b1=this.buf[1];
- const L=this.capLen,Lsec=L/sampleRate;
+ let L=this.capLen,Lsec=L/sampleRate;
  for(let n=0;n<o0.length;n++){
   const xl=n0?n0[n]:0, xr=n1?n1[n]:0;
-  if(!this.frozen){ b0[this.w]=xl; b1[this.w]=xr; }
+  if(!this.frozen){ b0[this.w]=xl; b1[this.w]=xr; if(this.active){ this.capN++; if(!this.first && this.capN>=this.capMax) this.frozen=true; } }
   let yl=xl, yr=xr;
   if(this.active||this.rel>0){
    let wl=xl,wr=xr;
@@ -2070,7 +2103,9 @@ process(inputs,outputs,params){
    if(gate<1){ const gEnd=L*gate; if(p>gEnd) env=0; else if(p>gEnd-gateN) env*=(gEnd-p)/gateN; }
    wl*=env; wr*=env;
    this.pos++;
-   if(this.pos>=L){ this.pos=0; this.rep=Math.min(this.rep+1,4096); this.g*=(1-decay*0.5); if(this.first){ this.first=false; this.frozen=true; } }
+   if(this.pos>=L){ this.pos=0; this.rep=Math.min(this.rep+1,4096); this.g*=(1-decay*0.5); if(this.first) this.first=false;
+    // new rate takes effect on a repeat boundary; slower rates reach into audio recorded after the trigger (up to ~1 s)
+    this.capLen=L=Math.max(fadeN*2,Math.min(this.capN,this.capMax,Math.round(sampleRate/Math.max(1,params.rate[0])))); Lsec=L/sampleRate; }
    if(!this.active) this.rel=Math.max(0,this.rel-relStep);
    const k=this.rel; yl=wl*k+xl*(1-k); yr=wr*k+xr*(1-k);
   }
@@ -3290,7 +3325,7 @@ function applyFxTo(fx,n){
       }else if(fx.type==='crush'){
         sp('bits',p.bits??8); sp('rate',p.rate??12000); sp('interp',p.interp||0); sp('dither',p.dither||0); sp('tone',p.tone??8000); sp('noise',p.noise||0);
       }else if(fx.type==='stutter'){
-        sp('div',p.div??2); sp('on',p.on||0); sp('gate',p.gate??1); sp('pitch',p.pitch||0); sp('decay',p.decay||0); sp('bpm',state.bpm);
+        sp('rate',p.rate??8); sp('on',p.on||0); sp('gate',p.gate??1); sp('pitch',p.pitch||0); sp('decay',p.decay||0); sp('bpm',state.bpm);
       }else{
         sp('learn',fx._learn?1:0); sp('reduct',p.reduct??12); sp('sens',p.sens??6); sp('fsmooth',p.fsmooth??3); sp('attack',p.attack??5); sp('release',p.release??80); sp('mix',p.mix??1);
         if(fx.noiseProfile && n.fxNode._dnProf!==fx.noiseProfile){ n.fxNode._dnProf=fx.noiseProfile; n.fxNode.port.postMessage({type:'setProfile', fftSize:fx.profN||2048, sampleRate:fx.profSr||ctx.sampleRate, data:fx.noiseProfile}); }
@@ -4224,7 +4259,7 @@ function noiseBuf(c){
 }
 function synthAn(fx){
   if(!ctx) return null;
-  if(!fx._scopeAn){ fx._scopeAn=ctx.createAnalyser(); fx._scopeAn.fftSize=2048; }
+  if(!fx._scopeAn || fx._scopeAn.context!==ctx){ fx._scopeAn=ctx.createAnalyser(); fx._scopeAn.fftSize=2048; }   // new one after an engine rebuild (nodes can't cross contexts)
   return fx._scopeAn;
 }
 function anyTrackSolo(){ return Object.values(state.tracks).some(tr=>tr.solo); }
@@ -4432,11 +4467,16 @@ function playFrom(pos){
   DIAG.sched.lastTick=0;
   timerId=startTicker();
   state.playing=true;
+  stutterTransport(true);
   if(autoTracks().some(t=>t.autoMode==='write' && t.autos && t.autos.length)) pushHistory();
   applyAutomation(startPos/stepDur());
   playBtn.classList.add('on'); playBtn.innerHTML='&#9632;';
 }
+function stutterTransport(playing){                       // stutter repeats belong to playback: stop them with it
+  tracksAll.concat([MASTER_TRACK]).forEach(t=>t.fx.forEach(f=>{ const n=f.type==='stutter'&&f.nodes&&f.nodes.fxNode; if(n){ try{ n.port.postMessage({transport:playing?1:0}); }catch(e){} } }));
+}
 function haltPlayback(){
+  stutterTransport(false);
   if(state.playing) startPos=userPos;        // stop returns to where the user placed the playhead
   autoStopWrites();
   stopTicker();
@@ -6158,7 +6198,7 @@ function pasteTrackData(d,after){
   (d.fx||[]).forEach(sf=>{
     if(!FX_DEFS[sf.type]) return;
     const fx=addFxToTrack(tr,sf.type);
-    Object.assign(fx.params,sf.params); fx.bypass=sf.bypass;
+    Object.assign(fx.params,sf.params); migrateStutter(fx,sf.params); fx.bypass=sf.bypass;
     if(sf.irBuffer){ fx.irBuffer=sf.irBuffer; fx.irName=sf.irName; }
     if(sf.sampleBuffer){ fx.sampleBuffer=sf.sampleBuffer; fx.sampleName=sf.sampleName; }
     if(sf.noiseProfile){ fx.noiseProfile=sf.noiseProfile; fx.profSr=sf.profSr; fx.profN=sf.profN; fx.noiseSec=sf.noiseSec; }
@@ -6735,9 +6775,10 @@ function makeKnob(fx,key,p){
   const ind=document.createElement('i'); k.appendChild(ind);
   const lab=document.createElement('span'); lab.className='klab'; lab.textContent=p.label||key;
   const read=document.createElement('span'); read.className='kread';
-  const span=p.max-p.min;
+  const span=p.max-p.min, lg=!!p.log && p.min>0;                           // p.log: logarithmic taper (e.g. rates in Hz)
+  const frac=v=>lg?Math.log(v/p.min)/Math.log(p.max/p.min):(v-p.min)/span, unfrac=f=>lg?p.min*Math.pow(p.max/p.min,f):p.min+f*span;
   const show=v=>{
-    ind.style.transform='translateX(-50%) rotate('+(-135+270*(v-p.min)/span)+'deg)';
+    ind.style.transform='translateX(-50%) rotate('+(-135+270*frac(v))+'deg)';
     read.textContent=p.fmt(v);
   };
   const set=v=>{
@@ -6754,8 +6795,8 @@ function makeKnob(fx,key,p){
     try{ k.setPointerCapture(e.pointerId); }catch(_){}
     pushHistory();
     const tid=autoFxTouchId(fx,key); if(tid) autoTouch(tid,true);
-    const y0=e.clientY, v0=fx.params[key];
-    k.onpointermove=ev=>set(v0+(y0-ev.clientY)/140*span);
+    const y0=e.clientY, f0=frac(fx.params[key]);
+    k.onpointermove=ev=>set(unfrac(Math.max(0,Math.min(1,f0+(y0-ev.clientY)/140))));
     k.onpointerup=k.onpointercancel=()=>{ k.onpointermove=null; if(tid) autoTouch(tid,false); };
   };
   k.ondblclick=()=>set(p.val);
@@ -9820,7 +9861,12 @@ function loadTab(t){
   setProjectName(t.name||'Untitled');
   selectObj(null); clearTrackSel();
   seek(t.userPos||0); if(tlScroll) tlScroll.scrollLeft=t.scroll||0;
-  renderTabs();
+  renderTabs(); updateSaveTitle();
+}
+function updateSaveTitle(){
+  const b=document.getElementById('save-proj'); if(!b) return;
+  const h=activeTab&&activeTab.fileHandle;
+  b.title=h ? 'Save to '+h.name+' (Ctrl+S)' : 'Save — no file yet, asks where (Ctrl+S)';
 }
 function switchTab(t){ if(t===activeTab) return; stashActiveTab(); loadTab(t); }
 function newTab(){
@@ -10039,12 +10085,24 @@ function abToB64(ab){
   for(let i=0;i<u8.length;i+=0x8000) bin+=String.fromCharCode.apply(null,u8.subarray(i,i+0x8000));
   return btoa(bin);
 }
-async function saveProject(){
+/* Save writes straight back to the tab's file (the handle it was opened from / last saved to);
+   Save As — or a Save with no file yet — asks where. Without the File System Access API every save is a named download. */
+async function fileWritable(h){
+  try{
+    if(!h.queryPermission) return true;
+    if(await h.queryPermission({mode:'readwrite'})==='granted') return true;
+    return await h.requestPermission({mode:'readwrite'})==='granted';
+  }catch(e){ return false; }
+}
+async function saveProject(opts){
+  const as=!!(opts&&opts.as);
   fileSay('Saving…');
   try{
-    // 1. where to? (picker in Chrome/Edge, named download elsewhere) — the chosen name becomes the project name
+    // 1. where to? (the tab's own file, else picker in Chrome/Edge, else named download) — a picked name becomes the project name
     let handle=null, dlName=null;
-    if(window.showSaveFilePicker){
+    const cur=activeTab&&activeTab.fileHandle;
+    if(!as && cur && await fileWritable(cur)) handle=cur;
+    else if(window.showSaveFilePicker){
       try{
         handle=await showSaveFilePicker({
           suggestedName:safeProjectFile()+'.sheesh',
@@ -10057,6 +10115,7 @@ async function saveProject(){
         return false;
       }
       setProjectName(handle.name);
+      if(activeTab) activeTab.fileHandle=handle;
     }else{
       let name=prompt('File name:',safeProjectFile()+'.sheesh');
       if(name===null){ fileSay(''); return false; }
@@ -10119,7 +10178,8 @@ async function saveProject(){
       }finally{ window.removeEventListener('beforeunload',guard); }
       const onDisk=await handle.getFile().then(f=>f.size).catch(()=>-1);
       if(onDisk>=0 && onDisk!==total) throw new Error('written file is '+onDisk+' bytes, expected '+total+' \u2014 disk full or interrupted?');
-      markClean();
+      if(activeTab) activeTab.fileHandle=handle;
+      markClean(); updateSaveTitle();
       fileSay(''); fileFlash('Saved '+handle.name+' ('+(total/1048576).toFixed(1)+' MB)');
       return true;
     }
@@ -10146,10 +10206,11 @@ async function newProject(){
   undoStack.length=0; redoStack.length=0; pendingSnap=null;
   selectObj(null); clearTrackSel();
   setProjectName('Untitled');
+  if(activeTab){ activeTab.fileHandle=null; updateSaveTitle(); }
   seek(0);
   fileFlash('New project.');
 }
-async function loadProject(f){
+async function loadProject(f,handle){
   stopAll();
   initAudio();
   fileSay('Loading project\u2026');
@@ -10180,6 +10241,7 @@ async function loadProject(f){
     if(!tabIsBlank()) newTab();                               // an open project keeps its tab; the file gets its own
     applyProject(proj,buffers);
     setProjectName(proj.name||f.name);
+    if(activeTab){ activeTab.fileHandle=handle||null; updateSaveTitle(); }
     markClean();
     seek(0);
     fileSay(''); fileFlash('Project loaded'+(total?' ('+total+' audio file'+(total>1?'s':'')+')':'')+'.');
@@ -10231,7 +10293,7 @@ function applyProject(proj,buffers){
     ((proj.master&&proj.master.fx)||[]).forEach(sf=>{
       if(!FX_DEFS[sf.type]) return;
       const fx=makeFx(sf.type);
-      Object.assign(fx.params,sf.params||{});
+      Object.assign(fx.params,sf.params||{}); migrateStutter(fx,sf.params);
       fx.bypass=!!sf.bypass;
       if(sf.ir!==undefined && buffers[sf.ir]){ fx.irBuffer=buffers[sf.ir]; fx.irName=sf.irName; }
       if(sf.smp!==undefined && buffers[sf.smp]){ fx.sampleBuffer=buffers[sf.smp]; fx.sampleName=sf.smpName; }
@@ -10277,7 +10339,7 @@ function applyProject(proj,buffers){
         const fx=addFxToTrack(tr,sf.type);
         let prms=sf.params||{};
         if(sf.type==='eq' && ('low' in prms)) prms=eqBands(prms.low||0,prms.mid||0,prms.high||0);
-        Object.assign(fx.params,prms);
+        Object.assign(fx.params,prms); migrateStutter(fx,prms);
         fx.bypass=!!sf.bypass;
         if(sf.ir!==undefined && buffers[sf.ir]){ fx.irBuffer=buffers[sf.ir]; fx.irName=sf.irName; }
         if(sf.smp!==undefined && buffers[sf.smp]){ fx.sampleBuffer=buffers[sf.smp]; fx.sampleName=sf.smpName; }
@@ -10408,14 +10470,48 @@ function toggleHkPop(){
   const b=document.getElementById('hk-btn'); if(b) b.setAttribute('aria-expanded','true');
   setTimeout(()=>document.addEventListener('pointerdown',hkPopOutside,true),0);
 }
-document.getElementById('hk-btn').onclick=e=>{ e.stopPropagation(); toggleHkPop(); };
+document.getElementById('hk-btn').onclick=e=>{ e.stopPropagation(); closeFileMenu(); toggleHkPop(); };
+/* File menu: New / Open / Save / Save As / Export in one dropdown; closes on pick, outside click or Escape */
+const fileBtn=document.getElementById('file-btn'), fileDrop=document.getElementById('file-drop');
+function fileMenuOutside(e){ if(!e.target.closest('.file-menu')) closeFileMenu(); }
+function fileMenuKey(e){
+  if(e.key==='Escape'){ e.stopPropagation(); closeFileMenu(); fileBtn.focus(); return; }
+  if(e.key==='ArrowDown'||e.key==='ArrowUp'){
+    e.preventDefault(); e.stopPropagation();
+    const its=[...fileDrop.querySelectorAll('button:not(:disabled)')], i=its.indexOf(document.activeElement);
+    const n=its.length, j=e.key==='ArrowDown' ? (i<0?0:(i+1)%n) : (i<0?n-1:(i-1+n)%n);
+    its[j].focus();
+  }
+}
+function closeFileMenu(){
+  if(fileDrop.hidden) return;
+  fileDrop.hidden=true; fileBtn.setAttribute('aria-expanded','false');
+  document.removeEventListener('pointerdown',fileMenuOutside,true); document.removeEventListener('keydown',fileMenuKey,true);
+}
+function openFileMenu(focusFirst){
+  closeHkPop();
+  fileDrop.hidden=false; fileBtn.setAttribute('aria-expanded','true');
+  document.addEventListener('pointerdown',fileMenuOutside,true); document.addEventListener('keydown',fileMenuKey,true);
+  if(focusFirst) fileDrop.querySelector('button').focus();
+}
+fileBtn.onclick=e=>{ e.stopPropagation(); fileDrop.hidden ? openFileMenu(e.detail===0) : closeFileMenu(); };   // keyboard-opened -> focus first item
+fileDrop.addEventListener('click',e=>{ if(e.target.closest('button')) closeFileMenu(); },true);
 document.getElementById('save-proj').onclick=()=>{ saveProject(); };
+document.getElementById('saveas-proj').onclick=()=>{ saveProject({as:true}); };
+document.getElementById('saveas-proj').title='Save to a new file (Ctrl+Shift+S) — Save then writes to that file';
 document.getElementById('new-proj').onclick=()=>{ newTab(); };
 document.getElementById('new-proj').title='Open a fresh project in a new tab (the current one stays open)';
 document.getElementById('tab-add').onclick=()=>newTab();
 TABS.push(activeTab={id:++tabCounter,name:projectName||'Untitled',snap:null,undo:[],redo:[],userPos:0,scroll:0,dirty:false}); renderTabs();
 const projIn=document.getElementById('proj-in');
-document.getElementById('open-proj').onclick=()=>projIn.click();
+document.getElementById('open-proj').onclick=async()=>{
+  if(!window.showOpenFilePicker){ projIn.click(); return; }
+  let h;
+  try{ [h]=await showOpenFilePicker({types:[{description:'SHEESH DAW project',accept:{'application/octet-stream':['.sheesh','.zip','.json']}}]}); }
+  catch(e){ if(!(e && e.name==='AbortError')) projIn.click(); return; }   // picker unavailable here (e.g. iframe) -> plain file input
+  loadProject(await h.getFile(),h);
+};
+updateSaveTitle();
 projIn.onchange=()=>{ const f=projIn.files[0]; projIn.value=''; if(f) loadProject(f); };
 
 /* ============================== mixer ============================== */
@@ -10595,7 +10691,7 @@ async function rebuildEngine(reason){
     try{ midiAllOff(); }catch(_){}
     try{ killVoices(); }catch(_){}
     const old=ctx;
-    tracksAll.forEach(t=>{ const tr=state.tracks[t.id]; tr.gain=null; tr.input=null; tr.panner=null; tr.meterAnL=tr.meterAnR=null; t.fx.forEach(f=>{ f.nodes=null; f._liveMacros=[]; }); });
+    tracksAll.forEach(t=>{ const tr=state.tracks[t.id]; tr.gain=null; tr.input=null; tr.panner=null; tr.meterAnL=tr.meterAnR=null; t.fx.forEach(f=>{ f.nodes=null; f._liveMacros=[]; f._scopeAn=null; }); });
     MASTER_TRACK.fx.forEach(f=>{ f.nodes=null; });
     state.tracks.master.gain=null; state.tracks.master.input=null;
     monSrc=null; liveWorklet=false; ctx=null;
@@ -10762,6 +10858,7 @@ document.addEventListener('keydown',e=>{
   const tg=e.target, tag=tg.tagName;
   const typing=tag==='TEXTAREA' || tg.isContentEditable ||
     (tag==='INPUT' && !['range','checkbox','radio','button','color','file'].includes((tg.type||'text').toLowerCase()));
+  if((e.ctrlKey||e.metaKey) && !e.altKey && e.code==='KeyS'){ e.preventDefault(); if(!e.repeat) saveProject({as:e.shiftKey}); return; }   // even mid-typing
   if(typing) return;                             // real text entry (rename, tempo, bar range…) keeps its keys
   if(e.code==='Space'){
     e.preventDefault();

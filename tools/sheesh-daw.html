@@ -5459,7 +5459,43 @@ function laneTrackAt(clientY){
 /* group drag: every selected clip/item moves with the one being dragged (time + track offset preserved) */
 function dragGroupBegin(primary){
   const objs=selHas(primary)?selSet.map(selObjOf):[primary];
-  return objs.map(o=>({o, audio:!!o.buffer, start:o.buffer?o.start:o.startStep, tIdx:tracksAll.findIndex(t=>t.id===o.trackId)}));
+  const G=objs.map(o=>({o, audio:!!o.buffer, start:o.buffer?o.start:o.startStep, tIdx:tracksAll.findIndex(t=>t.id===o.trackId)}));
+  G.auto=autoDragBegin(G);
+  return G;
+}
+/* Automation follows the clips it sits under: at drag start snapshot each source track's lanes plus the span its moving
+   clips cover (earliest start .. latest end, in ticks); every drag step rebuilds the lanes from that snapshot, so the
+   dots move live and a drag back restores them exactly. Lanes with no point under the span are left alone; a move
+   onto another track leaves the automation where it is (it belongs to that track's controls). */
+function autoDragBegin(G){
+  const sd=stepDur(), per=new Map();
+  G.forEach(g=>{
+    const tr=tracksAll.find(t=>t.id===g.o.trackId); if(!tr || !(tr.autos||[]).length) return;
+    const s0=g.audio?g.start/sd:g.start, s1=g.audio?(g.start+clipTlDur(g.o))/sd:g.start+g.o.lenSteps;
+    const e=per.get(tr)||{tr, s0:Infinity, s1:-Infinity};
+    e.s0=Math.min(e.s0,s0); e.s1=Math.max(e.s1,s1); per.set(tr,e);
+  });
+  return [...per.values()].map(e=>({...e, lanes:e.tr.autos.map(a=>({a, pts0:a.pts.map(p=>({...p}))}))
+    .filter(l=>l.pts0.some(p=>p.s>=e.s0 && p.s<=e.s1))}));
+}
+function autoDragApply(G,dTicks,offTrack){
+  (G.auto||[]).forEach(e=>{
+    e.lanes.forEach(({a,pts0})=>{
+      if(!dTicks || offTrack){ a.pts=pts0.map(p=>({...p})); drawAuto(e.tr,a); return; }
+      const ref={pts:pts0, hold:a.hold};
+      const inSpan=p=>p.s>=e.s0 && p.s<=e.s1;
+      const mv=pts0.filter(inSpan).map(p=>({...p}));
+      if(!mv.some(p=>Math.abs(p.s-e.s0)<1e-6)) mv.push({s:e.s0, v:autoValueAt(ref,e.s0)});    // anchor the clip's edges so the
+      if(!mv.some(p=>Math.abs(p.s-e.s1)<1e-6)) mv.push({s:e.s1, v:autoValueAt(ref,e.s1)});    // moved section keeps its exact shape
+      const d0=e.s0+dTicks, d1=e.s1+dTicks;
+      const stay=pts0.filter(p=>!inSpan(p) && !(p.s>=d0-1e-6 && p.s<=d1+1e-6)).map(p=>({...p}));   // whatever sat where the clips land is replaced
+      const byS=new Map();                                        // one point per time; a moved point wins
+      stay.forEach(p=>byS.set(+p.s.toFixed(4),p));
+      mv.forEach(p=>{ const s2=Math.max(0,+(p.s+dTicks).toFixed(4)); byS.set(s2,{s:s2, v:p.v}); });
+      a.pts=[...byS.values()].sort((x,y)=>x.s-y.s);
+      drawAuto(e.tr,a);
+    });
+  });
 }
 function dragGroupMove(G,primary,dSec,targetTrack){
   const pg=G.find(g=>g.o===primary); if(!pg) return false;
@@ -5476,6 +5512,7 @@ function dragGroupMove(G,primary,dSec,targetTrack){
     if(tt && moveToTrack(g.o,g.audio?'clips':'items',tt)) moved=true;
     if(g.audio){ g.o.el.style.left=Math.round(g.o.start*PPS)+'px'; g.o._dirty=true; } else renderItem(g.o);   // full waveform redraw waits for release
   });
+  autoDragApply(G, pg.audio ? (pg.o.start-pg.start)/sd : pg.o.startStep-pg.start, dT!==0);
   return moved;
 }
 function moveToTrack(obj,listKey,target){
@@ -5990,7 +6027,7 @@ function mergeItems(tr,items){
   items.forEach(src=>{
     const off=src.startStep-s0;
     if(kind==='drums') DRUMS.forEach(d=>{ const a=src.pat[d.id]; for(let i=0;i<a.length;i++) if(a[i] && off+i<it.lenSteps){ it.pat[d.id][off+i]=a[i]; const pv=hitPitch(src,d.id,i); if(pv) setHitPitch(it,d.id,off+i,pv); } });
-    else if(kind==='piano') src.pat.forEach(nn=>it.pat.push({...nn, s:nn.s+off}));
+    else if(kind==='piano'){ src.pat.forEach(nn=>it.pat.push({...nn, s:nn.s+off})); (src.ped||[]).forEach(iv=>(it.ped=it.ped||[]).push([iv[0]+off,iv[1]+off])); }
     else for(let i=0;i<src.pat.length;i++) if(src.pat[i]>=0 && off+i<it.lenSteps) it.pat[off+i]=src.pat[i];
   });
   const first=items.slice().sort((a,b)=>a.startStep-b.startStep)[0];
@@ -6065,7 +6102,7 @@ function copySelection(){
   itemClipboard={kind:'multi', entries:objs.map(x=>{
     const o=x.o, base={dt:tOf(o)-t0, dTrack:x.tIdx-ti0, grp:o.grp??null};
     if(o.buffer) return {...base, kind:'audio', buffer:o.buffer, offset:o.offset, dur:o.dur, name:o.name, nativeBpm:o.nativeBpm, stretch:o.stretch||1, gain:o.gain||0, fadeIn:o.fadeIn||0, fadeOut:o.fadeOut||0, semis:o.semis||0, rev:!!o.rev};
-    return {...base, kind:'midi', mkind:o.kind, lenSteps:o.lenSteps, name:o.name, scale:o.scale||'', pat:serPat(o), pt:serPitch(o)};
+    return {...base, kind:'midi', mkind:o.kind, lenSteps:o.lenSteps, name:o.name, scale:o.scale||'', pat:serPat(o), pt:serPitch(o), ped:(o.ped||[]).map(iv=>[iv[0],iv[1]])};
   })};
   lastCopied='items';
   return true;
@@ -6144,7 +6181,7 @@ function pasteTrackData(d,after){
   const grpMap={};
   (d.items||[]).forEach(si=>{
     const it=addMidiItem(tr,si.kind,si.startStep,si.lenSteps);
-    restorePat(it,{mkind:si.kind,pat:si.pat}); restorePitch(it,si.pt); it.name=si.name; it.scale=si.scale||''; it.el.querySelector('.cname').textContent=it.name;
+    restorePat(it,{mkind:si.kind,pat:si.pat}); restorePitch(it,si.pt); it.ped=Array.isArray(si.ped)?si.ped.map(iv=>[iv[0],iv[1]]):[]; it.name=si.name; it.scale=si.scale||''; it.el.querySelector('.cname').textContent=it.name;
     if(si.grp!=null){ grpMap[si.grp]=grpMap[si.grp]||++grpCounter; it.grp=grpMap[si.grp]; updateGrpTag(it); }
     renderItem(it);
   });
@@ -8298,7 +8335,8 @@ function prSelRange(cfg,anchor,hit){
 }
 function prMoveGroup(cfg,orig,dRow,dStep){
   // orig: [{h, row, s}] snapshot; clamp so every note stays inside the item / valid rows
-  orig.forEach(o=>{ dStep=Math.max(dStep,-o.s); dStep=Math.min(dStep,cfg.it.lenSteps-o.h.l-o.s); dRow=Math.max(dRow,-o.row); dRow=Math.min(dRow,cfg.rows-1-o.row); });
+  const lastRow=(cfg.keyRows||cfg.rows)-1;
+  orig.forEach(o=>{ dStep=Math.max(dStep,-o.s); dStep=Math.min(dStep,cfg.it.lenSteps-o.h.l-o.s); if(o.h.ped) return; dRow=Math.max(dRow,-o.row); dRow=Math.min(dRow,lastRow-o.row); });
   if(cfg.kind==='drums'){
     if(orig.some(o=>!KEY_TO_DRUM[PR_KEYS-1-(o.row+dRow)])) dRow=0;
     const it=cfg.it;
@@ -8308,6 +8346,11 @@ function prMoveGroup(cfg,orig,dRow,dStep){
     orig.forEach(o=>cfg.move(o.h,o.row+dRow,o.s+dStep));
   }
   prSelSet(cfg,orig.map(o=>o.h));
+}
+function normPed(it){
+  const P=(it.ped||[]).filter(iv=>iv[1]>iv[0]).sort((x,y)=>x[0]-y[0]), out=[];
+  P.forEach(iv=>{ const last=out[out.length-1]; if(last && iv[0]<last[1]){ last[1]=Math.max(last[1],iv[1]); } else out.push(iv); });
+  it.ped=out;
 }
 function prDeleteSelected(){
   const cfg=rollCfg(); if(!cfg || !prSel.size) return false;
@@ -8376,26 +8419,42 @@ function rollCfg(){
     pitch:h=>hitPitch(it,h.piece,h.s),
     setPitch(h,p){ setHitPitch(it,h.piece,h.s,p); },
   };
-  return {...base, kind:'piano', fixedLen:false,
-    noteColor:()=>'#8adf9a',
-    audition:r=>prPreview(it, PR_KEYS-1-r, TPQ),
-    notes:()=> it.pat.map(nn=>({row:PR_KEYS-1-nn.k, s:nn.s, l:nn.l, v:noteVel(nn), ref:nn})),
-    vel:h=>noteVel(h.ref),
-    setVel(h,v){ h.ref.v=+Math.max(0.05,Math.min(1,v)).toFixed(2); },
+  // an extra SUSTAIN row under the keys holds the clip's sustain-pedal ranges (it.ped, [down, up] in ticks): drawn,
+  // added, moved, resized and deleted like notes; a range's [down,up] array is its identity for selection
+  const SUS=PR_KEYS;
+  const pedH=iv=>({row:SUS, s:iv[0], l:iv[1]-iv[0], v:1, ref:iv, ped:true});
+  // ranges never overlap: a move / resize / new range stops at its neighbour's edge (touching = a pedal change)
+  const pedRoom=iv=>{ let lo=0, hi=it.lenSteps; (it.ped||[]).forEach(q=>{ if(q===iv) return; if(q[1]<=iv[0]) lo=Math.max(lo,q[1]); else if(q[0]>=iv[1]) hi=Math.min(hi,q[0]); }); return [lo,hi]; };
+  return {...base, kind:'piano', fixedLen:false, rows:PR_KEYS+1, keyRows:PR_KEYS, susRow:SUS,
+    noteColor:r=>r===SUS?'#6cc4ff':'#8adf9a',
+    audition:r=>{ if(r<SUS) prPreview(it, PR_KEYS-1-r, TPQ); },
+    notes:()=> it.pat.map(nn=>({row:PR_KEYS-1-nn.k, s:nn.s, l:nn.l, v:noteVel(nn), ref:nn})).concat((it.ped||[]).map(pedH)),
+    vel:h=>h.ped?1:noteVel(h.ref),
+    setVel(h,v){ if(h.ped) return; h.ref.v=+Math.max(0.05,Math.min(1,v)).toFixed(2); },
     hitAt(row,step){
+      if(row===SUS){ const iv=(it.ped||[]).find(q=>step>=q[0] && step<q[1]); return iv?pedH(iv):null; }
       const k=PR_KEYS-1-row;
       const nn=it.pat.find(n2=>n2.k===k && step>=n2.s && step<n2.s+n2.l);
       return nn?{row, s:nn.s, l:nn.l, ref:nn}:null;
     },
     add(row,step){
+      if(row===SUS){ const nxt=Math.min(it.lenSteps,...(it.ped||[]).filter(q=>q[0]>step).map(q=>q[0]));
+        const iv=[step, step+Math.max(1,Math.min(newNoteLen(), nxt-step))]; (it.ped=it.ped||[]).push(iv); return {...pedH(iv), fresh:true}; }
       const nn={k:PR_KEYS-1-row, s:step, l:Math.max(1,Math.min(newNoteLen(), it.lenSteps-step))};
       it.pat.push(nn);
       this.audition(row);
       return {row, s:step, l:nn.l, ref:nn, fresh:true};
     },
-    move(h,row,step){ h.ref.k=PR_KEYS-1-row; h.ref.s=step; h.row=row; h.s=step; },
-    resize(h,len){ h.ref.l=len; h.l=len; },
-    del(h){ it.pat=it.pat.filter(n2=>n2!==h.ref); },
+    move(h,row,step){
+      if(h.ped){ const l=h.ref[1]-h.ref[0], [lo,hi]=pedRoom(h.ref); step=Math.max(lo,Math.min(step,hi-l)); h.ref[0]=step; h.ref[1]=step+l; h.s=step; return; }   // pedal stays in its row, between its neighbours
+      row=Math.min(row,SUS-1);                                                                           // notes stay on the keys
+      h.ref.k=PR_KEYS-1-row; h.ref.s=step; h.row=row; h.s=step;
+    },
+    resize(h,len){
+      if(h.ped){ const next=Math.min(it.lenSteps,...(it.ped||[]).filter(q=>q!==h.ref && q[0]>h.ref[0]).map(q=>q[0]));   // grows up to the next range / clip end
+        len=Math.max(1,Math.min(len,next-h.ref[0])); h.ref[1]=h.ref[0]+len; h.l=len; return; }
+      h.ref.l=len; h.l=len; },
+    del(h){ if(h.ped){ it.ped=(it.ped||[]).filter(q=>q!==h.ref); return; } it.pat=it.pat.filter(n2=>n2!==h.ref); },
   };
 }
 function itemKeyNotes(o){
@@ -8450,6 +8509,13 @@ function drawPianoRoll(){
   }
   for(let r=0;r<cfg.rows;r++){
     const y=r*cfg.rowH, k=PR_KEYS-1-r;
+    if(r===cfg.susRow){                                     // SUSTAIN row under the keys
+      g.fillStyle='#13202c'; g.fillRect(cfg.gut,y,w-cfg.gut,cfg.rowH);
+      g.fillStyle='rgba(108,196,255,.5)'; g.fillRect(cfg.gut,y,w-cfg.gut,1);
+      g.fillStyle='#1b2c3a'; g.fillRect(0,y+0.5,cfg.gut-8,cfg.rowH-1);
+      g.fillStyle='#6cc4ff'; g.font='700 8px system-ui'; g.fillText('SUSTAIN',4,y+cfg.rowH-3);
+      continue;
+    }
     const black=prIsBlack(k), pc=(21+k)%12;
     const inScale=sset && sset.has(pc), isRoot=sset && pc===sroot;
     g.fillStyle=isRoot ? (black?'#20372a':'#254031')
@@ -8624,6 +8690,7 @@ prCv.onpointerdown=e=>{
       const anchor=prSelList(cfg).find(h=>prKey(cfg,h)!==prKey(cfg,hit))||hit;
       prSelRange(cfg,anchor,hit);
     }
+    if(cfg.susRow!=null) normPed(cfg.it);                          // overlapping pedal ranges become one press (touching ones stay: a pedal change)
     if(prDragHandle && prMode2==='resize' && (prDragHandle.fresh||prDragHandle.sized) && prDragHandle.l>0){ prLastLen=prDragHandle.l; localStorage.setItem('s16-prlastlen',prLastLen); }
     prDragHandle=null; prMode2=null; prDragOrig=null;
     renderItem(cfg.it);

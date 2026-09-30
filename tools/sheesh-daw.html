@@ -552,6 +552,9 @@
     .wt-glob,.wt-voi{flex-direction:row !important;justify-content:center;align-items:center}
     .wt-macros{grid-template-columns:repeat(4,1fr)} }
   .smp-box{flex:1 1 100%;min-width:260px} .smp-cv{height:70px}
+  .smp-mode{display:flex;align-items:center;gap:10px;flex-wrap:wrap;flex-basis:100%;padding-bottom:6px;border-bottom:1px solid var(--line)}
+  .smp-mode label{display:flex;align-items:center;gap:8px;color:var(--cyan);font-size:10px;letter-spacing:.12em}
+  .smp-mode .smp-hint{font-size:10px;color:var(--ink-dim);letter-spacing:.02em}
   .smp-envwrap{display:flex;align-items:center;gap:10px}
   .smp-envside{display:flex;flex-direction:column;gap:3px;align-items:stretch}
   .smp-envbyp{font-size:9px;letter-spacing:.12em;padding:1px 6px} .smp-envbyp.on{background:#ffb347;color:#111;border-color:#ffb347}
@@ -560,7 +563,6 @@
   .lib-head{min-height:26px} .lib-pv>button:disabled{opacity:.4}
   .lib-status{flex:1 1 220px;white-space:normal;font-size:9px;letter-spacing:.06em}
   .lib-q{background:#161a22;color:var(--ink);border:1px solid var(--line);border-radius:4px;font-size:11px;padding:3px 6px;width:150px}
-  .lib-terms{font-size:9px;color:#ffcf8a;line-height:1.35}
   .lib-list{height:260px;overflow:auto;border:0;border-radius:2px;background:#0b0d11}
   .lib-row{display:grid;grid-template-columns:16px minmax(0,1fr) 90px auto 52px auto;gap:8px;align-items:center;padding:3px 8px 3px 40px;font-size:11px;cursor:pointer;border-bottom:1px solid #12151c}
   .lib-row:hover,.lib-row:focus{background:#161b25;outline:none} .lib-row.on{background:rgba(255,143,210,.12)} .lib-row.on .lib-nm{color:#ff8fd2}
@@ -572,7 +574,7 @@
   .lib-fold{display:flex;gap:8px;align-items:center;padding:4px 8px;font-size:11px;cursor:pointer;border-bottom:1px solid #12151c;user-select:none}
   .lib-fold.d1{padding-left:24px} .lib-fold:hover,.lib-fold:focus{background:#161b25;outline:none}
   .lib-ar{width:10px;color:var(--ink-dim)} .lib-fnm{font-weight:600;letter-spacing:.04em} .lib-fold.d0 .lib-fnm{color:#5fd4c4} .lib-fold.d1 .lib-fnm{color:var(--ink)}
-  .lib-fold .lib-meta{margin-left:auto} .lib-list>.lib-terms{padding:3px 8px 3px 24px;border-bottom:1px solid #12151c}
+  .lib-fold .lib-meta{margin-left:auto}
   .lib-wave{display:block;width:90px;height:18px}
   .lib-row.sel{background:#1b2230;box-shadow:inset 2px 0 0 #5fd4c4}
   .lib-pv{display:grid;grid-template-columns:1fr auto;grid-template-areas:"cv cv" "lab btn";gap:4px 8px;align-items:center}
@@ -1139,6 +1141,7 @@ function migrateStutter(fx,prms){
 const FX_DEFS={
   sampler:{name:'Sampler', inst:true, sampler:true, noScope:true, color:'#ff8fd2',
     params:{
+      mode:{min:0,max:1,step:1,val:0,opts:['Piano','Simple'],hide:true,label:'mode'},
       root:{min:0,max:87,step:1,val:39,fmt:v=>{ const n=['C','C#','D','D#','E','F','F#','G','G#','A','A#','B']; const k=Math.round(v); return n[(21+k)%12]+(Math.floor((21+k)/12)-1); },label:'root'},
       semi:{min:-24,max:24,step:1,val:0,fmt:v=>(v>0?'+':'')+Math.round(v)+' st',label:'semi'},
       fine:{min:-100,max:100,step:1,val:0,fmt:v=>(v>0?'+':'')+Math.round(v)+' ct',label:'fine'},
@@ -4434,10 +4437,10 @@ function scheduleClips(pos, at){
     if(pos<endSec) cap=endSec;
   }
   tracksAll.forEach(tr=>{
-    const dest=state.tracks[tr.id].input;
     const fades=clipFades(tr);
     tr.clips.forEach(c=>{
       if(!c.buffer || !(c.buffer.duration>0) || !(c.dur>0)) return;   // empty / missing audio: skip, don't throw
+      const dest=c.postFx?state.tracks[tr.id].gain:state.tracks[tr.id].input;
       const rate=clipRate(c), tlDur=clipTlDur(c);
       const end=c.start+tlDur;
       if(!(tlDur>0) || end<=pos+0.001 || c.start>=cap) return;
@@ -4676,7 +4679,7 @@ function splitClipAt(c,pos){
   if(pos<=c.start+0.02 || pos>=c.start+clipTlDur(c)-0.02) return null;
   const tr=tracksAll.find(t=>t.id===c.trackId);
   const rate=clipRate(c), cut=(pos-c.start)*rate;
-  const right=addClip(tr, c.buffer, pos, c.name+' b');
+  const right=addClip(tr, c.buffer, pos, c.name+' b', c);
   right.nativeBpm=c.nativeBpm; right.stretch=c.stretch||1; right.semis=c.semis||0; right.gain=c.gain||0; right.rev=!!c.rev; right.grp=c.grp??null; if(right.grp!=null) updateGrpTag(right);
   right.offset=c.offset+cut; right.dur=c.dur-cut; right.fadeOut=c.fadeOut||0; right.fadeIn=0;
   c.dur=cut; c.fadeOut=0;
@@ -4860,9 +4863,15 @@ function addTrack(after){
   track.laneEl=lane; track.headEl=head; track.chipEl=chip; track.instEl=inst;
   ensureTrackAudio(track);
 
-  // double-click / double-tap empty lane space -> MIDI item (needs an instrument FX)
+  // Simple samplers place rendered audio; other instruments create a MIDI item.
   lane.addEventListener('dblclick',e=>{
     if(e.target!==lane) return;
+    const simple=track.fx.find(f=>f.type==='sampler' && f.params.mode===1 && !f.bypass);
+    if(simple){
+      const r=lane.getBoundingClientRect();
+      insertSimpleSamplerClip(track,simple,Math.max(0,snapSec((e.clientX-r.left)/PPS)));
+      return;
+    }
     let kind=trackInstrument(track);
     if(kind && kind!=='drums') kind='piano';         // every melodic instrument uses the piano editor
     if(!kind){ flash('Add an instrument to this track first (Track FX panel).'); selectTrack(track); return; }
@@ -5419,12 +5428,30 @@ function removeTrack(track){
 }
 
 /* ============================== audio clips ============================== */
-function addClip(track, buffer, start, name){
+async function insertSimpleSamplerClip(track,fx,start){
+  if(!fx.sampleBuffer){ selectTrack(track); flash('Load a sample in the Sampler first.'); return null; }
+  if(track._samplerRendering){ flash('The sample is still rendering.'); return null; }
+  const tab=activeTab, bpm=state.bpm, name=fx.sampleName||'Sample';
+  track._samplerRendering=true;
+  try{
+    flash('Rendering sample and track effects…');
+    const buffer=await renderSimpleSampler(track,fx,start);
+    if(activeTab!==tab || !tracksAll.includes(track) || !track.fx.includes(fx) || fx.params.mode!==1){
+      flash('Sample render cancelled because the project or sampler changed.'); return null;
+    }
+    pushHistory();
+    const clip=addClip(track,buffer,start,name,{postFx:true,nativeBpm:bpm});
+    flash('Sample added — drag to move, trim the edges, or edit with the clip tools.');
+    return clip;
+  }catch(e){ flash('Could not render sample: '+(e&&e.message||e)); return null; }
+  finally{ track._samplerRendering=false; }
+}
+function addClip(track, buffer, start, name, opts={}){
   const clip={
     id:'c'+Math.random().toString(36).slice(2),
     trackId:track.id, buffer,
     start:Math.max(0,start), offset:0, dur:buffer.duration,
-    nativeBpm:state.bpm, stretch:1,
+    nativeBpm:opts.nativeBpm||state.bpm, stretch:1, postFx:!!opts.postFx,
     gain:0, fadeIn:0, fadeOut:0, semis:0, rev:false,
     name, el:null, canvas:null,
   };
@@ -5445,6 +5472,7 @@ function addClip(track, buffer, start, name){
   return clip;
 }
 function renderClip(c){
+  c.el.title=c.postFx?'Rendered sample · track effects included · drag to move, trim edges, or use clip tools':'';
   const full=Math.max(6,Math.round(clipTlDur(c)*PPS)), w=Math.min(CLIP_MAXW,full), pxps=w/Math.max(1e-6,clipTlDur(c));
   c.el.style.left=Math.round(c.start*PPS)+'px';
   c.el.style.width=full+'px';
@@ -6071,6 +6099,9 @@ function mergeSelection(){
   const tr=tracksAll.find(t=>t.id===tid);
   const clips=objs.filter(o=>o.buffer), items=objs.filter(o=>!o.buffer);
   if(clips.length && items.length){ flash('Select only audio clips or only MIDI items to merge.'); return; }
+  if(clips.length && clips.some(c=>!!c.postFx!==!!clips[0].postFx)){
+    flash('Merge rendered sample clips separately from clips that still use live track effects.'); return;
+  }
   pushHistory();
   if(clips.length) mergeClips(tr,clips); else mergeItems(tr,items);
 }
@@ -6094,6 +6125,9 @@ function mergeItems(tr,items){
   flash('Merged '+items.length+' items into one.');
 }
 function mergeClips(tr,clips){
+  if(clips.some(c=>!!c.postFx!==!!clips[0].postFx)){
+    flash('Merge rendered sample clips separately from clips that still use live track effects.'); return;
+  }
   initAudio();
   const sr=clips[0].buffer.sampleRate, ch=Math.max(...clips.map(c=>c.buffer.numberOfChannels));
   const t0=Math.min(...clips.map(c=>c.start)), t1=Math.max(...clips.map(c=>c.start+clipTlDur(c)));
@@ -6120,7 +6154,7 @@ function mergeClips(tr,clips){
   });
   const first=clips.slice().sort((a,b)=>a.start-b.start)[0];
   clips.forEach(deleteClip);
-  const nc=addClip(tr,out,t0,first.name);
+  const nc=addClip(tr,out,t0,first.name,{postFx:first.postFx});
   nc.nativeBpm=state.bpm; nc.stretch=1;
   renderClip(nc); layoutTimeline();
   selectObj({kind:'audio',clip:nc});
@@ -6156,7 +6190,7 @@ function copySelection(){
   const t0=Math.min(...objs.map(x=>tOf(x.o))), ti0=Math.min(...objs.map(x=>x.tIdx));
   itemClipboard={kind:'multi', entries:objs.map(x=>{
     const o=x.o, base={dt:tOf(o)-t0, dTrack:x.tIdx-ti0, grp:o.grp??null};
-    if(o.buffer) return {...base, kind:'audio', buffer:o.buffer, offset:o.offset, dur:o.dur, name:o.name, nativeBpm:o.nativeBpm, stretch:o.stretch||1, gain:o.gain||0, fadeIn:o.fadeIn||0, fadeOut:o.fadeOut||0, semis:o.semis||0, rev:!!o.rev};
+    if(o.buffer) return {...base, kind:'audio', buffer:o.buffer, offset:o.offset, dur:o.dur, name:o.name, nativeBpm:o.nativeBpm, stretch:o.stretch||1, gain:o.gain||0, fadeIn:o.fadeIn||0, fadeOut:o.fadeOut||0, semis:o.semis||0, rev:!!o.rev, postFx:!!o.postFx};
     return {...base, kind:'midi', mkind:o.kind, lenSteps:o.lenSteps, name:o.name, scale:o.scale||'', pat:serPat(o), pt:serPitch(o), ped:(o.ped||[]).map(iv=>[iv[0],iv[1]])};
   })};
   lastCopied='items';
@@ -6173,7 +6207,7 @@ function pasteItems(){
     const tr=tracksAll[Math.min(tracksAll.length-1,Math.max(0,bi+(en.dTrack||0)))];
     let obj, sl;
     if(en.kind==='audio'){
-      const c=addClip(tr,en.buffer,t0+(en.dt||0),en.name);
+      const c=addClip(tr,en.buffer,t0+(en.dt||0),en.name,en);
       c.offset=en.offset; c.dur=en.dur; c.nativeBpm=en.nativeBpm||state.bpm; c.stretch=en.stretch||1;
       c.gain=en.gain||0; c.fadeIn=en.fadeIn||0; c.fadeOut=en.fadeOut||0; c.semis=en.semis||0; c.rev=!!en.rev;
       renderClip(c); obj=c; sl={kind:'audio',clip:c};
@@ -6197,7 +6231,7 @@ function serTrackData(t){
     autoMode:t.autoMode||'read', busId:t.busId||null, midiIn:t.midiIn??null,
     fx:t.fx.map(f=>({type:f.type, params:{...f.params}, bypass:!!f.bypass, irBuffer:f.irBuffer||null, irName:f.irName||null, keyTrackId:f.keyTrackId||null, sampleBuffer:f.sampleBuffer||null, sampleName:f.sampleName||null, noiseProfile:f.noiseProfile||null, profSr:f.profSr||null, profN:f.profN||null, noiseSec:f.noiseSec||0})),
     items:t.items.map(it=>({kind:it.kind, startStep:it.startStep, lenSteps:it.lenSteps, name:it.name, scale:it.scale||'', grp:it.grp??null, pat:serPat(it), pt:serPitch(it), ped:(it.ped&&it.ped.length)?it.ped.map(iv=>[iv[0],iv[1]]):undefined})),
-    clips:t.clips.map(c=>({buffer:c.buffer, start:c.start, offset:c.offset, dur:c.dur, name:c.name, nativeBpm:c.nativeBpm, stretch:c.stretch||1, grp:c.grp??null, gain:c.gain||0, fadeIn:c.fadeIn||0, fadeOut:c.fadeOut||0, semis:c.semis||0, rev:!!c.rev})),
+    clips:t.clips.map(c=>({buffer:c.buffer, start:c.start, offset:c.offset, dur:c.dur, name:c.name, nativeBpm:c.nativeBpm, stretch:c.stretch||1, grp:c.grp??null, gain:c.gain||0, fadeIn:c.fadeIn||0, fadeOut:c.fadeOut||0, semis:c.semis||0, rev:!!c.rev, postFx:!!c.postFx})),
     autos:(t.autos||[]).map(a=>({kind:a.kind, fxIdx:a.fxId?t.fx.findIndex(f=>f.id===a.fxId):-1, key:a.key, hidden:!!a.hidden, pts:a.pts.map(p=>({s:p.s,v:p.v}))}))};
 }
 function pasteTrackData(d,after){
@@ -6241,7 +6275,7 @@ function pasteTrackData(d,after){
     renderItem(it);
   });
   (d.clips||[]).forEach(sc=>{
-    const c=addClip(tr,sc.buffer,sc.start,sc.name);
+    const c=addClip(tr,sc.buffer,sc.start,sc.name,sc);
     c.offset=sc.offset; c.dur=sc.dur; c.nativeBpm=sc.nativeBpm||state.bpm; c.stretch=sc.stretch||1;
     c.gain=sc.gain||0; c.fadeIn=sc.fadeIn||0; c.fadeOut=sc.fadeOut||0; c.semis=sc.semis||0; c.rev=!!sc.rev;
     if(sc.grp!=null){ grpMap[sc.grp]=grpMap[sc.grp]||++grpCounter; c.grp=grpMap[sc.grp]; updateGrpTag(c); }
@@ -6884,6 +6918,16 @@ function wtApplyPreset(fx,def,params){
 }
 /* ---- Sampler panel: waveform with start/end markers, Load WAV, Use selected clip ---- */
 function buildSamplerExtras(gw,fx,def){
+  const modeBar=document.createElement('div'); modeBar.className='smp-mode';
+  const modeLabel=document.createElement('label'); modeLabel.textContent='MODE';
+  const mode=document.createElement('select'); mode.className='wt-sel'; mode.setAttribute('aria-label','Sampler mode');
+  mode.append(new Option('Piano','0'),new Option('Simple','1')); mode.value=String(fx.params.mode||0);
+  const hint=document.createElement('span'); hint.className='smp-hint';
+  const describeMode=()=>{ hint.textContent=fx.params.mode===1
+    ?'Double-click empty track space to add an editable sample clip with track effects included.'
+    :'Double-click empty track space to add a piano-roll pattern.'; };
+  mode.onchange=()=>{ pushHistory(); fx.params.mode=Number(mode.value); renderFxPanel(); };
+  describeMode(); modeLabel.appendChild(mode); modeBar.append(modeLabel,hint); gw.prepend(modeBar);
   const box=document.createElement('div'); box.className='eq-bandknobs smp-box';
   const cap=document.createElement('span'); cap.className='eq-sel'; cap.textContent='SAMPLE';
   const cv=document.createElement('canvas'); cv.className='wt-cv smp-cv'; fx.smpCv=cv;
@@ -6911,15 +6955,18 @@ function buildSamplerExtras(gw,fx,def){
   const obox=document.createElement('div'); obox.className='eq-bandknobs smp-box';
   const ocap=document.createElement('span'); ocap.className='eq-sel'; ocap.textContent='OUTPUT';
   const ocv=document.createElement('canvas'); ocv.className='wt-cv smp-outcv'; fx.smpOutCv=ocv;
-  ocv.title='One note at the root key as the sampler plays it. Drag to move the note-off; double-click resets it.';
+  ocv.title=fx.params.mode===1
+    ?'Sample output before track effects. Simple mode renders the selected region once; loops run for at least one bar.'
+    :'One note at the root key as the sampler plays it. Drag to move the note-off; double-click resets it.';
+  if(fx.params.mode===1) ocv.style.cursor='default';
   const olab=document.createElement('span'); olab.className='wt-hl smp-outlab'; fx.smpOutLab=olab;
   obox.append(ocap,ocv,olab); gw.appendChild(obox);
-  ocv.addEventListener('pointerdown',e=>{ const o=fx._smpOut; if(!fx.sampleBuffer||!o) return;
+  ocv.addEventListener('pointerdown',e=>{ const o=fx._smpOut; if(fx.params.mode===1||!fx.sampleBuffer||!o) return;
     const r=ocv.getBoundingClientRect(); fx._smpDragV=o.V; try{ ocv.setPointerCapture(e.pointerId); }catch(_){}
     const set=ev=>{ fx._smpHold=Math.max(0.05,Math.min(12,(ev.clientX-r.left)/r.width*fx._smpDragV)); drawSmpOut(fx); };
     set(e); ocv.onpointermove=set;
     ocv.onpointerup=ocv.onpointercancel=()=>{ ocv.onpointermove=null; fx._smpDragV=0; fx._smpOutKey=null; drawSmpOut(fx); }; });
-  ocv.addEventListener('dblclick',()=>{ fx._smpHold=null; fx._smpOutKey=null; drawSmpOut(fx); });
+  ocv.addEventListener('dblclick',()=>{ if(fx.params.mode===1) return; fx._smpHold=null; fx._smpOutKey=null; drawSmpOut(fx); });
   fx._smpOutKey=null;
   // start / end marker drag
   let drag=null;
@@ -6928,11 +6975,11 @@ function buildSamplerExtras(gw,fx,def){
     cv.onpointerup=cv.onpointercancel=()=>{ cv.onpointermove=null; drag=null; }; });
   fx._smpKey=null; drawSampler(fx);
 }
-/* ---------- sample library: BUILT-IN (samples-lib/ next to daw.html, written by sample_library.py; local only,
-   never published) or, as a fallback, any folder the user picks ---------- */
+/* ---------- sample library: BUILT-IN (samples-lib/ next to the DAW, locally and on the website)
+   or any folder the user picks ---------- */
 const SLIB={handle:null, files:null, catalog:null, name:'', source:'', state:'none', builtin:null, cache:new Map(),
-  ui:{q:'',open:new Set(),scroll:0}, playing:null, sel:null, pending:{}};
-const LIB_AUDIO=/\.(wav|mp3|flac|ogg|oga|aiff?|m4a)$/i, LIB_DIR='samples-lib/';
+  ui:{q:'',open:new Set(),scroll:0}, playing:null, sel:null, pending:new Map(), loading:new Map()};
+const LIB_AUDIO=/\.(wav|mp3|flac|ogg|oga|aiff?|m4a)$/i, LIB_DIR='samples-lib/', LIB_REV='1';
 function libIdb(op,key,val){                                       // tiny key-value store (a picked folder survives reloads)
   return new Promise((res,rej)=>{ let rq; try{ rq=indexedDB.open('sheesh-daw',1); }catch(e){ rej(e); return; }
     rq.onupgradeneeded=()=>rq.result.createObjectStore('kv');
@@ -6941,10 +6988,15 @@ function libIdb(op,key,val){                                       // tiny key-v
       const r=op==='get'?st.get(key):st.put(val,key); r.onsuccess=()=>res(r.result); r.onerror=()=>rej(r.error); tx.oncomplete=()=>db.close(); }; });
 }
 function libRefreshPanels(){ selectedTrack && selectedTrack.fx.some(f=>f.type==='sampler') && renderFxPanel(); }
-function libScript(src){ return new Promise((res,rej)=>{ const sc=document.createElement('script'); sc.src=src; sc.onload=()=>{ sc.remove(); res(); }; sc.onerror=()=>{ sc.remove(); rej(new Error('missing '+src)); }; document.head.appendChild(sc); }); }
+function libScript(src){ return new Promise((res,rej)=>{
+  const sc=document.createElement('script'); sc.src=src;
+  const finish=err=>{ clearTimeout(timer); sc.onload=sc.onerror=null; sc.remove(); err?rej(err):res(); };
+  const timer=setTimeout(()=>finish(new Error('timed out loading '+src)),60000);
+  sc.onload=()=>finish(); sc.onerror=()=>finish(new Error('missing '+src)); document.head.appendChild(sc);
+}); }
 async function libBuiltin(){                                       // catalog.js defines window.SHEESH_LIB_CATALOG
   if(SLIB.builtin!==null) return SLIB.builtin;
-  try{ if(!window.SHEESH_LIB_CATALOG) await libScript(LIB_DIR+'catalog.js'); }catch(e){}
+  try{ if(!window.SHEESH_LIB_CATALOG) await libScript(LIB_DIR+'catalog.js?v='+LIB_REV); }catch(e){}
   const c=window.SHEESH_LIB_CATALOG;
   SLIB.builtin=(c && Array.isArray(c.samples) && c.samples.length) ? c : false;
   return SLIB.builtin;
@@ -7004,27 +7056,41 @@ async function libLoad(){                                          // (re)read t
   }catch(e){ SLIB.state='error'; SLIB.err=String(e&&e.message||e); }
   libRefreshPanels();
 }
-window.SHEESH_LIB_DATA=(id,b64)=>{ const p=SLIB.pending[id]; if(p){ delete SLIB.pending[id]; p(b64); } };
+window.SHEESH_LIB_DATA=(id,b64)=>{ const p=SLIB.pending.get(id); if(p) p.b64=b64; };
 async function libBytes(d){
   if(SLIB.source==='builtin'){
-    const b64=await new Promise((res,rej)=>{ SLIB.pending[d.id]=res; libScript(LIB_DIR+'s/'+d.id+'.js').catch(e=>{ delete SLIB.pending[d.id]; rej(e); }); });
-    const bin=atob(b64), u8=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++) u8[i]=bin.charCodeAt(i);
-    return u8.buffer;
+    let p=SLIB.pending.get(d.id);
+    if(!p){
+      p={b64:null,promise:null}; SLIB.pending.set(d.id,p);
+      p.promise=libScript(LIB_DIR+'s/'+encodeURIComponent(d.id)+'.js').then(()=>{
+        if(typeof p.b64!=='string'||!p.b64.length) throw new Error('sample data missing: '+d.path);
+        const bin=atob(p.b64), u8=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++) u8[i]=bin.charCodeAt(i);
+        return u8.buffer;
+      }).finally(()=>{ if(SLIB.pending.get(d.id)===p) SLIB.pending.delete(d.id); });
+    }
+    // decodeAudioData detaches its input; each byte consumer needs its own buffer.
+    return (await p.promise).slice(0);
   }
   const f=await libFile(d.path); if(!f) throw new Error('file missing: '+d.path);
   return f.arrayBuffer();
 }
+function libOrigin(){ return SLIB.source==='builtin'?'builtin':SLIB.files||SLIB.handle; }
 async function libBuffer(d){
-  const key=SLIB.source+':'+d.path;
+  const key=SLIB.source+':'+d.path, origin=libOrigin();
   if(SLIB.cache.has(key)){ const b=SLIB.cache.get(key); SLIB.cache.delete(key); SLIB.cache.set(key,b); return b; }
+  const pending=SLIB.loading.get(key); if(pending&&pending.origin===origin) return pending.promise;
   initAudio();
-  const b=await ctx.decodeAudioData(await libBytes(d));
-  SLIB.cache.set(key,b); while(SLIB.cache.size>40) SLIB.cache.delete(SLIB.cache.keys().next().value);
-  if(!d.peaks){                                                    // scanned folder: overview from the decoded audio
-    const x=b.getChannelData(0), nb=200, pk=[]; for(let i=0;i<nb;i++){ let m=0; const a=Math.floor(i*x.length/nb), e=Math.max(a+1,Math.floor((i+1)*x.length/nb)); for(let j=a;j<e;j++){ const v=Math.abs(x[j]); if(v>m) m=v; } pk.push(Math.min(255,Math.round(m*255))); }
-    d.peaks=pk; d.dur=d.dur??b.duration;
-  }
-  return b;
+  const load={origin,promise:null}; SLIB.loading.set(key,load);
+  load.promise=(async()=>{
+    const b=await ctx.decodeAudioData(await libBytes(d));
+    if(libOrigin()===origin){ SLIB.cache.set(key,b); while(SLIB.cache.size>40) SLIB.cache.delete(SLIB.cache.keys().next().value); }
+    if(!d.peaks){                                                  // scanned folder: overview from the decoded audio
+      const x=b.getChannelData(0), nb=200, pk=[]; for(let i=0;i<nb;i++){ let m=0; const a=Math.floor(i*x.length/nb), e=Math.max(a+1,Math.floor((i+1)*x.length/nb)); for(let j=a;j<e;j++){ const v=Math.abs(x[j]); if(v>m) m=v; } pk.push(Math.min(255,Math.round(m*255))); }
+      d.peaks=pk; d.dur=d.dur??b.duration;
+    }
+    return b;
+  })().finally(()=>{ if(SLIB.loading.get(key)===load) SLIB.loading.delete(key); });
+  return load.promise;
 }
 function libDrawWave(cv,d,prog){                                   // overview from d.peaks (0..255 of full scale), optional playhead 0..1
   const dd=wtDpr(cv); if(!dd) return; const {g,cw,ch}=dd, mid=ch/2;
@@ -7088,7 +7154,7 @@ function buildLibraryBox(gw,fx){
   if(st==='none'||st==='checking'||st==='loading'){ status.textContent=st==='loading'?'Reading '+(SLIB.name||'library')+'…':'Opening the sample library…'; head.append(status); msg('Loading…'); return; }
   if(st==='reconnect'){ status.textContent='Library "'+SLIB.name+'" — Chrome needs your OK again after a restart.'; head.append(status,btn('Reconnect','Allow read access to '+SLIB.name,libReconnect),btn('Choose folder…','Pick a different library folder',libPick)); msg(''); return; }
   if(st!=='ready'||!C){ status.textContent=st==='error'?'Could not read the library: '+SLIB.err:'No built-in library here'; head.append(status,btn('Choose folder…','Pick a folder of samples',libPick));
-    msg(st==='error'?'':'The built-in library lives next to your local daw.html (build it with sample_library.py). You can also open any folder of samples.'); return; }
+    msg(st==='error'?'':'The sample library is unavailable. Reload to try again, or choose a folder of samples from your computer.'); return; }
   const q=document.createElement('input'); q.type='search'; q.className='lib-q'; q.placeholder='search…'; q.value=SLIB.ui.q; q.setAttribute('aria-label','Search samples');
   status.textContent=SLIB.name+' · '+C.samples.length+' samples'+(C.scanned?' (no catalog.json: folders only)':'');
   const allOpen=btn('▾ all','Expand every folder',()=>{ tree.forEach(k=>{ SLIB.ui.open.add(k.key); k.cats.forEach(c=>SLIB.ui.open.add(c.key)); }); fill(); });
@@ -7100,7 +7166,7 @@ function buildLibraryBox(gw,fx){
   // kit -> category -> samples
   const tree=[], byKit=new Map();
   C.samples.forEach(d=>{ const kk=(d.bundle||'')+'/'+d.kit; let k=byKit.get(kk);
-    if(!k){ k={key:'k:'+kk, name:d.kit, bundle:d.bundle, info:C.kits.find(x=>x.kit===d.kit&&(x.bundle||'')===(d.bundle||'')), cats:new Map()}; byKit.set(kk,k); tree.push(k); }
+    if(!k){ k={key:'k:'+kk, name:d.kit, bundle:d.bundle, cats:new Map()}; byKit.set(kk,k); tree.push(k); }
     let c=k.cats.get(d.category); if(!c){ c={key:'c:'+kk+'/'+d.category, name:d.category, items:[]}; k.cats.set(d.category,c); } c.items.push(d); });
   tree.forEach(k=>{ k.cats=[...k.cats.values()].sort((a,b)=>(a.name==='Loops')-(b.name==='Loops')||a.name.localeCompare(b.name)); });
   const select=(d,r,play)=>{ SLIB.sel=d; list.querySelectorAll('.lib-row.sel').forEach(x=>x.classList.remove('sel')); r&&r.classList.add('sel'); showSel();
@@ -7126,11 +7192,9 @@ function buildLibraryBox(gw,fx){
     tree.forEach(k=>{
       const kCats=k.cats.map(c=>({c, items:searching?c.items.filter(hit):c.items})).filter(x=>x.items.length);
       const n=kCats.reduce((a,x)=>a+x.items.length,0); if(!n) return;
-      const kOpen=searching||SLIB.ui.open.has(k.key), full=k.info&&k.info.terms&&k.info.terms.length?k.info.terms.join('\n\n'):'';
-      const terms=(k.info&&k.info.summary)||(full?full.replace(/\s+/g,' ').slice(0,200):'');   // short usage summary; full text on hover
-      folder(k.key,k.name,n+(searching?' found':' samples'),0,kOpen,(k.bundle?k.bundle+'\n':'')+(terms?'Terms: '+terms:''));
+      const kOpen=searching||SLIB.ui.open.has(k.key);
+      folder(k.key,k.name,n+(searching?' found':' samples'),0,kOpen,k.bundle||'');
       if(!kOpen) return;
-      if(terms){ const t=document.createElement('div'); t.className='lib-terms'; t.textContent='⚖ '+terms; t.title=full; list.appendChild(t); }
       kCats.forEach(({c,items})=>{
         const cOpen=searching||SLIB.ui.open.has(c.key);
         folder(c.key,c.name,items.length,1,cOpen);
@@ -7186,16 +7250,139 @@ function smpOutPlan(fx){                                          // the timelin
   const rate=Math.pow(2,(p.semi||0)/12+(p.fine||0)/1200);
   const st=Math.max(0,Math.min(0.999,p.start||0)), en=Math.max(st+0.001,Math.min(1,p.end??1));
   const span=(en-st)*b.duration/rate, loop=!!p.loop, oneShot=!!p.oneShot, a=Math.max(0.001,p.atk??0.005), relT=Math.max(0.01,p.rel??0.3);
-  const hold=fx._smpHold ?? Math.max(0.05,Math.min(12, loop ? Math.max(a+(p.dec??0.2)+0.2, 2.5*span) : span));
+  const hold=p.mode===1 ? Math.max(0.05,loop?Math.max(span,barSec()):span)
+    : fx._smpHold ?? Math.max(0.05,Math.min(12, loop ? Math.max(a+(p.dec??0.2)+0.2, 2.5*span) : span));
   if(p.envOff){ const e2=loop?Math.max(0.05,hold):span; return {rate,span,loop,oneShot:!loop,hold,end:e2,stop:e2+0.01,relT:0,byp:true}; }   // bypass: whole region / loop to note-off
   const end=oneShot ? (loop?Math.max(0.05,hold):span) : Math.max(0.05,hold);
   const stop=(oneShot&&!loop) ? Math.min(end,span)+relT*2+0.05 : end+relT*2+0.05;
   return {rate,span,loop,oneShot,hold,end,stop,relT};
 }
+/* Print a Simple sampler's sound before its track fader. Copies stay independent of later FX edits. */
+async function renderSimpleSampler(track,fx,startSec){
+  if(!fx.sampleBuffer) throw new Error('Load a sample into the Sampler first.');
+  if(fx.bypass) throw new Error('Enable the Sampler before adding a Simple clip.');
+  // Snapshot before yielding: switching projects, moving automation, or loading another sample cannot change this print.
+  startSec=Math.max(0,Number(startSec)||0);
+  const bpm=state.bpm, sd=stepDur(), bar=barSec(), sr=(ctx&&ctx.sampleRate)||fx.sampleBuffer.sampleRate;
+  const frozen={id:track.id, fx:track.fx.map(f=>({
+    id:f.id, type:f.type, params:{...f.params}, bypass:!!f.bypass,
+    sampleBuffer:f.sampleBuffer, irBuffer:f.irBuffer,
+    noiseProfile:f.noiseProfile&&f.noiseProfile.slice(), profSr:f.profSr||sr, profN:f.profN,
+    keyTrackId:f.keyTrackId,
+  })), autos:(track.autoMode==='off'?[]:(track.autos||[])).filter(a=>a.kind==='fx'&&a.pts.length).map(a=>({
+    kind:a.kind, fxId:a.fxId, key:a.key, hold:a.hold, pts:a.pts.map(p=>({...p})),
+  }))};
+  const sampler=frozen.fx.find(f=>f.id===fx.id);
+  if(!sampler) throw new Error('The Sampler is no longer on this track.');
+  const bypass=!!state.tracks[track.id].fxBypass, keyLevel=effectiveVol(track.id);
+  const keyVolume=(track.autoMode==='off'?[]:(track.autos||[])).filter(a=>a.kind==='vol'&&a.pts.length).map(a=>({hold:a.hold,pts:a.pts.map(p=>({...p}))}));
+  const lanes=frozen.autos.filter(a=>autoParamDesc(frozen,a));
+  const valueAt=(a,t)=>autoToVal(frozen,a,autoValueAt(a,(startSec+t)/sd));
+  lanes.forEach(a=>{ const f=frozen.fx.find(f=>f.id===a.fxId); f.params[a.key]=valueAt(a,0); });
+  frozen.fx.forEach(f=>{
+    if((f.type==='tune'||f.type==='harm')&&f.params.followRoll){
+      const k=tuneKeyMask(f.params); f.params.followRoll=0;
+      f.params.key=k.mask===4095?24:k.root+(k.mask===TUNE_MIN?12:0);
+    }
+  });
+  const effects=bypass?[]:frozen.fx.filter(f=>!f.bypass&&!FX_DEFS[f.type].inst);
+  if(effects.some(f=>f.type==='duck'&&f.keyTrackId&&f.keyTrackId!==track.id)){
+    throw new Error('This track uses an external sidechain. Bypass its Ducker before adding a Simple clip, or render the track with WAV export.');
+  }
+  const initial=smpOutPlan(sampler);
+  sampler._smpHold=sampler.params.loop ? Math.max(initial.span,bar) : initial.span;
+  const plan=smpOutPlan(sampler), core=plan.loop?plan.hold:plan.span;
+  const maxParam=(f,key,fallback)=>{
+    let v=f.params[key]??fallback;
+    lanes.filter(a=>a.fxId===f.id&&a.key===key).forEach(a=>a.pts.forEach(p=>{ v=Math.max(v,autoToVal(frozen,a,p.v)); }));
+    return v;
+  };
+  // Serial effects can extend each other's tails. Feedback echoes are kept to about -80 dB, then silence is trimmed.
+  let tail=0.06;
+  effects.forEach(f=>{
+    if(f.type==='reverb'&&maxParam(f,'mix',0)>0) tail+=maxParam(f,'decay',1.6)+maxParam(f,'predelay',0);
+    else if(f.type==='delay'&&maxParam(f,'mix',0)>0){
+      const fb=Math.max(0,Math.min(0.99,maxParam(f,'feedback',0.35)));
+      tail+=maxParam(f,'time',0.35)*(fb>0?Math.ceil(Math.log(0.0001)/Math.log(fb))+1:1);
+    }else if(f.type==='cab') tail+=f.irBuffer?f.irBuffer.duration:0.06;
+    else if(f.type==='chorus') tail+=0.08;
+    else if(['pitch','tune','voxtr','harm','denoise','limit','comp'].includes(f.type)) tail+=0.15;
+  });
+  const duration=Math.max(core,plan.stop)+tail;
+  if(!Number.isFinite(duration)||duration<=0||duration>1800) throw new Error('The rendered sample and effects must fit within 30 minutes.');
+  const off=new OfflineAudioContext(2,Math.max(1,Math.ceil(duration*sr)),sr);
+  const nodes=[], input=off.createGain(), output=off.createGain(), byId=new Map();
+  try{
+    const ready=await ensureWorklet(off); off._s16wk=ready;
+    const needsWorklet=new Set(['gate','amp','deess','air','pitch','tune','voxtr','harm','crush','stutter','denoise','limit']);
+    if(!ready&&effects.some(f=>needsWorklet.has(f.type))) throw new Error('Audio processing could not start. Reload the DAW before printing this sample with its effects.');
+    const apply=(f,n)=>{
+      // Live controls debounce expensive changes by wall-clock time; an offline render must apply each scheduled value.
+      n._irAt=-Infinity;
+      if(n.bands) n.bands.forEach(b=>{ b._swapAt=-Infinity; });
+      applyFxTo(f,n);
+      if(f.type==='stutter'&&n.fxNode) n.fxNode.parameters.get('bpm').value=bpm;
+    };
+    let prev=input;
+    effects.forEach(f=>{
+      const n=buildFxNodes(f,off,ready);
+      if(!n) throw new Error('Could not render '+FX_DEFS[f.type].name+'.');
+      nodes.push(n); byId.set(f.id,n); apply(f,n); prev.connect(n.in); prev=n.out;
+    });
+    prev.connect(output); output.connect(off.destination);
+    let postKey=null;
+    effects.forEach(f=>{
+      const n=byId.get(f.id); if(f.type!=='duck'||f.keyTrackId!==track.id||!n.rect) return;
+      if(f.params.keySrc){ input.connect(n.rect); return; }
+      if(!postKey){
+        postKey=off.createGain(); postKey.gain.value=keyLevel; output.connect(postKey); nodes.push({postKey});
+        if(keyLevel>0) keyVolume.forEach(a=>{
+          const value=t=>Math.max(0,Math.min(1,autoValueAt(a,(startSec+t)/sd)));
+          postKey.gain.setValueAtTime(value(0),0);
+          a.pts.forEach(p=>{ const t=p.s*sd-startSec; if(t>0&&t<duration) postKey.gain.linearRampToValueAtTime(Math.max(0,Math.min(1,p.v)),t); });
+          postKey.gain.linearRampToValueAtTime(value(duration),duration);
+        });
+      }
+      postKey.connect(n.rect);
+    });
+    samplerVoice(0,sampler.params.root??39,plan.hold,input,sampler.params,off,undefined,1,sampler);
+    // A latched stutter has no natural end. Release its repeat at note end so later reverb/delay can decay normally.
+    effects.filter(f=>f.type==='stutter').forEach(f=>{
+      const n=byId.get(f.id); if(n.fxNode) n.fxNode.parameters.get('on').setValueAtTime(0,Math.max(core,plan.stop));
+    });
+    const dynamic=lanes.filter(a=>byId.has(a.fxId));
+    const q=128/sr, interval=Math.max(0.01,sd*1.5), end=Math.max(core,plan.stop);
+    // Use one pending suspend at a time, including long samples, rather than retaining thousands of promise callbacks.
+    let failAutomation;
+    const automationFailure=new Promise((_,reject)=>{ failAutomation=reject; });
+    const automate=at=>{
+      if(!dynamic.length||at>=end) return;
+      off.suspend(at).then(()=>{
+        dynamic.forEach(a=>{ const f=frozen.fx.find(f=>f.id===a.fxId), v=valueAt(a,at); if(f.params[a.key]!==v){ f.params[a.key]=v; apply(f,byId.get(f.id)); } });
+        automate(Math.ceil((at+interval)/q)*q);
+        return off.resume();
+      }).catch(failAutomation);
+    };
+    automate(Math.ceil(interval/q)*q);
+    const rendered=await Promise.race([off.startRendering(),automationFailure]);
+    let last=Math.min(rendered.length,Math.ceil(core*sr));
+    for(let ch=0;ch<rendered.numberOfChannels;ch++){
+      const d=rendered.getChannelData(ch);
+      for(let i=d.length-1;i>=last;i--) if(Math.abs(d[i])>0.0001){ last=i+1; break; }
+    }
+    const length=Math.min(rendered.length,Math.max(1,last+Math.ceil(0.01*sr)));
+    if(length===rendered.length) return rendered;
+    const trimmed=new AudioBuffer({numberOfChannels:rendered.numberOfChannels,length,sampleRate:sr});
+    for(let ch=0;ch<rendered.numberOfChannels;ch++) trimmed.copyToChannel(rendered.getChannelData(ch).subarray(0,length),ch);
+    return trimmed;
+  }finally{
+    nodes.forEach(n=>disposeNodes(n)); input.disconnect(); output.disconnect();
+  }
+}
 function drawSmpOut(fx){
   const cv=fx.smpOutCv; if(!cv||!cv.isConnected) return;
   const p=fx.params, b=fx.sampleBuffer;
-  const key=(b?b.length+':'+b.sampleRate:0)+'|'+['start','end','loop','oneShot','atk','dec','sus','rel','semi','fine','level','envOff'].map(k=>p[k]).join('|')+'|'+fx._smpHold+'|'+fx._smpDragV+'|'+cv.clientWidth;
+  const key=(b?b.length+':'+b.sampleRate:0)+'|'+['mode','start','end','loop','oneShot','atk','dec','sus','rel','semi','fine','level','envOff'].map(k=>p[k]).join('|')+'|'+fx._smpHold+'|'+fx._smpDragV+'|'+(p.mode===1&&p.loop?barSec():0)+'|'+cv.clientWidth;
   if(fx._smpOutKey===key) return;
   fx._smpOutKey=key;
   if(!b){ const d=wtDpr(cv); if(!d) return; d.g.fillStyle='rgba(139,147,163,.5)'; d.g.font='10px system-ui'; d.g.fillText('Load a sample to see the output',8,d.ch/2); if(fx.smpOutLab) fx.smpOutLab.textContent=''; fx._smpOut=null; return; }
@@ -9524,7 +9711,7 @@ async function renderRange(expStart,expEnd,opt){
         genv.gain.setValueAtTime(G,T(Math.max(f.fo[0],expStart)));
         genv.gain.linearRampToValueAtTime(0.0001,T(f.fo[1]));
       }
-      src.connect(genv); genv.connect(dests[tr.id]);
+      src.connect(genv); genv.connect(c.postFx?offGains[tr.id]:dests[tr.id]);
       src.start(Math.max(0,c.start-expStart),
                 wrapOff(c, c.offset+Math.max(0,expStart-c.start)*rate),
                 (Math.min(cEnd+(f.ext||0),expEnd)-Math.max(c.start,expStart))*rate);
@@ -9973,7 +10160,7 @@ function snapState(){
           : Array.from(it.pat),
       })),
       auto:serAutos(t), amode:t.autoMode||'read',
-      clips:t.clips.map(c=>({buf:ref(c.rev&&c.buffer._rev?c.buffer._rev:c.buffer), start:c.start, offset:c.rev?wrapOff(c,c.buffer.duration-c.offset-c.dur):c.offset, dur:c.dur, name:c.name, nb:c.nativeBpm, st:c.stretch||1, g:c.grp??null, gn:c.gain||0, fi:c.fadeIn||0, fo:c.fadeOut||0, sm:c.semis||0, rv:c.rev?1:0})),
+      clips:t.clips.map(c=>({buf:ref(c.rev&&c.buffer._rev?c.buffer._rev:c.buffer), start:c.start, offset:c.rev?wrapOff(c,c.buffer.duration-c.offset-c.dur):c.offset, dur:c.dur, name:c.name, nb:c.nativeBpm, st:c.stretch||1, g:c.grp??null, gn:c.gain||0, fi:c.fadeIn||0, fo:c.fadeOut||0, sm:c.semis||0, rv:c.rev?1:0, postFx:!!c.postFx})),
     })),
   };
   DRUMS.forEach(d=>{
@@ -10047,8 +10234,7 @@ function redo(){
 /* ============================== project save / load ============================== */
 const CRC_T=(()=>{ const t=new Uint32Array(256); for(let n=0;n<256;n++){ let c=n; for(let k=0;k<8;k++) c=(c&1)?(0xEDB88320^(c>>>1)):(c>>>1); t[n]=c>>>0; } return t; })();
 function crc32(u8){ let c=~0; for(let i=0;i<u8.length;i++) c=(c>>>8)^CRC_T[(c^u8[i])&255]; return (~c)>>>0; }
-/* streaming variant of buildZip for the File System Access path: nothing is concatenated in memory and the
-   destination is only touched once every part is ready — a failure before write() leaves the old file intact */
+/* Streaming variant of buildZip for the File System Access path: no full-archive copy in memory. */
 function zipParts(name,u8,offset){
   const enc=new TextEncoder(), nm=enc.encode(name), crc=crc32(u8);
   const lh=new DataView(new ArrayBuffer(30+nm.length));
@@ -10131,7 +10317,7 @@ function abToB64(ab){
   for(let i=0;i<u8.length;i+=0x8000) bin+=String.fromCharCode.apply(null,u8.subarray(i,i+0x8000));
   return btoa(bin);
 }
-/* Save writes straight back to the tab's file (the handle it was opened from / last saved to);
+/* Save atomically replaces the tab's file (the handle it was opened from / last saved to);
    Save As — or a Save with no file yet — asks where. Without the File System Access API every save is a named download. */
 async function fileWritable(h){
   try{
@@ -10140,11 +10326,41 @@ async function fileWritable(h){
     return await h.requestPermission({mode:'readwrite'})==='granted';
   }catch(e){ return false; }
 }
+async function writeProjectArchiveAtomic(handle,entries,signal){
+  // File System Access stages writes in a browser-managed temporary file. close() is the
+  // atomic replacement; abort() discards the temporary file without touching the old save.
+  // https://fs.spec.whatwg.org/#api-filesystemfilehandle-createwritable
+  let offset=0; const central=[];
+  const parts=entries.map(e=>{ const p=zipParts(e.name,new Uint8Array(e.data),offset); offset+=p.size; central.push(p.central); return p; });
+  const tail=zipEnd(central,entries.length,offset);
+  const total=offset+central.reduce((n,c)=>n+c.byteLength,0)+tail.byteLength;
+  signal.throwIfAborted();
+  const w=await handle.createWritable({keepExistingData:false,mode:'exclusive'});
+  const abort=async()=>{ try{ await w.abort(signal.reason); }catch(e){} };
+  signal.addEventListener('abort',abort,{once:true});
+  try{
+    for(const p of parts){ for(const seg of p.local){ signal.throwIfAborted(); await w.write(seg); } }
+    for(const c of central){ signal.throwIfAborted(); await w.write(c); }
+    signal.throwIfAborted();
+    await w.write(tail);
+    signal.throwIfAborted();
+    await w.close();                 // commit only a complete archive, never from a finally block
+    return total;
+  }catch(e){
+    try{ await w.abort(e); }catch(abortError){}   // preserve the original write/commit failure
+    throw e;
+  }finally{ signal.removeEventListener('abort',abort); }
+}
 async function saveProject(opts){
   const as=!!(opts&&opts.as), tab=activeTab;
   if(!tab) return false;
   if(tab.saving){ fileFlash('This project is already saving.'); return false; }
   tab.saving=true;
+  const saveAbort=new AbortController();
+  const guard=ev=>{ ev.preventDefault(); ev.returnValue='Save in progress'; };
+  const cancel=()=>saveAbort.abort(new DOMException('The page closed before saving completed.','AbortError'));
+  window.addEventListener('beforeunload',guard);
+  window.addEventListener('pagehide',cancel,{once:true});
   fileSay('Saving…');
   try{
     // Capture before any permission/picker/encoding awaits: another project may become active meanwhile.
@@ -10190,26 +10406,20 @@ async function saveProject(opts){
       dlName=name; proj.name=name.replace(/\.sheesh$/i,'').trim()||'Untitled';
     }
     // 2. build the archive
+    saveAbort.signal.throwIfAborted();
     fileSay('Saving…',true);
     proj.app='signal16';
     proj.audioFiles=bufs.length;
     const entries=[{name:'manifest.json', data:new TextEncoder().encode(JSON.stringify(proj)).buffer}];
-    for(let i=0;i<bufs.length;i++){ fileSay('Saving\u2026 encoding audio '+(i+1)+'/'+bufs.length); entries.push({name:'audio/'+i+'.wav', data:await encodeWavF32(bufs[i]).arrayBuffer()}); }
+    for(let i=0;i<bufs.length;i++){
+      fileSay('Saving\u2026 encoding audio '+(i+1)+'/'+bufs.length);
+      entries.push({name:'audio/'+i+'.wav', data:await encodeWavF32(bufs[i]).arrayBuffer()});
+      saveAbort.signal.throwIfAborted();
+    }
     // 3. write
     if(handle){
-      // everything above is built before the file is touched: a failure so far leaves the previous save intact
-      let total=0; const central=[]; let offset=0;
-      const parts=entries.map(e=>{ const p=zipParts(e.name,new Uint8Array(e.data),offset); offset+=p.size; central.push(p.central); return p; });
-      const tail=zipEnd(central,entries.length,offset);
-      const guard=ev=>{ ev.preventDefault(); ev.returnValue='Save in progress'; };
-      window.addEventListener('beforeunload',guard);
-      try{
-        const w=await handle.createWritable();
-        for(const p of parts){ for(const seg of p.local){ await w.write(seg); total+=seg.byteLength; } }
-        for(const c2 of central){ await w.write(c2); total+=c2.byteLength; }
-        await w.write(tail); total+=tail.byteLength;
-        await w.close();
-      }finally{ window.removeEventListener('beforeunload',guard); }
+      fileSay('Saving\u2026 writing temporary file');
+      const total=await writeProjectArchiveAtomic(handle,entries,saveAbort.signal);
       const onDisk=await handle.getFile().then(f=>f.size).catch(()=>-1);
       if(onDisk>=0 && onDisk!==total) throw new Error('written file is '+onDisk+' bytes, expected '+total+' \u2014 disk full or interrupted?');
       finishSave();
@@ -10226,7 +10436,11 @@ async function saveProject(opts){
     fileSay('');
     return true;
   }catch(e){ fileSay(''); fileFlash('Save failed: '+(e&&e.message||e)); return false; }
-  finally{ tab.saving=false; }
+  finally{
+    window.removeEventListener('beforeunload',guard);
+    window.removeEventListener('pagehide',cancel);
+    tab.saving=false;
+  }
 }
 /* New: save what's there, then start from a blank project */
 async function newProject(){
@@ -10421,7 +10635,7 @@ function applyProject(proj,buffers){
       });
       (st.clips||[]).forEach(sc=>{
         const b=buffers[sc.buf]; if(!b) return;
-        const c=addClip(tr,b,sc.start||0,sc.name||'clip');
+        const c=addClip(tr,b,sc.start||0,sc.name||'clip',sc);
         c.offset=wrapOff(c,sc.offset||0);
         c.dur=sc.dur>0 ? sc.dur : b.duration;     // repeated source audio can extend beyond one buffer
         c.nativeBpm=sc.nb||proj.bpm||state.bpm;

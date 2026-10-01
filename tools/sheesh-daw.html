@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>SHEESH DAW v1.0.2</title>
+<title>SHEESH DAW v1.0.3</title>
 <!--
   Drum kit sampled from "The Open Source Drum Kit" by Real Music Media
   (github.com/crabacus/the-open-source-drumkit), processed for metal.
@@ -853,7 +853,7 @@
 
 <header>
   <div class="hrow">
-    <div class="brand"><b>SHEESH&nbsp;DAW<span class="ver">v1.0.2</span><a class="gh" href="https://github.com/atondwalkar/sheesh-daw" target="_blank" rel="noopener" title="SHEESH DAW on GitHub" aria-label="SHEESH DAW on GitHub"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg></a></b></div>
+    <div class="brand"><b>SHEESH&nbsp;DAW<span class="ver">v1.0.3</span><a class="gh" href="https://github.com/atondwalkar/sheesh-daw" target="_blank" rel="noopener" title="SHEESH DAW on GitHub" aria-label="SHEESH DAW on GitHub"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg></a></b></div>
     <button id="play" class="play-btn" aria-label="Play or stop">&#9654;</button>
     <button id="rec" class="rec-btn" aria-label="Record from microphone">&#9679;</button>
     <button id="loop" class="loop-btn" aria-pressed="false">LOOP</button>
@@ -1650,7 +1650,8 @@ const WT_PRESETS=[
 function makeFx(type){
   const params={};
   Object.entries(FX_DEFS[type].params).forEach(([k,p])=>params[k]=p.val);
-  return {id:'fx'+(++fxCounter), type, params, bypass:false, nodes:null};
+  return {id:'fx'+(++fxCounter), type, params, bypass:false, nodes:null,
+    samplerId:type==='sampler'?'smp'+Math.random().toString(36).slice(2):undefined};
 }
 function trackInstrument(track){
   const f=track.fx.find(f=>FX_DEFS[f.type].inst);
@@ -5572,17 +5573,18 @@ function removeTrack(track){
 /* ============================== audio clips ============================== */
 async function insertSimpleSamplerClip(track,fx,start){
   if(!fx.sampleBuffer){ selectTrack(track); flash('Load a sample in the Sampler first.'); return null; }
+  if(fx._sampleLoading){ flash('The new sample is still loading.'); return null; }
   if(track._samplerRendering){ flash('The sample is still rendering.'); return null; }
-  const tab=activeTab, bpm=state.bpm, name=fx.sampleName||'Sample';
+  const tab=activeTab, bpm=state.bpm, name=fx.sampleName||'Sample', sample=fx.sampleBuffer, loadToken=fx._sampleLoadToken;
   track._samplerRendering=true;
   try{
     flash('Rendering sample and track effects…');
     const buffer=await renderSimpleSampler(track,fx,start);
-    if(activeTab!==tab || !tracksAll.includes(track) || !track.fx.includes(fx) || fx.params.mode!==1){
+    if(activeTab!==tab || !tracksAll.includes(track) || !track.fx.includes(fx) || fx.params.mode!==1 || fx.sampleBuffer!==sample || fx._sampleLoadToken!==loadToken){
       flash('Sample render cancelled because the project or sampler changed.'); return null;
     }
     pushHistory();
-    const clip=addClip(track,buffer,start,name,{postFx:true,nativeBpm:bpm});
+    const clip=addClip(track,buffer,start,name,{postFx:true,nativeBpm:bpm,samplerId:fx.samplerId});
     flash('Sample added — drag to move, trim the edges, or edit with the clip tools.');
     return clip;
   }catch(e){ flash('Could not render sample: '+(e&&e.message||e)); return null; }
@@ -5593,7 +5595,7 @@ function addClip(track, buffer, start, name, opts={}){
     id:'c'+Math.random().toString(36).slice(2),
     trackId:track.id, buffer,
     start:Math.max(0,start), offset:0, dur:buffer.duration,
-    nativeBpm:opts.nativeBpm||state.bpm, stretch:1, postFx:!!opts.postFx,
+    nativeBpm:opts.nativeBpm||state.bpm, stretch:1, postFx:!!opts.postFx, samplerId:opts.samplerId,
     gain:0, fadeIn:0, fadeOut:0, semis:0, rev:false,
     name, el:null, canvas:null,
   };
@@ -6353,7 +6355,7 @@ function mergeClips(tr,clips){
   });
   const first=clips.slice().sort((a,b)=>a.start-b.start)[0];
   clips.forEach(deleteClip);
-  const nc=addClip(tr,out,t0,first.name,{postFx:first.postFx});
+  const nc=addClip(tr,out,t0,first.name,{postFx:first.postFx,samplerId:null});
   nc.nativeBpm=state.bpm; nc.stretch=1;
   renderClip(nc); layoutTimeline();
   selectObj({kind:'audio',clip:nc});
@@ -6389,7 +6391,7 @@ function copySelection(){
   const t0=Math.min(...objs.map(x=>tOf(x.o))), ti0=Math.min(...objs.map(x=>x.tIdx));
   itemClipboard={kind:'multi', entries:objs.map(x=>{
     const o=x.o, base={dt:tOf(o)-t0, dTrack:x.tIdx-ti0, grp:o.grp??null};
-    if(o.buffer) return {...base, kind:'audio', buffer:o.buffer, offset:o.offset, dur:o.dur, name:o.name, nativeBpm:o.nativeBpm, stretch:o.stretch||1, gain:o.gain||0, fadeIn:o.fadeIn||0, fadeOut:o.fadeOut||0, semis:o.semis||0, rev:!!o.rev, postFx:!!o.postFx};
+    if(o.buffer) return {...base, kind:'audio', buffer:o.buffer, offset:o.offset, dur:o.dur, name:o.name, nativeBpm:o.nativeBpm, stretch:o.stretch||1, gain:o.gain||0, fadeIn:o.fadeIn||0, fadeOut:o.fadeOut||0, semis:o.semis||0, rev:!!o.rev, postFx:!!o.postFx, samplerId:o.samplerId};
     return {...base, kind:'midi', mkind:o.kind, lenSteps:o.lenSteps, name:o.name, scale:o.scale||'', pat:serPat(o), pt:serPitch(o), ped:(o.ped||[]).map(iv=>[iv[0],iv[1]])};
   })};
   lastCopied='items';
@@ -6432,9 +6434,9 @@ function serTrackData(t){
   const ts=state.tracks[t.id];
   return {name:t.name, compact:t.laneEl.classList.contains('compact'), vol:ts.vol, mute:!!ts.mute, solo:!!ts.solo, pan:ts.pan||0, fxBypass:!!ts.fxBypass,
     autoMode:t.autoMode||'read', busId:t.busId||null, midiIn:t.midiIn??null,
-    fx:t.fx.map(f=>({type:f.type, params:{...f.params}, bypass:!!f.bypass, irBuffer:f.irBuffer||null, irName:f.irName||null, keyTrackId:f.keyTrackId||null, sampleBuffer:f.sampleBuffer||null, sampleName:f.sampleName||null, noiseProfile:f.noiseProfile||null, profSr:f.profSr||null, profN:f.profN||null, noiseSec:f.noiseSec||0})),
+    fx:t.fx.map(f=>({type:f.type, params:{...f.params}, bypass:!!f.bypass, irBuffer:f.irBuffer||null, irName:f.irName||null, keyTrackId:f.keyTrackId||null, sampleBuffer:f.sampleBuffer||null, sampleName:f.sampleName||null, samplerId:f.samplerId, noiseProfile:f.noiseProfile||null, profSr:f.profSr||null, profN:f.profN||null, noiseSec:f.noiseSec||0})),
     items:t.items.map(it=>({kind:it.kind, startStep:it.startStep, lenSteps:it.lenSteps, name:it.name, scale:it.scale||'', grp:it.grp??null, pat:serPat(it), pt:serPitch(it), ped:(it.ped&&it.ped.length)?it.ped.map(iv=>[iv[0],iv[1]]):undefined})),
-    clips:t.clips.map(c=>({buffer:c.buffer, start:c.start, offset:c.offset, dur:c.dur, name:c.name, nativeBpm:c.nativeBpm, stretch:c.stretch||1, grp:c.grp??null, gain:c.gain||0, fadeIn:c.fadeIn||0, fadeOut:c.fadeOut||0, semis:c.semis||0, rev:!!c.rev, postFx:!!c.postFx})),
+    clips:t.clips.map(c=>({buffer:c.buffer, start:c.start, offset:c.offset, dur:c.dur, name:c.name, nativeBpm:c.nativeBpm, stretch:c.stretch||1, grp:c.grp??null, gain:c.gain||0, fadeIn:c.fadeIn||0, fadeOut:c.fadeOut||0, semis:c.semis||0, rev:!!c.rev, postFx:!!c.postFx, samplerId:c.samplerId})),
     autos:(t.autos||[]).map(a=>({kind:a.kind, fxIdx:a.fxId?t.fx.findIndex(f=>f.id===a.fxId):-1, key:a.key, hidden:!!a.hidden, pts:a.pts.map(p=>({s:p.s,v:p.v}))}))};
 }
 function pasteTrackData(d,after){
@@ -6447,9 +6449,11 @@ function pasteTrackData(d,after){
   if(ts.panner) ts.panner.pan.value=ts.pan;
   if(tr.chipM) tr.chipM.classList.toggle('on-m',ts.mute);
   if(tr.chipS) tr.chipS.classList.toggle('on-s',ts.solo);
+  const samplerIds=new Map();
   (d.fx||[]).forEach(sf=>{
     if(!FX_DEFS[sf.type]) return;
     const fx=addFxToTrack(tr,sf.type);
+    if(sf.type==='sampler' && sf.samplerId) samplerIds.set(sf.samplerId,fx.samplerId);
     Object.assign(fx.params,sf.params); migrateStutter(fx,sf.params); fx.bypass=sf.bypass;
     if(sf.irBuffer){ fx.irBuffer=sf.irBuffer; fx.irName=sf.irName; }
     if(sf.sampleBuffer){ fx.sampleBuffer=sf.sampleBuffer; fx.sampleName=sf.sampleName; }
@@ -6478,7 +6482,7 @@ function pasteTrackData(d,after){
     renderItem(it);
   });
   (d.clips||[]).forEach(sc=>{
-    const c=addClip(tr,sc.buffer,sc.start,sc.name,sc);
+    const c=addClip(tr,sc.buffer,sc.start,sc.name,{...sc,samplerId:samplerIds.get(sc.samplerId)??sc.samplerId});
     c.offset=sc.offset; c.dur=sc.dur; c.nativeBpm=sc.nativeBpm||state.bpm; c.stretch=sc.stretch||1;
     c.gain=sc.gain||0; c.fadeIn=sc.fadeIn||0; c.fadeOut=sc.fadeOut||0; c.semis=sc.semis||0; c.rev=!!sc.rev;
     if(sc.grp!=null){ grpMap[sc.grp]=grpMap[sc.grp]||++grpCounter; c.grp=grpMap[sc.grp]; updateGrpTag(c); }
@@ -7262,6 +7266,64 @@ function wtApplyPreset(fx,def,params){
   Object.assign(fx.params,params||{});
   applyFx(fx); renderFxPanel();
 }
+function samplerLinkedClips(track,fx){
+  // Older projects only recorded postFx; adopt their printed clips when the track has one sampler.
+  const legacy=track.fx.filter(f=>f.type==='sampler').length===1;
+  return (track.clips||[]).filter(c=>c.postFx && (c.samplerId===fx.samplerId || (legacy && c.samplerId===undefined)));
+}
+function samplerClipOffset(c){ return c.rev?wrapOff(c,c.buffer.duration-c.offset-c.dur):wrapOff(c,c.offset); }
+async function replaceSamplerSample(fx,load){
+  const track=fxTrackOf(fx), tab=activeTab, token={};
+  if(!track) return false;
+  fx._sampleLoadToken=token; fx._sampleLoading=true;
+  const current=()=>activeTab===tab && fx._sampleLoadToken===token && allTracks().includes(track) && track.fx.includes(fx);
+  try{
+    // Start the token before decoding so the most recently selected sample wins.
+    const next=typeof load==='function'?await load():load;
+    if(!current()) return false;
+    if(!next?.buffer?.length) throw new Error('The sample has no audio.');
+    const oldName=fx.sampleName||'Sample', name=next.name||'Sample', bpm=state.bpm, bar=barSec();
+    const targets=samplerLinkedClips(track,fx).map(c=>({c,buffer:c.buffer,start:c.start,offset:c.offset,dur:c.dur,rate:clipRate(c),
+      renderStart:Math.max(0,c.start-samplerClipOffset(c)/clipRate(c))}));
+    const rendered=new Map(), outputs=new Map();
+    if(targets.length){
+      flash('Updating '+targets.length+' sample clip'+(targets.length===1?'':'s')+'…');
+      const draft=simpleSamplerSnapshot(track), sampler=draft.fx.find(f=>f.id===fx.id);
+      sampler.sampleBuffer=next.buffer; sampler.params={...sampler.params,...next.params,mode:1}; sampler.bypass=false;
+      const timed=draft.autos.some(a=>a.kind==='fx') || (draft.autos.some(a=>a.kind==='vol') && draft.fx.some(f=>f.type==='duck'&&!f.bypass&&f.keyTrackId===track.id&&!f.params.keySrc));
+      for(const {c,renderStart:start} of targets){
+        const key=timed?start:0;
+        if(!rendered.has(key)) rendered.set(key,await renderSimpleSampler(draft,sampler,start));
+        if(!current()) return false;
+        outputs.set(c,rendered.get(key));
+      }
+    }
+    if(!current()) return false;
+    const linked=samplerLinkedClips(track,fx);
+    if(linked.length!==targets.length || (targets.length && (state.bpm!==bpm || barSec()!==bar)) || targets.some(({c,buffer,start,offset,dur,rate})=>!linked.includes(c)||c.buffer!==buffer||c.start!==start||c.offset!==offset||c.dur!==dur||clipRate(c)!==rate)){
+      flash('The clips or project timing changed while rendering. Choose the sample again to update them.'); return false;
+    }
+    const changes=targets.map(({c})=>{
+      const buffer=outputs.get(c), offset=samplerClipOffset(c), tolerance=1/c.buffer.sampleRate;
+      const whole=offset<tolerance && Math.abs(c.dur-c.buffer.duration)<tolerance;
+      const dur=whole?buffer.duration:c.dur;
+      return {c,buffer:c.rev?reversedBuffer(buffer):buffer,dur,offset:wrapOff({buffer},c.rev?buffer.duration-offset-dur:offset)};
+    });
+    pushHistory();
+    fx.sampleBuffer=next.buffer; fx.sampleName=name; fx.sampleSrc=next.sampleSrc||null;
+    Object.assign(fx.params,next.params||{});
+    fx._smpKey=null; fx._smpOutKey=null; fx._smpHold=null;
+    for(const {c,buffer,dur,offset} of changes){
+      c.buffer=buffer; c.dur=dur; c.offset=offset;
+      c.samplerId=fx.samplerId; c._pk=undefined;
+      if(c.name===oldName){ c.name=name; c.el.querySelector('.cname').textContent=name; }
+      renderClip(c);
+    }
+    applyFx(fx); renderFxPanel(); layoutTimeline(); rescheduleIfPlaying();
+    return true;
+  }catch(e){ if(current()) flash('Could not change sample: '+(e&&e.message||e)); return false; }
+  finally{ if(fx._sampleLoadToken===token) fx._sampleLoading=false; }
+}
 /* ---- Sampler panel: waveform with start/end markers, Load WAV, Use selected clip ---- */
 function buildSamplerExtras(gw,fx,def){
   const modeBar=document.createElement('div'); modeBar.className='smp-mode';
@@ -7282,17 +7344,16 @@ function buildSamplerExtras(gw,fx,def){
   const ld=document.createElement('button'); ld.textContent='Load WAV…'; ld.className='ir-btn';
   ld.onclick=()=>{ const fi=document.createElement('input'); fi.type='file'; fi.accept='audio/*';
     fi.onchange=async()=>{ const f2=fi.files[0]; if(!f2) return; initAudio();
-      try{ const buf=await ctx.decodeAudioData(await f2.arrayBuffer()); pushHistory(); fx.sampleBuffer=buf; fx.sampleName=f2.name.replace(/\.[^.]+$/,'').slice(0,24); applyFx(fx); renderFxPanel(); }
-      catch(e){ flash('Could not decode that audio file.'); } };
+      await replaceSamplerSample(fx,async()=>({buffer:await ctx.decodeAudioData(await f2.arrayBuffer()),name:f2.name.replace(/\.[^.]+$/,'').slice(0,24)})); };
     fi.click(); };
   const use=document.createElement('button'); use.textContent='Use selected clip'; use.className='ir-btn';
   use.title='Copy the selected audio clip (its trimmed region) into this sampler';
-  use.onclick=()=>{
+  use.onclick=async()=>{
     const c=selected&&selected.kind==='audio'?selected.clip:null; if(!c){ flash('Select an audio clip first.'); return; }
     const b=c.buffer, sr=b.sampleRate, s0=Math.floor(c.offset*sr), n=Math.max(1,Math.min(b.length-s0,Math.ceil(c.dur*sr)));
     const nb=new AudioBuffer({length:n,sampleRate:sr,numberOfChannels:b.numberOfChannels});
     for(let ch=0;ch<b.numberOfChannels;ch++) nb.getChannelData(ch).set(b.getChannelData(ch).subarray(s0,s0+n));
-    pushHistory(); fx.sampleBuffer=nb; fx.sampleName=c.name; applyFx(fx); renderFxPanel();
+    await replaceSamplerSample(fx,{buffer:nb,name:c.name});
   };
   bar.append(nm,ld,use);
   box.append(cap,cv,bar); gw.appendChild(box);
@@ -7462,17 +7523,14 @@ async function libAudition(d,row,prev){                             // dry previ
   }catch(e){ flash('Could not play '+d.name+': '+(e&&e.message||e)); }
 }
 async function libLoadInto(fx,d){
-  try{
-    const b=await libBuffer(d);
-    pushHistory();
-    fx.sampleBuffer=b; fx.sampleName=d.name.slice(0,24); fx.sampleSrc=d.path;
-    const P=fx.params; P.start=0; P.end=1; P.loop=0;
+  const loaded=await replaceSamplerSample(fx,async()=>{
+    const b=await libBuffer(d), P={start:0,end:1,loop:0};
     if(d.midi!=null){ P.root=Math.max(0,Math.min(87,d.midi-21)); P.fine=Math.max(-100,Math.min(100,-(d.cents||0))); P.oneShot=d.category==='808'?0:1; }   // tonal: in tune on the roll; 808s follow note length, other pitched hits play whole
     else{ P.root=39; P.fine=0; P.oneShot=d.type==='loop'?0:1; }                                                                   // hits: full one-shot; loops: as recorded at C4
-    fx._smpKey=null; fx._smpOutKey=null; fx._smpHold=null;
-    applyFx(fx); renderFxPanel();
-    flash('Loaded '+d.name+(d.note?' — root '+d.note+(d.cents?' ('+(d.cents>0?'+':'')+d.cents+'¢ corrected)':''):''));
-  }catch(e){ flash('Could not load '+d.name+': '+(e&&e.message||e)); }
+    return {buffer:b,name:d.name.slice(0,24),sampleSrc:d.path,params:P};
+  });
+  if(loaded) flash('Loaded '+d.name+(d.note?' — root '+d.note+(d.cents?' ('+(d.cents>0?'+':'')+d.cents+'¢ corrected)':''):''));
+  return loaded;
 }
 function buildLibraryBox(gw,fx){
   const box=document.createElement('div'); box.className='eq-bandknobs smp-box lib-box';
@@ -7591,53 +7649,57 @@ function drawSmpEnv(fx){                                         // sampler amp 
   g.font='8px system-ui'; g.fillStyle='rgba(139,147,163,.8)'; g.fillText('note off',Math.min(cw-34,xs+susW-14),9);
   g.strokeStyle='rgba(139,147,163,.35)'; g.setLineDash([2,3]); g.beginPath(); g.moveTo(xs+susW,12); g.lineTo(xs+susW,ch-4); g.stroke(); g.setLineDash([]);
 }
-function smpOutPlan(fx){                                          // the timeline samplerVoice produces for one note at the root key
+function smpOutPlan(fx,bar=barSec()){                              // the timeline samplerVoice produces for one note at the root key
   const p=fx.params, b=fx.sampleBuffer;
   const rate=Math.pow(2,(p.semi||0)/12+(p.fine||0)/1200);
   const st=Math.max(0,Math.min(0.999,p.start||0)), en=Math.max(st+0.001,Math.min(1,p.end??1));
   const span=(en-st)*b.duration/rate, loop=!!p.loop, oneShot=!!p.oneShot, a=Math.max(0.001,p.atk??0.005), relT=Math.max(0.01,p.rel??0.3);
-  const hold=p.mode===1 ? Math.max(0.05,loop?Math.max(span,barSec()):span)
+  const hold=p.mode===1 ? Math.max(0.05,loop?Math.max(span,bar):span)
     : fx._smpHold ?? Math.max(0.05,Math.min(12, loop ? Math.max(a+(p.dec??0.2)+0.2, 2.5*span) : span));
   if(p.envOff){ const e2=loop?Math.max(0.05,hold):span; return {rate,span,loop,oneShot:!loop,hold,end:e2,stop:e2+0.01,relT:0,byp:true}; }   // bypass: whole region / loop to note-off
   const end=oneShot ? (loop?Math.max(0.05,hold):span) : Math.max(0.05,hold);
   const stop=(oneShot&&!loop) ? Math.min(end,span)+relT*2+0.05 : end+relT*2+0.05;
   return {rate,span,loop,oneShot,hold,end,stop,relT};
 }
-/* Print a Simple sampler's sound before its track fader. Copies stay independent of later FX edits. */
-async function renderSimpleSampler(track,fx,startSec){
-  if(!fx.sampleBuffer) throw new Error('Load a sample into the Sampler first.');
-  if(fx.bypass) throw new Error('Enable the Sampler before adding a Simple clip.');
-  // Snapshot before yielding: switching projects, moving automation, or loading another sample cannot change this print.
-  startSec=Math.max(0,Number(startSec)||0);
-  const bpm=state.bpm, sd=stepDur(), bar=barSec(), sr=(ctx&&ctx.sampleRate)||fx.sampleBuffer.sampleRate;
-  const frozen={id:track.id, fx:track.fx.map(f=>({
+function simpleSamplerSnapshot(track){
+  const env=track._renderState||{bpm:state.bpm,sd:stepDur(),bar:barSec(),sr:(ctx&&ctx.sampleRate)||44100,
+    bypass:!!state.tracks[track.id].fxBypass,keyLevel:effectiveVol(track.id)};
+  const frozen={id:track.id, autoMode:track.autoMode, _renderState:env, fx:track.fx.map(f=>({
     id:f.id, type:f.type, params:{...f.params}, bypass:!!f.bypass,
     sampleBuffer:f.sampleBuffer, irBuffer:f.irBuffer,
-    noiseProfile:f.noiseProfile&&f.noiseProfile.slice(), profSr:f.profSr||sr, profN:f.profN,
+    noiseProfile:f.noiseProfile&&f.noiseProfile.slice(), profSr:f.profSr||env.sr, profN:f.profN,
     keyTrackId:f.keyTrackId,
-  })), autos:(track.autoMode==='off'?[]:(track.autos||[])).filter(a=>a.kind==='fx'&&a.pts.length).map(a=>({
+  })), autos:(track.autoMode==='off'?[]:(track.autos||[])).filter(a=>a.pts.length).map(a=>({
     kind:a.kind, fxId:a.fxId, key:a.key, hold:a.hold, pts:a.pts.map(p=>({...p})),
   }))};
-  const sampler=frozen.fx.find(f=>f.id===fx.id);
-  if(!sampler) throw new Error('The Sampler is no longer on this track.');
-  const bypass=!!state.tracks[track.id].fxBypass, keyLevel=effectiveVol(track.id);
-  const keyVolume=(track.autoMode==='off'?[]:(track.autos||[])).filter(a=>a.kind==='vol'&&a.pts.length).map(a=>({hold:a.hold,pts:a.pts.map(p=>({...p}))}));
-  const lanes=frozen.autos.filter(a=>autoParamDesc(frozen,a));
-  const valueAt=(a,t)=>autoToVal(frozen,a,autoValueAt(a,(startSec+t)/sd));
-  lanes.forEach(a=>{ const f=frozen.fx.find(f=>f.id===a.fxId); f.params[a.key]=valueAt(a,0); });
   frozen.fx.forEach(f=>{
     if((f.type==='tune'||f.type==='harm')&&f.params.followRoll){
       const k=tuneKeyMask(f.params); f.params.followRoll=0;
       f.params.key=k.mask===4095?24:k.root+(k.mask===TUNE_MIN?12:0);
     }
   });
+  return frozen;
+}
+/* Print a Simple sampler's sound before its track fader. Later FX edits leave the print unchanged. */
+async function renderSimpleSampler(track,fx,startSec){
+  if(!fx.sampleBuffer) throw new Error('Load a sample into the Sampler first.');
+  if(fx.bypass) throw new Error('Enable the Sampler before adding a Simple clip.');
+  // A replacement batch can reuse one frozen track, including tempo, automation and tuning.
+  startSec=Math.max(0,Number(startSec)||0);
+  const frozen=simpleSamplerSnapshot(track), {bpm,sd,bar,sr,bypass,keyLevel}=frozen._renderState;
+  const sampler=frozen.fx.find(f=>f.id===fx.id);
+  if(!sampler) throw new Error('The Sampler is no longer on this track.');
+  const keyVolume=frozen.autos.filter(a=>a.kind==='vol');
+  const lanes=frozen.autos.filter(a=>a.kind==='fx'&&autoParamDesc(frozen,a));
+  const valueAt=(a,t)=>autoToVal(frozen,a,autoValueAt(a,(startSec+t)/sd));
+  lanes.forEach(a=>{ const f=frozen.fx.find(f=>f.id===a.fxId); f.params[a.key]=valueAt(a,0); });
   const effects=bypass?[]:frozen.fx.filter(f=>!f.bypass&&!FX_DEFS[f.type].inst);
   if(effects.some(f=>f.type==='duck'&&f.keyTrackId&&f.keyTrackId!==track.id)){
     throw new Error('This track uses an external sidechain. Bypass its Ducker before adding a Simple clip, or render the track with WAV export.');
   }
-  const initial=smpOutPlan(sampler);
+  const initial=smpOutPlan(sampler,bar);
   sampler._smpHold=sampler.params.loop ? Math.max(initial.span,bar) : initial.span;
-  const plan=smpOutPlan(sampler), core=plan.loop?plan.hold:plan.span;
+  const plan=smpOutPlan(sampler,bar), core=plan.loop?plan.hold:plan.span;
   const maxParam=(f,key,fallback)=>{
     let v=f.params[key]??fallback;
     lanes.filter(a=>a.fxId===f.id&&a.key===key).forEach(a=>a.pts.forEach(p=>{ v=Math.max(v,autoToVal(frozen,a,p.v)); }));
@@ -11132,6 +11194,7 @@ exportBtn.onclick=openExportDialog;
 let undoStack=[], redoStack=[], histLock=false, pendingSnap=null;
 function serFx(f,ref){
   const o={type:f.type, params:{...f.params}, bypass:!!f.bypass};
+  if(f.type==='sampler') o.samplerId=f.samplerId;
   if(f.type==='duck' && f.keyTrackId){
     const i=tracksAll.findIndex(t=>t.id===f.keyTrackId);
     if(i>=0) o.key=i;
@@ -11277,7 +11340,7 @@ function snapState(){
           : Array.from(it.pat),
       })),
       auto:serAutos(t), amode:t.autoMode||'read',
-      clips:t.clips.map(c=>({buf:ref(c.rev&&c.buffer._rev?c.buffer._rev:c.buffer), start:c.start, offset:c.rev?wrapOff(c,c.buffer.duration-c.offset-c.dur):c.offset, dur:c.dur, name:c.name, nb:c.nativeBpm, st:c.stretch||1, g:c.grp??null, gn:c.gain||0, fi:c.fadeIn||0, fo:c.fadeOut||0, sm:c.semis||0, rv:c.rev?1:0, postFx:!!c.postFx})),
+      clips:t.clips.map(c=>({buf:ref(c.rev&&c.buffer._rev?c.buffer._rev:c.buffer), start:c.start, offset:c.rev?wrapOff(c,c.buffer.duration-c.offset-c.dur):c.offset, dur:c.dur, name:c.name, nb:c.nativeBpm, st:c.stretch||1, g:c.grp??null, gn:c.gain||0, fi:c.fadeIn||0, fo:c.fadeOut||0, sm:c.semis||0, rv:c.rev?1:0, postFx:!!c.postFx, samplerId:c.samplerId})),
     })),
   };
   DRUMS.forEach(d=>{
@@ -11671,6 +11734,7 @@ function applyProject(proj,buffers){
       const fx=makeFx(sf.type);
       Object.assign(fx.params,sf.params||{}); migrateStutter(fx,sf.params);
       fx.bypass=!!sf.bypass;
+      if(sf.type==='sampler' && typeof sf.samplerId==='string' && sf.samplerId) fx.samplerId=sf.samplerId;
       if(sf.ir!==undefined && buffers[sf.ir]){ fx.irBuffer=buffers[sf.ir]; fx.irName=sf.irName; }
       if(sf.smp!==undefined && buffers[sf.smp]){ fx.sampleBuffer=buffers[sf.smp]; fx.sampleName=sf.smpName; }
       if(sf.np){ fx.noiseProfile=Float32Array.from(sf.np); fx.profSr=sf.npSr; fx.profN=sf.npN||2048; fx.noiseSec=sf.npSec||0; }
@@ -11716,6 +11780,7 @@ function applyProject(proj,buffers){
         if(sf.type==='eq' && ('low' in prms)) prms=eqBands(prms.low||0,prms.mid||0,prms.high||0);
         Object.assign(fx.params,prms); migrateStutter(fx,prms);
         fx.bypass=!!sf.bypass;
+        if(sf.type==='sampler' && typeof sf.samplerId==='string' && sf.samplerId) fx.samplerId=sf.samplerId;
         if(sf.ir!==undefined && buffers[sf.ir]){ fx.irBuffer=buffers[sf.ir]; fx.irName=sf.irName; }
         if(sf.smp!==undefined && buffers[sf.smp]){ fx.sampleBuffer=buffers[sf.smp]; fx.sampleName=sf.smpName; }
         if(sf.np){ fx.noiseProfile=Float32Array.from(sf.np); fx.profSr=sf.npSr; fx.profN=sf.npN||2048; fx.noiseSec=sf.npSec||0; }

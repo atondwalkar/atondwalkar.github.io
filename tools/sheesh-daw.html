@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>SHEESH DAW v1.1.0</title>
+<title>SHEESH DAW v1.2.0</title>
 <!--
   Drum kit sampled from "The Open Source Drum Kit" by Real Music Media
   (github.com/crabacus/the-open-source-drumkit), processed for metal.
@@ -453,6 +453,9 @@
   .clip.audio .hdl.l{border-left:3px solid rgba(255,143,143,.55)}
   .clip.audio .hdl.r{border-right:3px solid rgba(255,143,143,.55)}
   .clip.audio.sel{border-color:var(--red);box-shadow:0 0 12px rgba(255,93,93,.5);z-index:3}
+  /* on top of an earlier overlapping clip: the overlap (first --xl px) is see-through so both clips show */
+  .clip.audio.xfl{background:linear-gradient(180deg,#4a2830,#3a2026) var(--xl,0px) 0/calc(100% - var(--xl,0px)) 100% no-repeat,
+    linear-gradient(180deg,rgba(74,40,48,.3),rgba(58,32,38,.3))}
 
   .piano-wrap{position:relative;overflow-x:auto;overflow-y:hidden;overscroll-behavior-x:contain;border:0;border-radius:0;background:#12151b}
   #piano-content{position:relative}
@@ -864,7 +867,7 @@
 
 <header>
   <div class="hrow">
-    <div class="brand"><b>SHEESH&nbsp;DAW<span class="ver">v1.1.0</span><a class="gh" href="https://github.com/atondwalkar/sheesh-daw" target="_blank" rel="noopener" title="SHEESH DAW on GitHub" aria-label="SHEESH DAW on GitHub"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg></a></b></div>
+    <div class="brand"><b>SHEESH&nbsp;DAW<span class="ver">v1.2.0</span><a class="gh" href="https://github.com/atondwalkar/sheesh-daw" target="_blank" rel="noopener" title="SHEESH DAW on GitHub" aria-label="SHEESH DAW on GitHub"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg></a></b></div>
     <button id="play" class="play-btn" aria-label="Play or stop">&#9654;</button>
     <button id="rec" class="rec-btn" aria-label="Record from microphone">&#9679;</button>
     <button id="loop" class="loop-btn" aria-pressed="false">LOOP</button>
@@ -4666,16 +4669,7 @@ function scheduleClips(pos, at){
       const src=ctx.createBufferSource();
       const genv=ctx.createGain(), G=clipGainLin(c);
       const T=tl=>at+(tl-pos);
-      const f=fades.get(c)||{};
-      genv.gain.setValueAtTime(G,at);
-      if(f.fi && f.fi[1]>pos){
-        genv.gain.setValueAtTime(0.0001,T(Math.max(f.fi[0],pos)));
-        genv.gain.linearRampToValueAtTime(G,T(f.fi[1]));
-      }
-      if(f.fo && f.fo[1]>pos){
-        genv.gain.setValueAtTime(G,T(Math.max(f.fo[0],pos)));
-        genv.gain.linearRampToValueAtTime(0.0001,T(f.fo[1]));
-      }
+      scheduleClipEnv(genv.gain,f0,G,from,to,T);
       src.connect(genv); genv.connect(dest);
       src.onended=()=>activeSources.delete(src);
       scheduleClipSource(src,c,from,to,at-pos);
@@ -4909,18 +4903,19 @@ function clipFades(tr){
   const fades=new Map();
   for(let i=0;i<arr.length;i++){
     const c=arr[i], end=c.start+clipTlDur(c);
-    let fi=null, fo=null;
+    let fi=null, fo=null, fiX=false, foX=false;
     if(i>0){
       const pv=arr[i-1], pend=pv.start+clipTlDur(pv);
-      if(pend>c.start+0.005) fi=[c.start, Math.min(pend,end)];
+      if(pend>c.start+0.005){ fi=[c.start, Math.min(pend,end)]; fiX=true; }
     }
     if(i<arr.length-1){
       const nx=arr[i+1];
-      if(nx.start<end-0.005) fo=[Math.max(nx.start,c.start), end];
+      if(nx.start<end-0.005){ fo=[Math.max(nx.start,c.start), end]; foX=true; }
     }
     if(c.fadeIn>0){ const m1=Math.min(end,c.start+c.fadeIn); fi=fi?[c.start,Math.max(fi[1],m1)]:[c.start,m1]; }
     if(c.fadeOut>0){ const m0=Math.max(c.start,end-c.fadeOut); fo=fo?[Math.min(fo[0],m0),end]:[m0,end]; }
-    fades.set(c,{fi,fo,ext:0});
+    // fiX / foX: the fade comes from an overlap with a different clip -> equal-power curve, so the blend keeps its loudness
+    fades.set(c,{fi,fo,fiX,foX,ext:0});
     // abutting neighbour (a split, or clips butted together): crossfade across the seam instead of a hard cut.
     // The earlier clip keeps playing XF past its end while this one fades in — identical audio sums to unity.
     if(i>0 && !fi){
@@ -4941,6 +4936,25 @@ function clipFades(tr){
   return fades;
 }
 const CLIP_XF=0.005, CLIP_DECLICK=0.004;
+/* Gain multiplier (0..1) of a clip's fades at timeline time t. Overlap crossfades are equal-power (sin in / cos out:
+   two different sounds blend at constant loudness); seams, user fades and declicks stay linear. */
+function fadeGain(f,t){
+  let g=1;
+  if(f.fi && t<f.fi[1]){ const x=Math.max(0,Math.min(1,(t-f.fi[0])/Math.max(1e-6,f.fi[1]-f.fi[0]))); g*=f.fiX?Math.sin(x*Math.PI/2):x; }
+  if(f.fo && t>f.fo[0]){ const x=Math.max(0,Math.min(1,(t-f.fo[0])/Math.max(1e-6,f.fo[1]-f.fo[0]))); g*=f.foX?Math.cos(x*Math.PI/2):1-x; }
+  return g;
+}
+/* Schedule a clip's gain envelope from timeline second `from` to `to` on an AudioParam. T maps timeline -> context time.
+   Breakpoints: fade edges, plus 24 steps across equal-power fades (ramped linearly between them); starting inside a fade
+   starts at the fade's current level. Shared by live playback and offline render so they sound the same. */
+function scheduleClipEnv(param,f,G,from,to,T){
+  const ts=new Set([from,to]);
+  const add=(r,curved)=>{ if(!r) return; const n=curved?24:1; for(let i=0;i<=n;i++){ const t=r[0]+(r[1]-r[0])*i/n; if(t>from && t<to) ts.add(t); } };
+  add(f.fi,f.fiX); add(f.fo,f.foX);
+  const arr=[...ts].sort((a,b)=>a-b);
+  param.setValueAtTime(G*fadeGain(f,arr[0]),T(arr[0]));
+  for(let i=1;i<arr.length;i++) param.linearRampToValueAtTime(G*fadeGain(f,arr[i]),T(arr[i]));
+}
 function contentEnd(){
   let end=0;
   tracksAll.forEach(t=>{
@@ -4982,6 +4996,7 @@ function timelineSec(){
   return Math.max(tickToSec(12*STEPS), contentEnd()+10*barSec(), ahead,tempoEnd);
 }
 function layoutTimeline(){
+  tracksAll.forEach(refreshClipOverlaps);      // after moves between tracks / deletes, neighbours' overlap views stay right
   const secs=timelineSec(), w=Math.ceil(secs*PPS);
   tlInner.style.width=w+'px';
   ruler.innerHTML='';
@@ -5736,6 +5751,15 @@ function renderClip(c){
     drawWave(chans[0],13,12); drawWave(chans[1],40,12);
     g.fillStyle='rgba(0,0,0,.35)'; g.fillRect(0,27,w,1);
   }else drawWave(chans[0],27,24);
+  // overlap crossfade (this clip on top of an earlier one): dim its own waveform there so the clip underneath shows
+  // through the see-through background, and draw the X -- this clip's equal-power fade-in, the other's fade-out
+  const xl=(c._xfL||0)*pxps;
+  if(xl>1){
+    const curve=(rising)=>{ g.beginPath(); for(let k=0;k<=24;k++){ const u=k/24, y=rising?Math.sin(u*Math.PI/2):Math.cos(u*Math.PI/2), x=xl*u, yy=52-y*50; if(k) g.lineTo(x,yy); else g.moveTo(x,yy); } g.stroke(); };
+    g.save(); g.globalCompositeOperation='destination-out'; g.fillStyle='rgba(0,0,0,.45)'; g.fillRect(0,0,xl,54); g.restore();
+    g.save(); g.strokeStyle='rgba(255,230,200,.95)'; g.lineWidth=1.5; curve(true);
+    g.strokeStyle='rgba(255,230,200,.6)'; g.lineWidth=1; g.setLineDash([3,3]); curve(false); g.restore();
+  }
   // fades, transpose / gain / reverse badges
   const fiPx=(c.fadeIn||0)*pxps, foPx=(c.fadeOut||0)*pxps;
   g.fillStyle='rgba(0,0,0,.38)'; g.strokeStyle='rgba(255,230,200,.8)'; g.lineWidth=1;
@@ -5746,6 +5770,26 @@ function renderClip(c){
   if(tags.length){ g.font='700 8px "IBM Plex Mono",monospace'; g.textAlign='right'; g.fillStyle='rgba(10,12,16,.8)'; const txt=tags.join(' '); const tw=g.measureText(txt).width+6; g.fillRect(w-tw-2,42,tw,11); g.fillStyle='#ffe9c9'; g.fillText(txt,w-5,51); g.textAlign='left'; }
   if(selected?.kind==='audio' && selected.clip===c) updateClipTools();
   queueGhosts();
+  refreshClipOverlaps(tracksAll.find(t=>t.id===c.trackId));
+}
+/* Overlapping clips on a track (same pairs clipFades crossfades): the later clip sits on top with a see-through
+   background across the overlap (.xfl, --xl) so both clips show, and draws the crossfade X there. Re-renders a clip only
+   when its overlap changed; the busy flag stops renderClip -> refresh -> renderClip recursion. */
+function refreshClipOverlaps(track){
+  if(!track || refreshClipOverlaps.busy) return;
+  refreshClipOverlaps.busy=true;
+  try{
+    const arr=track.clips.filter(c=>c.el).sort((a,b)=>a.start-b.start);
+    arr.forEach((c,i)=>{
+      let l=0;
+      if(i>0){ const pv=arr[i-1], pend=pv.start+clipTlDur(pv); if(pend>c.start+0.005) l=Math.min(pend,c.start+clipTlDur(c))-c.start; }
+      c.el.classList.toggle('xfl',l>0);
+      c.el.style.zIndex=l>0?String(4+i):'';
+      c.el.style.setProperty('--xl',l>0?Math.round(l*PPS)+'px':'0px');
+      const key=l.toFixed(4);
+      if(c._xfKey!==key){ const had=c._xfKey!==undefined; c._xfKey=key; c._xfL=l; if(had||l>0) renderClip(c); }
+    });
+  }finally{ refreshClipOverlaps.busy=false; }
 }
 function deleteClip(c){
   const tr=tracksAll.find(t=>t.id===c.trackId);
@@ -6439,9 +6483,7 @@ function mergeClips(tr,clips){
         const sp=(c.offset+clipSourceAt(c,tlT-c.start))*bsr, ii=Math.floor(sp), fr=sp-ii;
         const i=((ii%src.length)+src.length)%src.length;
         if(src.length<2) continue;
-        let g=1;
-        if(f.fi && tlT<f.fi[1]) g*=Math.max(0,Math.min(1,(tlT-f.fi[0])/Math.max(1e-6,f.fi[1]-f.fi[0])));
-        if(f.fo && tlT>f.fo[0]) g*=Math.max(0,Math.min(1,1-(tlT-f.fo[0])/Math.max(1e-6,f.fo[1]-f.fo[0])));
+        const g=fadeGain(f,tlT);
         dst[n]+=(src[i]+(src[(i+1)%src.length]-src[i])*fr)*g*clipGainLin(c);
       }
     }
@@ -11205,18 +11247,10 @@ async function renderRange(expStart,expEnd,opt){
       const src=off.createBufferSource();
       const genv=off.createGain(), G=clipGainLin(c);
       const T=tl=>Math.max(0,tl-expStart);
-      const f=fades.get(c)||{};
-      genv.gain.setValueAtTime(G,0);
-      if(f.fi && f.fi[1]>expStart){
-        genv.gain.setValueAtTime(0.0001,T(Math.max(f.fi[0],expStart)));
-        genv.gain.linearRampToValueAtTime(G,T(f.fi[1]));
-      }
-      if(f.fo && f.fo[1]>expStart){
-        genv.gain.setValueAtTime(G,T(Math.max(f.fo[0],expStart)));
-        genv.gain.linearRampToValueAtTime(0.0001,T(f.fo[1]));
-      }
+      const f=fades.get(c)||{}, from=Math.max(c.start,expStart), to=Math.min(cEnd+(f.ext||0),expEnd);
+      scheduleClipEnv(genv.gain,f,G,from,to,T);
       src.connect(genv); genv.connect(c.postFx?offGains[tr.id]:dests[tr.id]);
-      scheduleClipSource(src,c,Math.max(c.start,expStart),Math.min(cEnd+(f.ext||0),expEnd),-expStart);
+      scheduleClipSource(src,c,from,to,-expStart);
     });
   });
 
